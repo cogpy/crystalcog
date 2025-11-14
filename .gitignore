@@ -162,3 +162,10 @@ dist/
 # Node.js
 node_modules/
 package-lock.json
+
+# Test artifacts
+distributed_storage/
+knowledge.scm
+knowledge.rocks
+state.scm
+/tmp/test_*/

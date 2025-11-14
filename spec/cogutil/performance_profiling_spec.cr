@@ -12,7 +12,9 @@ describe "Performance Profiling Tools" do
       session = CogUtil::PerformanceProfiler.end_session
       
       session.should_not be_nil
-      session.try(&.session_duration).should be > 0.0
+      if session
+        session.session_duration.should be > 0.0
+      end
     end
     
     it "profiles code blocks with timing metrics" do
