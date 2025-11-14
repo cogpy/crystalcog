@@ -196,7 +196,7 @@ module CogUtil
       allocation_info = {
         heap_allocated: gc_after.total_bytes - gc_before.total_bytes,
         process_memory_delta: memory_after - memory_before,
-        gc_collections: gc_after.collections - gc_before.collections
+        # Note: GC collections count not available in Crystal 1.10.1
       }
       
       {result: result, allocation: allocation_info}

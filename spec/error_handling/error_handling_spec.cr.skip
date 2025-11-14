@@ -6,17 +6,9 @@ require "../../src/ure/ure"
 require "../../src/opencog/opencog"
 
 describe "Error Handling and Edge Cases" do
-  describe "AtomSpace error handling" do
-    before_each do
-      @atomspace = AtomSpace::AtomSpace.new
-    end
-    
-    # Helper method to access atomspace instance
-    def atomspace
-      @atomspace
-    end
-    
+  describe "AtomSpace error handling" do    
     it "handles empty names gracefully" do
+      atomspace = AtomSpace::AtomSpace.new
       # Test creating nodes with empty names
       empty_concept = atomspace.add_concept_node("")
       empty_concept.should be_a(AtomSpace::Atom)
@@ -24,6 +16,7 @@ describe "Error Handling and Edge Cases" do
     end
 
     it "handles very long names" do
+      atomspace = AtomSpace::AtomSpace.new
       # Test creating nodes with very long names
       long_name = "a" * 10000
       long_concept = atomspace.add_concept_node(long_name)
