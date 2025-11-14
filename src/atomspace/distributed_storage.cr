@@ -262,12 +262,14 @@ module AtomSpace
       metrics["total_atoms"] = JSON::Any.new(total_atoms.to_i64)
       metrics["average_load"] = JSON::Any.new(total_atoms.to_f / @cluster.cluster_nodes.size)
       
-      node_metrics = node_loads.map do |node_id, load|
-        {node_id => {
-          "atom_count" => load,
-          "load_percentage" => (load.to_f / total_atoms * 100).round(2)
-        }}
-      end.reduce({} of String => JSON::Any) { |acc, item| acc.merge!(item) }
+      node_metrics = {} of String => JSON::Any
+      node_loads.each do |node_id, load|
+        node_data = {
+          "atom_count" => JSON::Any.new(load.to_i64),
+          "load_percentage" => JSON::Any.new((load.to_f / total_atoms * 100).round(2))
+        }
+        node_metrics[node_id] = JSON::Any.new(node_data)
+      end
       
       metrics["node_distribution"] = JSON::Any.new(node_metrics)
       

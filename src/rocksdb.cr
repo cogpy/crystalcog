@@ -198,6 +198,10 @@ module RocksDB
       raise "RocksDB support is disabled"
     end
     
+    def each_key(&block : String ->)
+      raise "RocksDB support is disabled"
+    end
+    
     def each(&block : String, String ->)
       raise "RocksDB support is disabled"
     end

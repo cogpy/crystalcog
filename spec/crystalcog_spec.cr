@@ -4,7 +4,7 @@ require "../src/crystalcog"
 describe "CrystalCog Main" do
   describe "application initialization" do
     it "defines CrystalCog version" do
-      CRYSTALCOG_VERSION.should eq("0.1.0")
+      CrystalCog::VERSION.should eq("0.1.0")
     end
 
     it "initializes main application" do

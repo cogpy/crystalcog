@@ -170,9 +170,11 @@ module AtomSpace
       broadcast_departure_message
 
       @server.try(&.close)
-      @heartbeat_thread.try(&.cancel)
-      @sync_thread.try(&.cancel)
-
+      
+      # Fibers will exit naturally when @running becomes false
+      # Give them time to complete their current iteration
+      sleep 0.1
+      
       emit_event(ClusterEvent::NODE_LEFT, @node_id)
       CogUtil::Logger.info("Cluster node #{@node_id} stopped")
     end

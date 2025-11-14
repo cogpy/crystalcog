@@ -437,7 +437,7 @@ describe AtomSpace::DistributedStorageNode do
       stats["cluster_id"].should eq("stats_test")
       stats["partition_strategy"].should eq("RoundRobin")
       stats["replication_strategy"].should eq("FullReplication")
-      stats["cluster_nodes"].as_i64.should eq(1)
+      stats["cluster_nodes"].should eq(1_i64)
 
       storage.close
     end
