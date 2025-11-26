@@ -86,7 +86,17 @@ module CogServer
   end
 end
 
-# Run if this file is executed directly
-if PROGRAM_NAME == __FILE__
+# Run if this file is the main executable being run
+# When compiled to an executable, this will be true
+# When required from another file, this will be false and ARGV will be empty or managed by the requiring file
+if PROGRAM_NAME.ends_with?("cogserver_main") || PROGRAM_NAME.ends_with?("cogserver") || PROGRAM_NAME == __FILE__
+# Run if this file is the main program
+# Note: When built as an executable, we check if PROGRAM_NAME does not contain
+# "crystal-run" which is used by `crystal run` command. This allows the binary
+# to execute while still being importable as a library.
+# Alternative check could be: !PROGRAM_NAME.ends_with?(".cr")
+unless PROGRAM_NAME.includes?("crystal-run") || PROGRAM_NAME.ends_with?(".cr")
+# Run if this file is executed directly or compiled as cogserver binary
+if PROGRAM_NAME == __FILE__ || PROGRAM_NAME.ends_with?("cogserver")
   CogServer.main
 end

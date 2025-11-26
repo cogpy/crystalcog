@@ -1,6 +1,7 @@
-# OpenCog Guix Packaging
+# CrystalCog Guix Packaging
 
-This directory contains GNU Guix package definitions for OpenCog and related components.
+This directory contains GNU Guix package definitions for CrystalCog and Agent-Zero components.
+This directory contains GNU Guix package definitions for CrystalCog and related components.
 
 ## Using the Packages
 
@@ -10,8 +11,8 @@ This directory contains GNU Guix package definitions for OpenCog and related com
 
 ```scheme
 (cons* (channel
-        (name 'opencog-central)
-        (url "https://github.com/EchoCog/opencog-central.git")
+        (name 'crystalcog)
+        (url "https://github.com/cogpy/crystalcog.git")
         (branch "main")
         (introduction
          (make-channel-introduction
@@ -28,36 +29,58 @@ guix pull
 
 ### Using the Manifest
 
-To create a development environment with all OpenCog packages:
+To create a development environment with all CrystalCog packages:
 
 ```bash
 guix environment -m guix.scm
 ```
 
-Or to install the packages:
+Or use the newer `guix shell` command:
 
 ```bash
-guix install -m guix.scm
+guix shell -m guix.scm
 ```
 
 ### Installing Individual Packages
 
+Note: Individual package installation is currently not supported as these are
+placeholder packages for development environment setup. The packages will be
+properly installable once CrystalCog reaches production maturity.
+
+For now, use the manifest-based development environment:
+
 ```bash
+# Enter development shell with all dependencies
+guix shell -m guix.scm
+```bash
+# Main CrystalCog platform
+guix install crystalcog
+
 # Core utilities
-guix install cogutil
+guix install crystalcog-cogutil
 
 # AtomSpace hypergraph database
-guix install atomspace
+guix install crystalcog-atomspace
 
-# Full OpenCog platform
-guix install opencog
+# Main cognitive architecture
+guix install crystalcog-opencog
 ```
 
 ## Package Structure
 
-- **cogutil**: Low-level C++ utilities used across OpenCog projects
-- **atomspace**: The hypergraph database, query system and rule engine
-- **opencog**: The main cognitive architecture platform
+CrystalCog provides the following Guix packages:
+
+- **opencog**: Core cognitive architecture implemented in Crystal
+- **ggml**: Tensor library integration for machine learning
+- **guile-pln**: Probabilistic Logic Networks Guile bindings
+- **guile-ecan**: Economic Attention Network Guile bindings  
+- **guile-moses**: MOSES evolutionary learning Guile bindings
+- **guile-pattern-matcher**: Pattern matching engine Guile bindings
+- **guile-relex**: Natural language processing Guile bindings
+- **crystalcog**: The complete CrystalCog platform (meta-package)
+- **crystalcog-cogutil**: Low-level Crystal utilities (logging, config, random)
+- **crystalcog-atomspace**: The hypergraph database and knowledge representation system
+- **crystalcog-opencog**: The main cognitive architecture reasoning platform
 
 ## Development
 
@@ -66,32 +89,77 @@ guix install opencog
 To test the package definitions locally:
 
 ```bash
-# Test syntax
-guile -c "(use-modules (gnu packages opencog))"
+# Validate package module syntax
+guix shell guile -- guile -c "(use-modules (agent-zero packages cognitive))"
+
+# Test manifest loading
+guix shell guile -- guile -c "(load \"guix.scm\")"
+
+# Run validation script
+./scripts/validation/validate-guix-packages.sh
+# Validate package syntax
+./scripts/validation/validate-guix-packages.sh
+
+# Test with Guile (if available)
+guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))"
 
 # Build a package
-guix build cogutil --no-substitutes
+guix build crystalcog --no-substitutes
 ```
 
 ### Building from Source
 
-The packages are configured to build from upstream Git repositories. To modify 
+The packages are currently placeholders for development environment setup.
+To build CrystalCog from source:
+
+```bash
+# Enter Guix development shell
+guix shell -m guix.scm
+
+# Build CrystalCog components
+crystal build src/crystalcog.cr
+crystal spec
+
+# Or use the test runner
+./scripts/test-runner.sh --all
+```
+
+## Dependencies
+
+The CrystalCog development environment includes:
+
+- **Build tools**: CMake, GCC toolchain, pkg-config
+- **Libraries**: Boost, Guile 3.0
+- **Crystal Language**: Installed via the project's installation scripts
+- **Cognitive packages**: PLN, ECAN, MOSES, pattern matcher, RelEx bindings
+
+Note: Crystal itself is not yet available in Guix, so it should be installed
+using the project's installation scripts (`./scripts/install-crystal.sh`).
+The packages are configured to build from the Git repository. To modify 
 the source or use local development versions, you can:
 
 1. Fork the packages and modify the source URLs
-2. Use `guix environment` with `--ad-hoc git` to work with development versions
+2. Use `guix environment` with `--ad-hoc crystal` to work with development versions
 3. Create local package variants using `package/inherit`
 
 ## Dependencies
 
-The OpenCog packages require several dependencies that are automatically 
+The CrystalCog packages require several dependencies that are automatically 
 handled by Guix:
 
-- **Build tools**: CMake, GCC toolchain, pkg-config
-- **Libraries**: Boost, GMP, Guile 3.0, PostgreSQL
-- **Python**: Python 3 with Cython and testing frameworks
+- **Build tools**: Crystal compiler, pkg-config
+- **Databases**: SQLite, PostgreSQL
+- **Runtime**: Crystal runtime libraries
+
+## Compatibility
+
+For compatibility with existing OpenCog documentation and tooling, we provide:
+
+- `(gnu packages opencog)`: Re-exports CrystalCog packages with OpenCog-compatible names
+
+This allows existing Guix channels and scripts to work without modification.
 
 ## License
 
-The package definitions are licensed under GPL v3+, matching the OpenCog
+The package definitions are licensed under AGPL v3+, matching the CrystalCog
 project licensing.

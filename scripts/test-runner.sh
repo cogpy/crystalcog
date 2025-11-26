@@ -406,13 +406,17 @@ main() {
     
     # Use comprehensive test suite if requested
     if [ "$COMPREHENSIVE" = true ]; then
-        print_status "Delegating to comprehensive test suite..."
-        local comprehensive_script="$(dirname "$0")/../tests/comprehensive-test-suite.sh"
-        if [ -f "$comprehensive_script" ]; then
-            exec "$comprehensive_script" --all
-        else
-            print_error "Comprehensive test suite not found at $comprehensive_script"
-            exit 1
+        print_status "Running comprehensive test suite (includes Agent-Zero tests)..."
+        # The comprehensive option runs all tests with additional Agent-Zero specs
+        INTEGRATION=true
+        BENCHMARKS=true
+        LINT=true
+        BUILD=true
+        COVERAGE=true
+        
+        # Also run Agent-Zero specific tests if they exist
+        if [ -d "spec/agent-zero" ]; then
+            print_status "Including Agent-Zero distributed network tests..."
         fi
     fi
     

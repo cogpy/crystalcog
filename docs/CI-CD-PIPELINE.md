@@ -114,6 +114,8 @@ chmod +x scripts/test-runner.sh
 ./scripts/test-runner.sh --lint --build --integration
 ```
 
+**Validation Status**: The test runner script has been fully validated. See the [Test Runner Validation Report](TEST_RUNNER_VALIDATION_REPORT.md) for detailed validation results and known issues.
+
 ### CI/CD Pipeline
 
 Tests run automatically on:

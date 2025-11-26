@@ -1,0 +1,60 @@
+#!/bin/bash
+# CrystalCog Performance Profiling Tool Launcher
+# This script provides a convenient wrapper for the profiling CLI
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Check if Crystal is installed
+if ! command -v crystal &> /dev/null; then
+    echo "Error: Crystal is not installed or not in PATH" >&2
+    echo "Please run: $PROJECT_ROOT/scripts/install-crystal.sh" >&2
+    exit 1
+fi
+
+# Run the profiling CLI using Crystal
+cd "$PROJECT_ROOT"
+crystal run src/cogutil/profiling_cli.cr -- "$@"
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "" >&2
+    echo "Error: Failed to execute profiling CLI (exit code: $EXIT_CODE)" >&2
+    echo "This could be due to:" >&2
+    echo "  - Missing dependencies (run: shards install)" >&2
+    echo "  - Syntax errors in the Crystal code" >&2
+    echo "  - Incompatible Crystal version (expected: 1.10.1)" >&2
+    echo "" >&2
+    echo "For more information, see docs/PERFORMANCE_PROFILING_GUIDE.md" >&2
+    exit $EXIT_CODE
+# Wrapper script for the CrystalCog performance profiler
+# This script runs the Crystal profiler CLI tool
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILER_CR="$SCRIPT_DIR/profiler.cr"
+
+# Check if Crystal is installed
+if ! command -v crystal &> /dev/null; then
+    echo "Error: Crystal is not installed. Please install Crystal first."
+    echo "Visit: https://crystal-lang.org/install/"
+    if [ -f "./scripts/install-crystal.sh" ]; then
+        echo "Or run: ./scripts/install-crystal.sh"
+    fi
+    exit 1
+fi
+
+# Check if compiled binary exists, otherwise use crystal run
+PROFILER_BIN="$SCRIPT_DIR/../bin/profiler"
+if [ -f "$PROFILER_BIN" ] && [ -x "$PROFILER_BIN" ]; then
+    # Use compiled binary for better performance
+    exec "$PROFILER_BIN" "$@"
+else
+    # Fall back to crystal run (slower but works without compilation)
+    if ! crystal run "$PROFILER_CR" -- "$@"; then
+        echo "Error: Failed to run the profiler. Check that all dependencies are installed."
+        echo "Try running: shards install && shards build profiler"
+        exit 1
+    fi
+fi
