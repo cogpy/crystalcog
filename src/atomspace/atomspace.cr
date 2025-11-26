@@ -279,6 +279,15 @@ module AtomSpace
       add_node(AtomType::PREDICATE_NODE, name, tv)
     end
 
+    def add_variable_node(*names : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
+      variable_nodes = names.to_a.map { |name| add_node(AtomType::VARIABLE_NODE, name, tv) }
+      if variable_nodes.size == 1
+        variable_nodes[0]
+      else
+        add_list_link(variable_nodes, tv)
+      end
+    end
+
     def add_inheritance_link(child : Atom, parent : Atom, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
       link = InheritanceLink.new(child, parent, tv)
       add_atom(link)
@@ -291,6 +300,11 @@ module AtomSpace
 
     def add_list_link(atoms : Array(Atom), tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
       link = ListLink.new(atoms, tv)
+      add_atom(link)
+    end
+
+    def add_implication_link(antecedent : Atom, consequent : Atom, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
+      link = ImplicationLink.new(antecedent, consequent, tv)
       add_atom(link)
     end
 

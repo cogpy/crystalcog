@@ -372,6 +372,20 @@ module AtomSpace
     end
   end
 
+  class ImplicationLink < Link
+    def initialize(antecedent : Atom, consequent : Atom, truth_value : TruthValue = TruthValue::DEFAULT_TV)
+      super(AtomType::IMPLICATION_LINK, [antecedent, consequent].map(&.as(Atom)), truth_value)
+    end
+
+    def antecedent : Atom
+      outgoing[0]
+    end
+
+    def consequent : Atom
+      outgoing[1]
+    end
+  end
+
   # Attention value for atoms (used by attention allocation system)
   class AttentionValue
     getter sti : Int16 # Short-term importance
