@@ -81,7 +81,7 @@ echo "🌿 Guix Environment Tests"
 echo "========================="
 run_test "Guix manifest" "[ -f '$PROJECT_ROOT/guix.scm' ]"
 run_test "Guix channel config" "[ -f '$PROJECT_ROOT/.guix-channel' ]"
-run_test "OpenCog package definition" "[ -f '$PROJECT_ROOT/gnu/packages/opencog.scm' ] || [ -f '$PROJECT_ROOT/opencog.scm' ]"
+run_test "CrystalCog package definition" "[ -f '$PROJECT_ROOT/agent-zero/packages/cognitive.scm' ]"
 
 echo ""
 echo "📋 Additional Quality Checks"
