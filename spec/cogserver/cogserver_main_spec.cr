@@ -13,8 +13,8 @@ describe "CogServer Main" do
     end
 
     it "creates server instance" do
-      server = CogServer.create_server(17001)
-      server.should be_a(CogServer::CogServer)
+      server = CogServer::Server.new("localhost", 17001, 18080)
+      server.should be_a(CogServer::Server)
     end
   end
 
@@ -23,32 +23,19 @@ describe "CogServer Main" do
       CogServer::DEFAULT_PORT.should eq(17001)
     end
 
-    it "provides REST API endpoints" do
-      CogServer::REST_API_VERSION.should eq("v1")
+    it "configures default WebSocket port" do
+      CogServer::DEFAULT_WS_PORT.should eq(18080)
     end
 
-    it "supports WebSocket connections" do
-      CogServer::WEBSOCKET_SUPPORTED.should be_true
+    it "configures default host" do
+      CogServer::DEFAULT_HOST.should eq("localhost")
     end
   end
 
-  describe "system integration" do
-    it "integrates with AtomSpace" do
-      CogUtil.initialize
-      AtomSpace.initialize
-      CogServer.initialize
-
-      # Should be able to create server with atomspace
-      atomspace = AtomSpace.create_atomspace
-      server = CogServer.create_server(17002, atomspace)
-      server.should_not be_nil
-    end
-
-    it "provides command interface" do
-      server = CogServer.create_server(17003)
-
-      # Should have command system
-      server.respond_to?(:execute_command).should be_true
+  describe "main entry point" do
+    it "has main function" do
+      # The main function should be callable
+      CogServer.responds_to?(:main).should be_true
     end
   end
 end

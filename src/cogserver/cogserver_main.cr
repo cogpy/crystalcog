@@ -86,5 +86,9 @@ module CogServer
   end
 end
 
-# Run if this file is executed directly or compiled
-CogServer.main
+# Run if this file is the main executable being run
+# When compiled to an executable, this will be true
+# When required from another file, this will be false and ARGV will be empty or managed by the requiring file
+if PROGRAM_NAME.ends_with?("cogserver_main") || PROGRAM_NAME.ends_with?("cogserver") || PROGRAM_NAME == __FILE__
+  CogServer.main
+end
