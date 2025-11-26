@@ -246,8 +246,8 @@ cmake ..
 make
 
 # Test all components
-cd /path/to/opencog-central
-./test_integration.sh
+cd /path/to/crystalcog
+./scripts/validation/test_integration.sh
 ```
 
 ### Verification
