@@ -7,7 +7,6 @@
   #:use-module (guix packages)
   #:use-module (guix download)
   #:use-module (guix git-download)
-  #:use-module (guix build-system crystal)
   #:use-module (guix build-system gnu)
   #:use-module ((guix licenses) #:prefix license:)
   #:use-module (gnu packages)
@@ -29,7 +28,12 @@
   (package
     (name "opencog")
     (version "0.1.0")
-    (source #f)  ; Placeholder - built from local Crystal sources
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -51,7 +55,12 @@ hypergraph database, and AI subsystems.")
   (package
     (name "ggml")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -70,7 +79,12 @@ hypergraph database, and AI subsystems.")
   (package
     (name "guile-pln")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -91,7 +105,12 @@ reasoning engine.")
   (package
     (name "guile-ecan")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -112,7 +131,12 @@ attention allocation system.")
   (package
     (name "guile-moses")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -133,7 +157,12 @@ Search (MOSES) system.")
   (package
     (name "guile-pattern-matcher")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
@@ -153,7 +182,12 @@ Search (MOSES) system.")
   (package
     (name "guile-relex")
     (version "0.1.0")
-    (source #f)  ; Placeholder
+    (source (origin
+              (method url-fetch)
+              (uri "https://github.com/cogpy/crystalcog/archive/refs/heads/main.tar.gz")
+              (sha256
+               (base32
+                "0000000000000000000000000000000000000000000000000000"))))
     (build-system gnu-build-system)
     (arguments
      '(#:phases
