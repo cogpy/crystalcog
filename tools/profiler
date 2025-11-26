@@ -1,0 +1,19 @@
+#!/bin/bash
+# CrystalCog Performance Profiling Tool Launcher
+# This script provides a convenient wrapper for the profiling CLI
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Check if Crystal is installed
+if ! command -v crystal &> /dev/null; then
+    echo "Error: Crystal is not installed or not in PATH"
+    echo "Please run: ./scripts/install-crystal.sh"
+    exit 1
+fi
+
+# Run the profiling CLI using Crystal
+cd "$PROJECT_ROOT"
+exec crystal run src/cogutil/profiling_cli.cr -- "$@"
