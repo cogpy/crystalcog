@@ -1,7 +1,8 @@
 #!/bin/bash
 # Validation script for CrystalCog Guix package definitions
 
-set -e  # Exit on error
+# Note: We don't use 'set -e' because we want to continue validation
+# even when individual checks fail, and report all issues at the end.
 
 echo "=== CrystalCog Guix Package Validation ==="
 
@@ -92,8 +93,9 @@ if command -v guile > /dev/null; then
     else
         echo "✗ CrystalCog package module syntax invalid"
         echo "Running detailed syntax check..."
-        guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))" 2>&1 || true
-        validation_passed=false
+        if ! guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))" 2>&1; then
+            validation_passed=false
+        fi
     fi
     
     # Test opencog compatibility module
@@ -103,8 +105,9 @@ if command -v guile > /dev/null; then
     else
         echo "✗ OpenCog compatibility module syntax invalid"
         echo "Running detailed syntax check..."
-        guile -c "(add-to-load-path \".\") (use-modules (gnu packages opencog))" 2>&1 || true
-        validation_passed=false
+        if ! guile -c "(add-to-load-path \".\") (use-modules (gnu packages opencog))" 2>&1; then
+            validation_passed=false
+        fi
     fi
     
     # Test manifest
@@ -114,8 +117,9 @@ if command -v guile > /dev/null; then
     else
         echo "✗ Manifest syntax invalid"
         echo "Running detailed syntax check..."
-        guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>&1 || true
-        validation_passed=false
+        if ! guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>&1; then
+            validation_passed=false
+        fi
     fi
 else
     echo "⚠ Guile not available, skipping syntax validation"

@@ -39,6 +39,8 @@
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Replace with actual SHA256 hash when package is released
+                ;; Generate with: guix hash -rx /path/to/crystalcog
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)
     (arguments
@@ -91,6 +93,7 @@ Features include:
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Replace with actual SHA256 hash when package is released
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)
     (synopsis "Core utilities for CrystalCog")
@@ -113,6 +116,7 @@ generation, and platform-specific utilities.")
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Replace with actual SHA256 hash when package is released
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)
     (inputs
@@ -139,6 +143,7 @@ truth values, attention values, and advanced pattern matching capabilities.")
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Replace with actual SHA256 hash when package is released
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)
     (propagated-inputs
