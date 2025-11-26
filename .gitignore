@@ -309,6 +309,66 @@ cogutil_lib
 opencog_lib
 atomspace_lib
 cogutil_bin
+opencog_bin
+atomspace_bin
+pattern_matching
+pattern_mining
+nlp
+cogserver
+distributed_network_demo
+cogshell
+bin/
+*.o
+*.a
+test
+
+# Production environment and deployment files
+.env.production
+.env.staging
+config/production/ssl/*.key
+config/production/ssl/*.crt
+config/production/ssl/*.pem
+backup/
+logs/
+data/
+
+# Docker volumes and runtime data
+docker-compose.override.yml
+.docker/
+volumes/
+
+# Kubernetes secrets
+deployments/k8s/production/secrets/
+deployments/k8s/staging/secrets/
+
+# Build and deployment artifacts
+build/system-images/
+build/agent-zero/
+dist/
+*.tar.gz
+*.zip
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Test artifacts
+distributed_storage/
+knowledge.scm
+knowledge.rocks
+state.scm
+/tmp/test_*/
+
+# Temporary and build directories
+.c2/
+.idx/
+profile/
+# Crystal build artifacts
+crystalcog
+cogutil_lib
+opencog_lib
+atomspace_lib
+cogutil_bin
 atomspace_bin
 opencog_bin
 pattern_matching
