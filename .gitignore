@@ -138,6 +138,7 @@ nlp
 cogserver
 distributed_network_demo
 cogshell
+cogserver_bin
 bin/
 *.o
 *.a
@@ -184,3 +185,4 @@ state.scm
 .idx/
 profile/
 coverage-report.txt
+cogserver_bin
