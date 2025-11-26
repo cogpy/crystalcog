@@ -7,6 +7,11 @@
 ;;; under the terms of the GNU General Public License as published by
 ;;; the Free Software Foundation; either version 3 of the License, or (at
 ;;; your option) any later version.
+;;;
+;;; NOTE: This package file contains placeholder SHA256 hashes (all zeros).
+;;; These hashes need to be updated with actual values when CrystalCog
+;;; releases are tagged. Use `guix hash -rx /path/to/crystalcog` to generate
+;;; the correct hash for a specific version.
 
 (define-module (gnu packages crystalcog)
   #:use-module (guix packages)

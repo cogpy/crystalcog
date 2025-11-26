@@ -2,6 +2,11 @@
 ;;; Copyright © 2024 CrystalCog Contributors
 ;;;
 ;;; This file defines Guix packages for the Agent-Zero cognitive architecture
+;;;
+;;; NOTE: This package file contains placeholder SHA256 hashes (all zeros).
+;;; These hashes need to be updated with actual values when CrystalCog
+;;; releases are tagged. Use `guix hash -rx /path/to/source` to generate
+;;; the correct hash for a specific version or commit.
 
 (define-module (agent-zero packages cognitive)
   #:use-module (gnu packages crystalcog)
