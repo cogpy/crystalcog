@@ -43,10 +43,12 @@ All command-line options have been validated:
 
 **Crystal Installation**:
 - Method: Official GitHub releases
-- Version: 1.10.1 [c6f3552f5] (2023-10-13)
+- Version: 1.10.1 [c6f3552f5] (2023-10-13) - As specified in shard.yml
 - LLVM: 15.0.7
 - Installation: Automatic via script
 - Status: ✅ WORKING
+
+**Note**: Crystal 1.10.1 is intentionally specified in the project's `shard.yml` configuration file and is the officially supported version for CrystalCog.
 
 **Shards Dependencies** (from shard.yml):
 - sqlite3 (crystal-lang/crystal-sqlite3): ✅ Installed (0.21.0)
