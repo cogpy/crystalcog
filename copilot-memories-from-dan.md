@@ -177,6 +177,45 @@ Let me view the final state of the key files to prepare a summary
 
 ---
 
+Excellent! Everything is working perfectly. Let me now store some useful memory about this validation:
+
+Call to store_memory
+Input
+{
+  "subject": "test runner validation",
+  "fact": "Use DISABLE_ROCKSDB=1 environment variable when RocksDB is not available; system falls back to SQLite/PostgreSQL",
+  "citations": "docs/TEST_RUNNER_VALIDATION_REPORT.md:58-62, README.md:312-320",
+  "reason": "This workaround is critical for running tests and builds in environments without RocksDB. It's documented in multiple places but needs to be remembered for future development and CI/CD configuration. This will help prevent build failures and test issues when working on the project.",
+  "category": "bootstrap_and_build"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "testing infrastructure",
+  "fact": "Test runner script at scripts/test-runner.sh auto-installs Crystal and manages all test operations",
+  "citations": "scripts/test-runner.sh:140-174, docs/TEST_RUNNER_VALIDATION_REPORT.md",
+  "reason": "The test runner is the central tool for all testing operations in CrystalCog. Understanding that it handles Crystal installation automatically is important for new developers and CI/CD setup. This will be useful for future testing tasks and troubleshooting.",
+  "category": "bootstrap_and_build"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "crystal version",
+  "fact": "CrystalCog requires Crystal 1.10.1 as specified in shard.yml; this version is intentionally locked",
+  "citations": "shard.yml:7, docs/TEST_RUNNER_VALIDATION_REPORT.md:46-49",
+  "reason": "The project deliberately uses Crystal 1.10.1 rather than the latest version. This is important to remember when working on the codebase to avoid compatibility issues. Future tasks involving dependency updates or CI/CD configuration should respect this version requirement.",
+  "category": "bootstrap_and_build"
+}
+Failed to store memory with error: Resource not found
+
+That's okay, the memory storage isn't critical. Let me create a final summary document
+
+---
+
 
 
 ---
