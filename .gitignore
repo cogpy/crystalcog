@@ -129,6 +129,8 @@ crystalcog
 cogutil_lib
 opencog_lib
 atomspace_lib
+cogserver_bin
+*_bin
 bin/
 *.o
 *.a
