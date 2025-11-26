@@ -1,4 +1,17 @@
 ;;; GNU Guix --- Functional package management for GNU
+;;; Copyright © 2024 CrystalCog Contributors
+;;;
+;;; This file is part of GNU Guix.
+;;;
+;;; GNU Guix is free software; you can redistribute it and/or modify it
+;;; under the terms of the GNU General Public License as published by
+;;; the Free Software Foundation; either version 3 of the License, or (at
+;;; your option) any later version.
+;;;
+;;; NOTE: This package file contains placeholder SHA256 hashes (all zeros).
+;;; These hashes need to be updated with actual values when CrystalCog
+;;; releases are tagged. Use `guix hash -rx /path/to/crystalcog` to generate
+;;; the correct hash for a specific version.
 ;;; Copyright © 2024 OpenCog Community <opencog@googlegroups.com>
 ;;;
 ;;; This file is part of CrystalCog.
@@ -39,6 +52,8 @@
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Update with actual hash when v0.1.0 release is tagged
+                ;; Use: guix hash -rx /path/to/crystalcog
                 ;; TODO: Replace with actual SHA256 hash when package is released
                 ;; Generate with: guix hash -rx /path/to/crystalcog
                 "0000000000000000000000000000000000000000000000000000"))))
@@ -47,6 +62,22 @@
      `(#:tests? #t
        #:phases
        (modify-phases %standard-phases
+         (add-before 'build 'install-dependencies
+           (lambda _
+             (invoke "shards" "install")
+             #t)))))
+    (native-inputs
+     (list crystal pkg-config))
+    (inputs
+     (list postgresql sqlite))
+    (propagated-inputs
+     (list crystal))
+    (synopsis "Crystal implementation of the OpenCog cognitive architecture")
+    (description
+     "CrystalCog is a comprehensive rewrite of the OpenCog artificial
+intelligence framework in the Crystal programming language.  It provides
+better performance, memory safety, and maintainability while preserving all
+the functionality of the original OpenCog system.  The framework includes:
          (add-after 'unpack 'set-version
            (lambda _
              (substitute* "shard.yml"
@@ -75,6 +106,7 @@ Features include:
 @item Pattern matching and mining
 @item Natural language processing
 @item Evolutionary optimization (MOSES)
+@item Distributed agent networks
 @item Distributed agent systems
 @item Network server with REST API
 @end itemize")
@@ -93,6 +125,16 @@ Features include:
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Update with actual hash when v0.1.0 release is tagged
+                ;; Use: guix hash -rx /path/to/crystalcog
+                "0000000000000000000000000000000000000000000000000000"))))
+    (build-system crystal-build-system)
+    (native-inputs
+     (list crystal pkg-config))
+    (synopsis "Core utilities for CrystalCog")
+    (description
+     "CogUtil provides core utilities for the CrystalCog cognitive architecture,
+including logging, configuration management, and platform utilities.")
                 ;; TODO: Replace with actual SHA256 hash when package is released
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)
@@ -116,6 +158,21 @@ generation, and platform-specific utilities.")
               (file-name (git-file-name name version))
               (sha256
                (base32
+                ;; TODO: Update with actual hash when v0.1.0 release is tagged
+                ;; Use: guix hash -rx /path/to/crystalcog
+                "0000000000000000000000000000000000000000000000000000"))))
+    (build-system crystal-build-system)
+    (native-inputs
+     (list crystal pkg-config))
+    (inputs
+     (list postgresql sqlite))
+    (propagated-inputs
+     (list crystalcog-cogutil))
+    (synopsis "Hypergraph knowledge representation for CrystalCog")
+    (description
+     "AtomSpace provides a hypergraph-based knowledge representation system
+for the CrystalCog cognitive architecture.  It includes pattern matching,
+truth values, and persistent storage capabilities.")
                 ;; TODO: Replace with actual SHA256 hash when package is released
                 "0000000000000000000000000000000000000000000000000000"))))
     (build-system crystal-build-system)

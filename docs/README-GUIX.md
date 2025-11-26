@@ -1,5 +1,13 @@
 # CrystalCog Guix Packaging
 
+This directory contains GNU Guix package definitions for CrystalCog and related components.
+
+## Package Structure
+
+CrystalCog provides two package module locations:
+
+1. **gnu/packages/crystalcog.scm** - Main CrystalCog package definitions following Guix conventions
+2. **agent-zero/packages/cognitive.scm** - Agent-Zero cognitive packages with Guile bindings
 This directory contains GNU Guix package definitions for CrystalCog and Agent-Zero components.
 This directory contains GNU Guix package definitions for CrystalCog and related components.
 
@@ -62,12 +70,30 @@ guix install crystalcog-cogutil
 # AtomSpace hypergraph database
 guix install crystalcog-atomspace
 
+# Guile bindings for specific components
+guix install guile-pln guile-ecan guile-moses
 # Main cognitive architecture
 guix install crystalcog-opencog
 ```
 
 ## Package Structure
 
+### Core Packages (gnu/packages/crystalcog.scm)
+
+- **crystalcog**: Main Crystal-based cognitive architecture platform
+  - Includes all components: AtomSpace, PLN, URE, MOSES, NLP, etc.
+- **crystalcog-cogutil**: Core utilities (logging, config, random)
+- **crystalcog-atomspace**: Hypergraph database and reasoning engine
+
+### Agent-Zero Cognitive Packages (agent-zero/packages/cognitive.scm)
+
+- **opencog**: Re-exported crystalcog package for compatibility
+- **ggml**: Tensor library for machine learning integration
+- **guile-pln**: Guile bindings for Probabilistic Logic Networks
+- **guile-ecan**: Guile bindings for attention allocation
+- **guile-moses**: Guile bindings for evolutionary optimization
+- **guile-pattern-matcher**: Guile bindings for pattern matching
+- **guile-relex**: Guile bindings for natural language processing
 CrystalCog provides the following Guix packages:
 
 - **opencog**: Core cognitive architecture implemented in Crystal
@@ -86,9 +112,16 @@ CrystalCog provides the following Guix packages:
 
 ### Testing Package Definitions
 
-To test the package definitions locally:
+To validate the package definitions:
 
 ```bash
+# Run the validation script
+./scripts/validation/validate-guix-packages.sh
+
+# Test syntax (requires Guile)
+guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))"
+
+# Build a package (requires Guix)
 # Validate package module syntax
 guix shell guile -- guile -c "(use-modules (agent-zero packages cognitive))"
 
@@ -109,6 +142,7 @@ guix build crystalcog --no-substitutes
 
 ### Building from Source
 
+The packages are configured to build from the CrystalCog Git repository. To modify 
 The packages are currently placeholders for development environment setup.
 To build CrystalCog from source:
 
@@ -147,6 +181,18 @@ the source or use local development versions, you can:
 The CrystalCog packages require several dependencies that are automatically 
 handled by Guix:
 
+- **Build tools**: Crystal compiler, shards (Crystal dependency manager), pkg-config
+- **Libraries**: PostgreSQL, SQLite (for persistent storage)
+- **Runtime**: Crystal runtime libraries
+
+For Guile bindings:
+- **Guile**: Guile 3.0 or later
+- **guile-lib**: Guile utility libraries
+
+## License
+
+The package definitions are licensed under GPL v3+, matching the OpenCog
+project licensing. CrystalCog itself is licensed under AGPL-3.0.
 - **Build tools**: Crystal compiler, pkg-config
 - **Databases**: SQLite, PostgreSQL
 - **Runtime**: Crystal runtime libraries

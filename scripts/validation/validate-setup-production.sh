@@ -179,6 +179,10 @@ if command -v guile >/dev/null 2>&1; then
         track_result "warning" "⚠ Guix manifest syntax check needs full Guix environment"
     fi
     
+    if guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))" >/dev/null 2>&1; then
+        track_result "success" "✓ CrystalCog package module syntax is valid"
+    else
+        track_result "warning" "⚠ CrystalCog package module validation requires full Guix installation"
     if GUILE_LOAD_PATH=".:$GUILE_LOAD_PATH" guile -c "(use-modules (agent-zero packages cognitive))" >/dev/null 2>&1; then
         track_result "success" "✓ CrystalCog package module syntax is valid"
     else
