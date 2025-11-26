@@ -30,3 +30,4 @@ if [ $EXIT_CODE -ne 0 ]; then
     echo "For more information, see docs/PERFORMANCE_PROFILING_GUIDE.md" >&2
     exit $EXIT_CODE
 fi
+
