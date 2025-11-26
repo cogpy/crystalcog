@@ -71,6 +71,45 @@ Now let me create a quick visual summary of what was accomplished
 
 ---
 
+Perfect! Now let me store some useful memory about this validation process for future tasks:
+
+Call to store_memory
+Input
+{
+  "subject": "validation scripts",
+  "fact": "Use robust path handling in validation scripts with SCRIPT_DIR and REPO_ROOT variables",
+  "citations": "scripts/validation/validate_integration_test.sh:7-10",
+  "reason": "This pattern ensures validation scripts work correctly when called from any directory in the repository. This is important for CI/CD pipelines and manual execution from different locations. Future validation scripts should follow this same pattern.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "build dependencies",
+  "fact": "CrystalCog requires librocksdb-dev for persistence storage backends",
+  "citations": "Issue validation process - librocksdb-dev installation required for successful build",
+  "reason": "This dependency is critical for building CogServer with storage capabilities. When setting up new environments or CI/CD systems, this library must be installed. This will help avoid compilation errors in future builds.",
+  "category": "bootstrap_and_build"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "testing practices",
+  "fact": "CogServer test scripts should start the server in background and wait for HTTP endpoint to respond before running tests",
+  "citations": "scripts/validation/validate_integration_test.sh:93-109",
+  "reason": "This pattern ensures reliable test execution by verifying the server is actually ready before testing endpoints. The validation script uses a loop to check server readiness, which is more reliable than a fixed sleep. This should be followed in other integration test scripts.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+The memories couldn't be stored, but that's fine. Let me create a final comprehensive summary of the work completed
+
+---
+
 
 
 ---
