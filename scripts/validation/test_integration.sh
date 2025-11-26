@@ -38,7 +38,12 @@ else
 fi
 
 # Check for libevent (required for some specs)
-if ldconfig -p | grep -q libevent; then
+# Use portable library detection
+if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libevent; then
+    echo "   ✓ libevent library found"
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libevent; then
+    echo "   ✓ libevent library found (via pkg-config)"
+elif [ -f "/usr/lib/libevent.so" ] || [ -f "/usr/local/lib/libevent.so" ]; then
     echo "   ✓ libevent library found"
 else
     echo "   ⚠ libevent library not found (some specs may fail)"
@@ -57,7 +62,6 @@ fi
 # Test Crystal specs
 echo
 echo "2. Testing Crystal implementation..."
-cd /home/runner/work/crystalcog/crystalcog
 
 if [ -n "$CRYSTAL_CMD" ]; then
     echo "   Running Crystal specs..."
@@ -173,14 +177,12 @@ if [ -f "guix.scm" ]; then
     if command -v guix >/dev/null 2>&1; then
         echo "   ✓ Guix package manager found"
         
-        # Validate guix.scm syntax
-        set +e
+        # Validate guix.scm syntax (if statement handles error)
         if guix environment -m guix.scm --check 2>/dev/null; then
             echo "   ✓ Guix environment validated"
         else
             echo "   ⚠ Guix environment validation skipped (may need packages)"
         fi
-        set -e
     else
         echo "   ⚠ Guix not installed, skipping Guix validation"
         echo "   Note: Install Guix to test Guix environment support"
