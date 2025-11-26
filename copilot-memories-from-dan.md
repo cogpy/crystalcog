@@ -294,6 +294,45 @@ The memories couldn't be stored, but that's okay. Let me create one final compre
 
 ---
 
+Perfect! Everything is working as expected. Let me store some memory about this work for future reference:
+
+Call to store_memory
+Input
+{
+  "subject": "test validation patterns",
+  "fact": "Use color-coded output (INFO/SUCCESS/WARNING/ERROR), test tracking counters (passed/failed/skipped), and success rate calculation for shell-based validation scripts",
+  "citations": "scripts/validation/test_integration.sh:1-40 (color functions and test tracking pattern)",
+  "reason": "This establishes a consistent pattern for creating validation scripts across the CrystalCog project. Future validation scripts should follow this pattern for consistency and better user experience. The color-coded output, test tracking, and success rate calculation provide clear feedback and are suitable for both interactive use and CI/CD pipelines.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "Crystal require paths",
+  "fact": "Crystal resolves require paths relative to the file being required, not the current working directory. Test files in examples/tests/ must use ../../src/ not ./src/ to require source modules",
+  "citations": "examples/tests/test_basic.cr:4-6, examples/tests/test_attention_simple.cr:1, examples/tests/test_pattern_matching.cr:4",
+  "reason": "This is a critical Crystal language behavior that differs from some other languages. Understanding this prevents common path resolution errors when creating test files or examples in subdirectories. Future test files should follow this pattern to work correctly.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "portable shell script paths",
+  "fact": "Use REPO_ROOT=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/../..\" && pwd)\" to dynamically find repository root instead of hardcoded paths",
+  "citations": "scripts/validation/test_integration.sh:112-116",
+  "reason": "This pattern makes scripts portable across different environments (CI, local development, Docker containers) without requiring configuration. This is essential for scripts that may be called from various directories or deployed in different environments. Future scripts should use this pattern for portability.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Now let me create a final summary of the work done
+
+---
+
 
 
 ---
