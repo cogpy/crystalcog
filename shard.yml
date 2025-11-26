@@ -57,6 +57,9 @@ targets:
   # Command line tools
   cogshell:
     main: src/tools/cogshell.cr
+    
+  profiler:
+    main: tools/profiler.cr
 
 scripts:
   build: crystal build src/crystalcog.cr

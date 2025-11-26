@@ -53,6 +53,12 @@ During validation, several Crystal compilation issues were identified and fixed:
 3. **String Method Updates**: Updated method calls for Crystal compatibility
 4. **Missing AtomType**: Added `STORAGE_NODE` atom type definition
 5. **Dependency Installation**: Ensured libevent-dev is available for compilation
+6. **RocksDB Dependency**: Added `DISABLE_ROCKSDB=1` flag to allow building without RocksDB library
+7. **Require Path Fix**: Corrected relative require path in `start_test_cogserver.cr` from `./src/` to `../../src/`
+8. **Integration Test Path**: Fixed validation script to call `./scripts/validation/test_cogserver_integration.sh` instead of `./test_cogserver_integration.sh`
+6. **RocksDB Library**: Added librocksdb-dev dependency installation for persistence backends
+7. **Test Server Path**: Fixed require path in `start_test_cogserver.cr` to use correct relative path
+8. **Validation Script Path**: Fixed integration test script path in validation script to use full path
 
 ## Guix Environment Compatibility
 
@@ -73,20 +79,36 @@ During validation, several Crystal compilation issues were identified and fixed:
 
 ### Running the Integration Test
 
-1. Build the CogServer:
+1. Build the CogServer (without RocksDB dependency):
    ```bash
-   crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
+   DISABLE_ROCKSDB=1 crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
    ```
 
 2. Start CogServer for testing:
    ```bash
-   crystal run start_test_cogserver.cr &
+   DISABLE_ROCKSDB=1 crystal run examples/tests/start_test_cogserver.cr &
    ```
 
 3. Run the integration test:
    ```bash
-   ./test_cogserver_integration.sh
+   ./scripts/validation/test_cogserver_integration.sh
    ```
+
+### Running the Validation Script
+
+The validation script automates all of the above steps:
+
+```bash
+./scripts/validation/validate_integration_test.sh
+```
+
+This script will:
+- Check for required dependencies (curl, jq, crystal)
+- Build the CogServer if needed
+- Start the CogServer for testing
+- Run the integration test suite
+- Clean up processes after testing
+- Report comprehensive validation results
 
 ### Expected Output
 

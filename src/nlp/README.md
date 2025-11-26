@@ -37,13 +37,34 @@ This module provides comprehensive natural language processing functionality for
 - Parse tree structures
 - Linguistic complexity metrics
 
-#### `NLP::LinkGrammar` ⭐ NEW
+#### `NLP::LinkGrammar` ⭐ ADVANCED
 - Syntactic parsing with Link Grammar
 - Dependency structure extraction
 - Parse result representation in AtomSpace
 - Linkage analysis (links, disjuncts, connectors)
 - Multiple language support (English by default)
 - Dictionary lookup capabilities
+
+#### `NLP::DependencyParser` ⭐ ADVANCED
+- Universal Dependencies parsing
+- Dependency tree construction
+- Grammatical relation extraction
+- AtomSpace representation of dependency structures
+- Integration with Link Grammar parser
+
+#### `NLP::LanguageGeneration` ⭐ ADVANCED
+- Natural language text generation
+- Template-based generation
+- Sentence construction from semantic atoms
+- Multi-tense support (present, past, future)
+- Clause and phrase generation
+
+#### `NLP::SemanticUnderstanding` ⭐ ADVANCED
+- Semantic role labeling (agent, patient, theme, etc.)
+- Frame-based semantic analysis
+- Predicate-argument structure extraction
+- Semantic frame representation in AtomSpace
+- Entity relationship extraction
 
 ## Usage Examples
 
@@ -157,6 +178,68 @@ atoms = NLP::LinkGrammar.parse_to_atomspace("The cat runs", atomspace)
 disjuncts = parser.dictionary_lookup("cat")
 ```
 
+### Dependency Parsing
+
+```crystal
+# Parse sentence and extract dependencies
+parse_result = NLP::DependencyParser.parse("The cat sits on the mat")
+
+puts "Dependencies found: #{parse_result.dependencies.size}"
+parse_result.dependencies.each do |dep|
+  puts "#{dep.governor} --[#{dep.relation}]--> #{dep.dependent}"
+end
+
+# Parse and store in AtomSpace
+atoms = NLP::DependencyParser.parse_to_atomspace("The dog runs", atomspace)
+
+# Query dependency structures
+dep_links = atomspace.get_atoms_by_type(AtomSpace::AtomType::DEPENDENCY_LINK)
+```
+
+### Language Generation
+
+```crystal
+# Generate simple sentence
+sentence = NLP::LanguageGeneration.generate_sentence(
+  "cat", "sits", "mat",
+  tense: NLP::LanguageGeneration::Sentence::Tense::Present
+)
+puts sentence # => "The cat sits on the mat."
+
+# Use templates
+template = NLP::LanguageGeneration::Template.new(
+  "{subject} {verb} {object}",
+  ["subject", "verb", "object"]
+)
+text = template.fill({
+  "subject" => "The dog",
+  "verb" => "chases",
+  "object" => "the ball"
+})
+puts text # => "The dog chases the ball"
+```
+
+### Semantic Understanding
+
+```crystal
+# Analyze semantic roles
+analysis = NLP::SemanticUnderstanding.analyze("John gave Mary a book")
+
+puts "Frames: #{analysis.frames.size}"
+analysis.frames.each do |frame|
+  puts "Frame: #{frame.name}"
+  frame.frame_elements.each do |role, filler|
+    puts "  #{role}: #{filler}"
+  end
+end
+
+# Store semantic analysis in AtomSpace
+atoms = NLP::SemanticUnderstanding.analyze_to_atomspace(
+  "The cat caught the mouse",
+  atomspace
+)
+```
+
 ## Command Line Interface
 
 The NLP module includes a command-line interface for testing and demonstration:
@@ -199,24 +282,34 @@ crystal spec spec/nlp/linguistic_atoms_spec.cr
 crystal spec spec/nlp/link_grammar_spec.cr
 
 # Validate NLP module structure and dependencies
-./test_nlp_structure.sh
+./scripts/validation/test_nlp_structure.sh
 ```
 
 ### Validation Script
 
-The `test_nlp_structure.sh` script provides comprehensive validation of:
+The `scripts/validation/test_nlp_structure.sh` script provides comprehensive validation of:
 
-- **File Structure**: Verifies all required NLP module files exist
-- **Module Definitions**: Checks proper module and class definitions
+- **File Structure**: Verifies all 9 NLP module files exist (including advanced modules)
+- **Module Definitions**: Checks proper module and class definitions for all modules
+- **Method Signatures**: Validates key methods in each module:
+  - NLP core: initialize, process_text, create_linguistic_kb
+  - LinkGrammar: parse, parse_to_atomspace
+  - DependencyParser: parse, parse_to_atomspace  
+  - LanguageGeneration: generate, generate_sentence
+  - SemanticUnderstanding: analyze, analyze_to_atomspace
 - **Dependency Compatibility**: Validates CogUtil and AtomSpace dependencies
+- **Cross-Module Dependencies**: Verifies LinkGrammar → DependencyParser → SemanticUnderstanding chain
 - **Integration Points**: Confirms proper integration with main system
 - **Guix Environment**: Checks Guix package configuration compatibility
 - **Reasoning Systems**: Validates PLN and URE integration potential
-- **Test Coverage**: Ensures comprehensive test suite is in place
+- **Test Coverage**: Ensures all 7 test files are in place and properly structured
 
 ```bash
+# Run comprehensive NLP validation (must be run from repo root)
+cd /path/to/crystalcog
+bash scripts/validation/test_nlp_structure.sh
 # Run comprehensive NLP validation
-./test_nlp_structure.sh
+./scripts/validation/test_nlp_structure.sh
 ```
 
 This validation script is particularly useful for:
@@ -224,6 +317,7 @@ This validation script is particularly useful for:
 - Development environment setup verification
 - Dependency troubleshooting
 - Package distribution validation
+- Verifying all advanced NLP features are properly integrated
 
 ## Architecture
 
@@ -256,6 +350,15 @@ The NLP module follows the established CrystalCog patterns:
 - ✅ Link Grammar parses with dependency links
 - ✅ Word instance nodes and linkages
 - ✅ Connector and disjunct representation
+
+### Advanced Features
+- ✅ Link Grammar parsing with typed links
+- ✅ Universal Dependencies parsing
+- ✅ Dependency tree construction
+- ✅ Natural language generation with templates
+- ✅ Semantic role labeling (agent, patient, theme, etc.)
+- ✅ Frame-based semantic analysis
+- ✅ Multi-tense sentence generation (present, past, future)
 
 ### Integration Features
 - ✅ AtomSpace native integration
