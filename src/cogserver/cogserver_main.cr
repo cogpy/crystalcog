@@ -86,7 +86,7 @@ module CogServer
   end
 end
 
-# Run if this file is executed directly
-if PROGRAM_NAME == __FILE__
+# Run if this file is executed directly or compiled as cogserver binary
+if PROGRAM_NAME == __FILE__ || PROGRAM_NAME.ends_with?("cogserver")
   CogServer.main
 end
