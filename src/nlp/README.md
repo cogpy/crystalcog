@@ -199,7 +199,7 @@ crystal spec spec/nlp/linguistic_atoms_spec.cr
 crystal spec spec/nlp/link_grammar_spec.cr
 
 # Validate NLP module structure and dependencies
-./test_nlp_structure.sh
+./scripts/validation/test_nlp_structure.sh
 ```
 
 ### Validation Script
@@ -216,7 +216,7 @@ The `test_nlp_structure.sh` script provides comprehensive validation of:
 
 ```bash
 # Run comprehensive NLP validation
-./test_nlp_structure.sh
+./scripts/validation/test_nlp_structure.sh
 ```
 
 This validation script is particularly useful for:
