@@ -1,4 +1,4 @@
-;; Agent-Zero Genesis Guix Manifest
+;; CrystalCog Guix Manifest
 ;; This file can be used with 'guix environment -m guix.scm'
 
 (use-modules (gnu packages)
@@ -8,7 +8,7 @@
              (gnu packages boost)
              (gnu packages cmake)
              (gnu packages gcc)
-             (agent-zero packages cognitive))
+             (gnu packages opencog))
 
 (packages->manifest
   (list
