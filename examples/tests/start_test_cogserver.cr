@@ -1,5 +1,5 @@
 # Start a CogServer for testing the bash integration script
-require "./src/cogserver/cogserver_main"
+require "../../src/cogserver/cogserver_main"
 
 puts "Starting CogServer for bash integration test..."
 
