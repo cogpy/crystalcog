@@ -16,4 +16,8 @@ if ! command -v crystal &> /dev/null; then
 fi
 
 # Run the profiler with all provided arguments
-crystal run "$PROFILER_CR" -- "$@"
+if ! crystal run "$PROFILER_CR" -- "$@"; then
+    echo "Error: Failed to run the profiler. Check that all dependencies are installed."
+    echo "Try running: shards install"
+    exit 1
+fi
