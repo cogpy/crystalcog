@@ -132,6 +132,8 @@ atomspace_lib
 cogserver_bin
 *_bin
 bin/
+*_bin
+test
 *.o
 *.a
 

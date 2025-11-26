@@ -73,13 +73,18 @@ Options:
   -l, --lint          Run code linting and formatting checks
   -B, --build         Build all targets before testing
   -C, --component     Run tests for specific component
+  -V, --version       Specify Crystal version to use
   -a, --all          Run all tests (comprehensive)
+  --comprehensive    Run comprehensive test suite including Agent-Zero tests
 ```
 
 **Examples:**
 ```bash
 # Run complete test suite
 ./test-runner.sh --all
+
+# Run comprehensive suite including Agent-Zero distributed tests
+./test-runner.sh --comprehensive
 
 # Run unit tests with linting
 ./test-runner.sh --lint --verbose
@@ -95,12 +100,14 @@ Options:
 ```
 
 **Validation Status:**
-- ✅ Script functionality validated on Crystal 1.11.2
+- ✅ Script functionality validated on Crystal 1.10.1
 - ✅ All test modes working correctly (unit, integration, benchmarks, coverage)
 - ✅ Component-specific testing operational
 - ✅ Build process working with proper target naming
 - ✅ Error handling improved for problematic spec files
 - ✅ Dependencies cleaned up and working correctly
+- ✅ Comprehensive mode implemented (runs all tests including Agent-Zero)
+- ⚠️ Guix environment integration not tested (Guix not available in test environment)
 
 ### `generate-system-image.sh` - Agent-Zero System Image Generation
 Generates bootable system images for the Agent-Zero Genesis cognitive operating system using Guix.
