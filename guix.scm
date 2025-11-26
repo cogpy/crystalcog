@@ -1,34 +1,26 @@
-;; Agent-Zero Genesis Guix Manifest
+;; CrystalCog Guix Manifest
 ;; This file can be used with 'guix environment -m guix.scm'
 
 (use-modules (gnu packages)
-             (gnu packages guile)
-             (gnu packages maths)
-             (gnu packages pkg-config)
-             (gnu packages boost)
-             (gnu packages cmake)
-             (gnu packages gcc)
-             (agent-zero packages cognitive))
+             (gnu packages crystalcog)
+             (gnu packages crystal)
+             (gnu packages databases)
+             (gnu packages pkg-config))
 
 (packages->manifest
   (list
-    ;; Core Guile
-    guile-3.0
-    guile-lib
+    ;; Core Crystal
+    crystal
     
     ;; Build tools
-    cmake
-    gcc-toolchain
     pkg-config
     
-    ;; Cognitive packages
-    opencog
-    ggml
-    guile-pln
-    guile-ecan
-    guile-moses
-    guile-pattern-matcher
-    guile-relex
+    ;; CrystalCog packages
+    crystalcog
+    crystalcog-cogutil
+    crystalcog-atomspace
+    crystalcog-opencog
     
-    ;; Math and scientific computing
-    boost))
+    ;; Database backends
+    sqlite
+    postgresql))
