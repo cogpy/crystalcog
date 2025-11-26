@@ -247,6 +247,76 @@ hypergraph_encoding = kernel.hypergraph_tensor_encoding
 curl -X POST http://localhost:18080/storage/save
 ```
 
+## Validation & Dependency Checking
+
+CrystalCog includes comprehensive validation scripts to ensure your environment is correctly configured:
+
+### Profiling Tools Validation
+
+Validate that all performance profiling tools are correctly installed and functional:
+
+```bash
+# Run the profiling tools validation
+./scripts/validation/validate_profiling_tools.sh
+```
+
+This validates:
+- All 9 profiling tool files exist
+- Executable permissions are correct
+- Script execution and output format
+- Documentation completeness
+- Test suite coverage
+- Optional Crystal syntax validation (when Crystal is installed)
+
+### Dependency Compatibility Check
+
+Check that all required dependencies are installed and compatible:
+
+```bash
+# Run the dependency compatibility check
+./scripts/validation/check_dependencies.sh
+```
+
+This checks:
+- Crystal compiler and version compatibility
+- Database dependencies (SQLite3, PostgreSQL)
+- Shard dependencies from shard.yml
+- Profiling tool component files
+- Guix environment (if available)
+
+### Guix Package Validation
+
+For Guix users, validate the Guix package definitions:
+
+```bash
+# Run Guix package validation
+./scripts/validation/validate-guix-packages.sh
+```
+
+This validates:
+- Package definition files exist (gnu/packages/opencog.scm)
+- Guix manifest exists (guix.scm)
+- Channel definition exists (.guix-channel)
+- Optional Scheme syntax validation (when Guile is installed)
+
+### Complete Validation Suite
+
+Run all validation checks at once:
+
+```bash
+# Run profiling tools validation
+./scripts/validation/validate_profiling_tools.sh
+
+# Run dependency compatibility check
+./scripts/validation/check_dependencies.sh
+
+# Run Guix package validation
+./scripts/validation/validate-guix-packages.sh
+```
+
+For detailed validation reports, see:
+- [Profiling Tools Validation Report](scripts/validation/PROFILING_TOOLS_VALIDATION_REPORT.md)
+
 ## Production Deployment
 
 CrystalCog includes comprehensive production deployment scripts for enterprise-ready environments:
