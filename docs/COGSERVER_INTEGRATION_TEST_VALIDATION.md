@@ -53,6 +53,9 @@ During validation, several Crystal compilation issues were identified and fixed:
 3. **String Method Updates**: Updated method calls for Crystal compatibility
 4. **Missing AtomType**: Added `STORAGE_NODE` atom type definition
 5. **Dependency Installation**: Ensured libevent-dev is available for compilation
+6. **RocksDB Library**: Added librocksdb-dev dependency installation for persistence backends
+7. **Test Server Path**: Fixed require path in `start_test_cogserver.cr` to use correct relative path
+8. **Validation Script Path**: Fixed integration test script path in validation script to use full path
 
 ## Guix Environment Compatibility
 

@@ -1,5 +1,7 @@
 # Start a CogServer for testing the bash integration script
-require "./src/cogserver/cogserver_main"
+# This script should be run from the repository root or via crystal run from any location
+# The relative path is resolved from this file's location (examples/tests/)
+require "../../src/cogserver/cogserver_main"
 
 puts "Starting CogServer for bash integration test..."
 

@@ -134,6 +134,88 @@ See [production/README.md](production/README.md) for detailed documentation.
 - ✅ Robust error handling and monitoring
 - ✅ Integration with CI/CD pipelines
 
+## Validation Scripts
+
+### `validation/` Directory
+Contains validation and integration test scripts for CrystalCog components.
+
+#### `validate_integration_test.sh` - CogServer Integration Test Validator
+Comprehensive validation script for the CogServer integration test suite. This script validates that the integration test script is functional and all dependencies are properly configured.
+
+**Prerequisites:**
+- Crystal compiler (1.10.1 or higher)
+- curl (for HTTP endpoint testing)
+- jq (for JSON parsing)
+- libevent-dev (for Crystal networking)
+- librocksdb-dev (for persistent storage)
+- libyaml-dev (for configuration)
+- libsqlite3-dev (for database support)
+
+**Installation of Dependencies:**
+```bash
+# Install Crystal (if not already installed)
+./scripts/install-crystal.sh
+
+# Install system dependencies (Ubuntu/Debian)
+sudo apt-get update
+sudo apt-get install -y curl jq libevent-dev librocksdb-dev libyaml-dev libsqlite3-dev
+
+# Install Crystal dependencies
+shards install
+```
+
+**Usage:**
+```bash
+cd /path/to/crystalcog
+./scripts/validation/validate_integration_test.sh
+```
+
+**What It Validates:**
+- ✅ Required dependencies (curl, jq, Crystal compiler)
+- ✅ Script functionality and executability
+- ✅ CogServer build compatibility
+- ✅ Test coverage completeness (5 test categories):
+  - HTTP REST API endpoints
+  - Telnet command interface
+  - WebSocket protocol
+  - Atom CRUD operations
+  - Error handling
+- ✅ Functional validation with live CogServer instance
+- ✅ All API endpoints respond correctly
+
+**Validation Status:**
+- ✅ Script functionality: VALIDATED
+- ✅ Dependency compatibility: CONFIRMED
+- ✅ Guix environment tests: AVAILABLE
+- ✅ Package documentation: UPDATED
+
+#### `test_cogserver_integration.sh` - CogServer Integration Tests
+Integration test suite that validates CogServer Network API functionality.
+
+**Features Tested:**
+- HTTP REST API endpoints (7 endpoints)
+- Telnet command interface (4 commands)
+- WebSocket protocol upgrade and validation
+- Atom CRUD operations
+- Error handling and 404 responses
+
+**Usage:**
+```bash
+# Start CogServer first
+crystal run src/cogserver/cogserver_main.cr &
+
+# Run integration tests
+./scripts/validation/test_cogserver_integration.sh
+```
+
+#### `test_integration.sh` - General CrystalCog Integration Tests
+Tests the overall Crystal implementation components and ensures the repository structure is valid.
+
+#### Other Validation Scripts
+- **`validate-guix-packages.sh`** - Validates Guix package definitions
+- **`validate-setup-production.sh`** - Validates production setup configuration
+- **`test_nlp_structure.sh`** - Tests natural language processing structure
+
 ## CI/CD Integration
 
 The test-runner.sh script is designed to mirror the CI/CD pipeline behavior locally:
