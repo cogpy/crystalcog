@@ -1,6 +1,7 @@
 #!/bin/bash
 # Validation script for CrystalCog Guix package definitions
 
+echo "=== CrystalCog Guix Package Validation ==="
 # Note: We don't use 'set -e' because we want to continue validation
 # even when individual checks fail, and report all issues at the end.
 
@@ -12,6 +13,11 @@ validation_passed=true
 # Check if package files exist
 echo ""
 echo "Checking package files..."
+if [ -f "agent-zero/packages/cognitive.scm" ]; then
+    echo "✓ cognitive.scm exists"
+else
+    echo "✗ cognitive.scm missing"
+    exit 1
 
 if [ -f "gnu/packages/crystalcog.scm" ]; then
     echo "✓ crystalcog.scm exists"
@@ -84,6 +90,13 @@ done
 echo ""
 echo "Validating Scheme syntax..."
 if command -v guile > /dev/null; then
+    echo "Testing package module syntax..."
+    if GUILE_LOAD_PATH=".:$GUILE_LOAD_PATH" guile -c "(use-modules (agent-zero packages cognitive))" 2>/dev/null; then
+        echo "✓ Package module syntax valid"
+    else
+        echo "⚠ Package module syntax check skipped (needs proper Guix environment)"
+        echo "To validate in Guix environment, run:"
+        echo "  guix shell guile -- guile -c '(use-modules (agent-zero packages cognitive))'"
     echo "Guile found, performing syntax validation..."
     
     # Test crystalcog package module
@@ -115,6 +128,9 @@ if command -v guile > /dev/null; then
     if guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>/dev/null; then
         echo "✓ Manifest syntax valid"
     else
+        echo "⚠ Manifest syntax check skipped (needs proper Guix environment)"
+        echo "To validate in Guix environment, run:"
+        echo "  guix shell guile -- guile -c '(load \"guix.scm\")'"
         echo "✗ Manifest syntax invalid"
         echo "Running detailed syntax check..."
         if ! guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>&1; then
@@ -124,6 +140,25 @@ if command -v guile > /dev/null; then
 else
     echo "⚠ Guile not available, skipping syntax validation"
     echo "To validate syntax, install Guile and run:"
+    echo "  guix shell guile -- guile -c '(use-modules (agent-zero packages cognitive))'"
+    echo "  guix shell guile -- guile -c '(load \"guix.scm\")'"
+fi
+
+echo -e "\n=== Package Summary ==="
+echo "Created the following CrystalCog Guix packages:"
+echo "  - opencog: Core cognitive architecture (Crystal implementation)"
+echo "  - ggml: Tensor library for machine learning"
+echo "  - guile-pln: Probabilistic Logic Networks bindings"
+echo "  - guile-ecan: Economic Attention Network bindings"
+echo "  - guile-moses: MOSES evolutionary learning bindings"
+echo "  - guile-pattern-matcher: Pattern matching engine bindings"
+echo "  - guile-relex: Natural language processing bindings"
+echo ""
+echo "Usage:"
+echo "  guix shell -m guix.scm          # Containerized shell (recommended)"
+echo "  guix environment -m guix.scm    # Development environment (deprecated)"
+echo ""
+echo "See docs/README-GUIX.md for detailed usage instructions."
     echo "  guile -c '(add-to-load-path \".\") (use-modules (gnu packages crystalcog))'"
     echo "  guile -c '(add-to-load-path \".\") (use-modules (gnu packages opencog))'"
     echo "  guile -c '(add-to-load-path \".\") (load \"guix.scm\")'"

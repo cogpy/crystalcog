@@ -1,5 +1,6 @@
 # CrystalCog Guix Packaging
 
+This directory contains GNU Guix package definitions for CrystalCog and Agent-Zero components.
 This directory contains GNU Guix package definitions for CrystalCog and related components.
 
 ## Using the Packages
@@ -34,14 +35,23 @@ To create a development environment with all CrystalCog packages:
 guix environment -m guix.scm
 ```
 
-Or to install the packages:
+Or use the newer `guix shell` command:
 
 ```bash
-guix install -m guix.scm
+guix shell -m guix.scm
 ```
 
 ### Installing Individual Packages
 
+Note: Individual package installation is currently not supported as these are
+placeholder packages for development environment setup. The packages will be
+properly installable once CrystalCog reaches production maturity.
+
+For now, use the manifest-based development environment:
+
+```bash
+# Enter development shell with all dependencies
+guix shell -m guix.scm
 ```bash
 # Main CrystalCog platform
 guix install crystalcog
@@ -58,6 +68,15 @@ guix install crystalcog-opencog
 
 ## Package Structure
 
+CrystalCog provides the following Guix packages:
+
+- **opencog**: Core cognitive architecture implemented in Crystal
+- **ggml**: Tensor library integration for machine learning
+- **guile-pln**: Probabilistic Logic Networks Guile bindings
+- **guile-ecan**: Economic Attention Network Guile bindings  
+- **guile-moses**: MOSES evolutionary learning Guile bindings
+- **guile-pattern-matcher**: Pattern matching engine Guile bindings
+- **guile-relex**: Natural language processing Guile bindings
 - **crystalcog**: The complete CrystalCog platform (meta-package)
 - **crystalcog-cogutil**: Low-level Crystal utilities (logging, config, random)
 - **crystalcog-atomspace**: The hypergraph database and knowledge representation system
@@ -70,6 +89,14 @@ guix install crystalcog-opencog
 To test the package definitions locally:
 
 ```bash
+# Validate package module syntax
+guix shell guile -- guile -c "(use-modules (agent-zero packages cognitive))"
+
+# Test manifest loading
+guix shell guile -- guile -c "(load \"guix.scm\")"
+
+# Run validation script
+./scripts/validation/validate-guix-packages.sh
 # Validate package syntax
 ./scripts/validation/validate-guix-packages.sh
 
@@ -82,6 +109,32 @@ guix build crystalcog --no-substitutes
 
 ### Building from Source
 
+The packages are currently placeholders for development environment setup.
+To build CrystalCog from source:
+
+```bash
+# Enter Guix development shell
+guix shell -m guix.scm
+
+# Build CrystalCog components
+crystal build src/crystalcog.cr
+crystal spec
+
+# Or use the test runner
+./scripts/test-runner.sh --all
+```
+
+## Dependencies
+
+The CrystalCog development environment includes:
+
+- **Build tools**: CMake, GCC toolchain, pkg-config
+- **Libraries**: Boost, Guile 3.0
+- **Crystal Language**: Installed via the project's installation scripts
+- **Cognitive packages**: PLN, ECAN, MOSES, pattern matcher, RelEx bindings
+
+Note: Crystal itself is not yet available in Guix, so it should be installed
+using the project's installation scripts (`./scripts/install-crystal.sh`).
 The packages are configured to build from the Git repository. To modify 
 the source or use local development versions, you can:
 
