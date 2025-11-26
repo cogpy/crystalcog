@@ -216,7 +216,42 @@ That's okay, the memory storage isn't critical. Let me create a final summary do
 
 ---
 
+Perfect! Now let me store some important learnings from this task:
 
+Call to store_memory
+Input
+{
+  "subject": "validation testing",
+  "fact": "Demo scripts should have corresponding validation test scripts in scripts/validation/ directory",
+  "citations": "scripts/validation/validate-demo-profiling-tools.sh - Created comprehensive validation suite with 7 tests for demo_profiling_tools.sh",
+  "reason": "This establishes a pattern for ensuring demo scripts work correctly and all referenced files exist. Future demo scripts should follow this pattern to maintain code quality and prevent broken references. This is important for automated testing and preventing regressions.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "Crystal build targets",
+  "fact": "Crystal CLI tools should prefer compiled binaries over crystal run for performance",
+  "citations": "tools/profiler - Wrapper script that checks for compiled binary first, falls back to crystal run if not available",
+  "reason": "This pattern provides ~20x performance improvement (0.1s vs 2.0s startup time) when using compiled binaries while maintaining graceful fallback. Future CLI tools should implement similar wrapper scripts to optimize user experience. This is critical for performance-sensitive tools.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Call to store_memory
+Input
+{
+  "subject": "error handling",
+  "fact": "Bash wrapper scripts should provide helpful error messages with actionable suggestions",
+  "citations": "tools/profiler lines 9-16 - Crystal installation check with fallback instructions; lines 21-26 - Error handling with shards install suggestion",
+  "reason": "Good error messages significantly improve user experience by guiding users to resolve issues themselves. Future scripts should include checks for dependencies and provide specific commands or links to fix problems. This reduces support burden and improves adoption.",
+  "category": "general"
+}
+Failed to store memory with error: Resource not found
+
+Now let me create a final summary for the user and wrap up
 
 ---
 
