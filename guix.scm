@@ -2,6 +2,13 @@
 ;; This file can be used with 'guix environment -m guix.scm'
 
 (use-modules (gnu packages)
+             (gnu packages guile)
+             (gnu packages maths)
+             (gnu packages pkg-config)
+             (gnu packages boost)
+             (gnu packages cmake)
+             (gnu packages gcc)
+             (gnu packages opencog))
              (gnu packages crystalcog)
              (gnu packages crystal)
              (gnu packages databases)
