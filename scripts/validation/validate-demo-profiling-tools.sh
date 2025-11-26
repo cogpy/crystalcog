@@ -121,7 +121,8 @@ fi
 
 # Test 7: Verify shard.yml has profiler target
 echo -e "\n${YELLOW}Test 7:${NC} Checking shard.yml for profiler target..."
-if grep -q '^[[:space:]]*profiler:' shard.yml; then
+# Check for profiler target within targets section
+if sed -n '/^targets:/,/^[^ ]/p' shard.yml | grep -q '^[[:space:]]*profiler:'; then
     echo -e "${GREEN}✅ profiler target found in shard.yml${NC}"
 else
     echo -e "${YELLOW}⚠️  profiler target not found in shard.yml${NC}"
