@@ -385,6 +385,7 @@ For complete documentation, see the [Documentation Index](docs/INDEX.md).
 - [Advanced Pattern Matching](docs/ADVANCED_PATTERN_MATCHING.md) - Pattern matching guide
 - [PLN Reasoning](docs/PLN-REASONING-MODULE.md) - Probabilistic Logic Networks
 - [Production Deployment](docs/PRODUCTION_DEPLOYMENT.md) - Deployment guide
+- [Integration Test Validation](docs/INTEGRATION_TEST_VALIDATION.md) - Integration test validation
 - [Security Policy](docs/SECURITY.md) - Security and vulnerability reporting
 
 ## Contributing

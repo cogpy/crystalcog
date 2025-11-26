@@ -24,7 +24,11 @@ fi
 # Test Crystal specs
 echo
 echo "2. Testing Crystal implementation..."
-cd /home/runner/work/crystalcog/crystalcog
+
+# Get script directory and repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 
 if [ -n "$CRYSTAL_CMD" ]; then
     echo "   Running Crystal specs..."
