@@ -275,4 +275,3 @@ The `scripts/demo_profiling_tools.sh` script has been **successfully validated**
 **Validated by**: CrystalCog Development Team  
 **Validation Date**: 2025-11-26  
 **Status**: APPROVED ✅
-
