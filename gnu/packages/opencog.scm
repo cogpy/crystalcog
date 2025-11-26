@@ -32,13 +32,17 @@
   #:use-module (gnu packages pkg-config)
   #:use-module (gnu packages cmake))
 
+;; Shared source definition for all CrystalCog packages
+(define crystalcog-source
+  (local-file "../.." "crystalcog-checkout"
+              #:recursive? #t
+              #:select? (git-predicate (dirname (dirname (current-filename))))))
+
 (define-public cogutil
   (package
     (name "cogutil")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -58,9 +62,7 @@ This is a Crystal language reimplementation of the OpenCog cogutil library.")
   (package
     (name "atomspace")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -86,9 +88,7 @@ of the OpenCog AtomSpace.")
   (package
     (name "opencog")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -115,9 +115,7 @@ complete reimplementation of the OpenCog framework in Crystal.")
   (package
     (name "guile-pln")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -126,7 +124,7 @@ complete reimplementation of the OpenCog framework in Crystal.")
            (lambda _
              (invoke "crystal" "build" "src/pln/pln.cr"))))))
     (inputs
-     (list opencog atomspace guile-3.0))
+     (list atomspace cogutil guile-3.0))
     (synopsis "Probabilistic Logic Networks for CrystalCog")
     (description
      "PLN (Probabilistic Logic Networks) is an uncertain inference system for
@@ -139,9 +137,7 @@ induction, abduction, and analogical reasoning.")
   (package
     (name "guile-ecan")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -150,7 +146,7 @@ induction, abduction, and analogical reasoning.")
            (lambda _
              (invoke "crystal" "build" "src/attention/attention.cr"))))))
     (inputs
-     (list opencog atomspace))
+     (list atomspace cogutil))
     (synopsis "Economic Attention Networks for CrystalCog")
     (description
      "ECAN (Economic Attention Networks) implements attention allocation
@@ -163,9 +159,7 @@ cognitive processing on important knowledge.")
   (package
     (name "guile-moses")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -174,7 +168,7 @@ cognitive processing on important knowledge.")
            (lambda _
              (invoke "crystal" "build" "src/moses/moses.cr"))))))
     (inputs
-     (list opencog atomspace))
+     (list atomspace cogutil))
     (synopsis "Meta-Optimizing Semantic Evolutionary Search")
     (description
      "MOSES is an evolutionary program learning system for CrystalCog that
@@ -186,9 +180,7 @@ uses genetic programming techniques to evolve programs that solve problems.")
   (package
     (name "guile-pattern-matcher")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -197,7 +189,7 @@ uses genetic programming techniques to evolve programs that solve problems.")
            (lambda _
              (invoke "crystal" "build" "src/pattern_matching/pattern_matching_main.cr"))))))
     (inputs
-     (list opencog atomspace))
+     (list atomspace cogutil))
     (synopsis "Advanced pattern matching engine for CrystalCog")
     (description
      "Pattern matching engine for CrystalCog providing sophisticated graph
@@ -209,9 +201,7 @@ pattern recognition and query capabilities for the AtomSpace hypergraph.")
   (package
     (name "guile-relex")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -220,7 +210,7 @@ pattern recognition and query capabilities for the AtomSpace hypergraph.")
            (lambda _
              (invoke "crystal" "build" "src/nlp/nlp_main.cr"))))))
     (inputs
-     (list opencog atomspace))
+     (list atomspace cogutil))
     (synopsis "Natural language processing for CrystalCog")
     (description
      "RelEx provides relationship extraction and natural language processing
@@ -232,9 +222,7 @@ capabilities for CrystalCog, enabling semantic understanding of text.")
   (package
     (name "ggml")
     (version "0.1.0")
-    (source (local-file "../.." "crystalcog-checkout"
-                        #:recursive? #t
-                        #:select? (git-predicate (dirname (dirname (current-filename))))))
+    (source crystalcog-source)
     (build-system crystal-build-system)
     (arguments
      `(#:phases
@@ -243,7 +231,7 @@ capabilities for CrystalCog, enabling semantic understanding of text.")
            (lambda _
              (invoke "crystal" "build" "src/ggml/ggml_bindings.cr"))))))
     (inputs
-     (list opencog))
+     (list atomspace cogutil))
     (synopsis "GGML tensor library bindings for CrystalCog")
     (description
      "GGML bindings provide efficient tensor operations and machine learning
