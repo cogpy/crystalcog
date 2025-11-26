@@ -1,9 +1,9 @@
 #!/usr/bin/env crystal
 
 # Basic test of the CrystalCog system
-require "./src/cogutil/cogutil"
-require "./src/atomspace/atomspace_main"
-require "./src/opencog/opencog"
+require "../../src/cogutil/cogutil"
+require "../../src/atomspace/atomspace_main"
+require "../../src/opencog/opencog"
 
 puts "Testing CrystalCog basic functionality..."
 

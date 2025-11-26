@@ -56,6 +56,9 @@ During validation, several Crystal compilation issues were identified and fixed:
 6. **RocksDB Dependency**: Added `DISABLE_ROCKSDB=1` flag to allow building without RocksDB library
 7. **Require Path Fix**: Corrected relative require path in `start_test_cogserver.cr` from `./src/` to `../../src/`
 8. **Integration Test Path**: Fixed validation script to call `./scripts/validation/test_cogserver_integration.sh` instead of `./test_cogserver_integration.sh`
+6. **RocksDB Library**: Added librocksdb-dev dependency installation for persistence backends
+7. **Test Server Path**: Fixed require path in `start_test_cogserver.cr` to use correct relative path
+8. **Validation Script Path**: Fixed integration test script path in validation script to use full path
 
 ## Guix Environment Compatibility
 

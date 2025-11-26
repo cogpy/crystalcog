@@ -1,7 +1,7 @@
 # Pattern Matching integration test
 # This demonstrates the basic pattern matching functionality
 
-require "./src/pattern_matching/pattern_matching_main"
+require "../../src/pattern_matching/pattern_matching_main"
 
 puts "Starting Pattern Matching integration test..."
 
