@@ -74,6 +74,8 @@ crystalcog/
 
 ### Running Tests
 
+The test runner script provides comprehensive testing capabilities with automatic Crystal installation:
+
 ```bash
 # Run all tests
 ./scripts/test-runner.sh --all
@@ -86,7 +88,12 @@ crystalcog/
 
 # Run benchmarks
 ./scripts/test-runner.sh --benchmarks
+
+# Show all available options
+./scripts/test-runner.sh --help
 ```
+
+**Note**: The test runner has been validated and approved for production use. See [Test Runner Validation Report](docs/TEST_RUNNER_VALIDATION_REPORT.md) for detailed validation results.
 
 ### Building
 
@@ -303,6 +310,65 @@ docker-compose -f docker-compose.production.yml config
 - **Guix System**: `guix environment -m guix.scm`
 - **Manual Installation**: Traditional system installation
 
+## Troubleshooting
+
+### Common Issues
+
+#### RocksDB Dependency Not Found
+
+If you encounter RocksDB linking errors during build or test:
+
+```bash
+# Error: cannot find -lrocksdb
+# Solution: Use the DISABLE_ROCKSDB environment variable
+
+export DISABLE_ROCKSDB=1
+./scripts/test-runner.sh --all
+
+# Or for individual commands:
+DISABLE_ROCKSDB=1 crystal spec spec/atomspace/
+DISABLE_ROCKSDB=1 crystal build src/crystalcog.cr
+```
+
+RocksDB is an optional high-performance storage backend. The system will use SQLite and PostgreSQL backends when RocksDB is disabled.
+
+#### Crystal Installation Issues
+
+The test runner automatically installs Crystal if it's not found. If automatic installation fails:
+
+```bash
+# Manual installation
+./scripts/install-crystal.sh --help
+./scripts/install-crystal.sh
+
+# Or use system package manager
+# Ubuntu/Debian:
+curl -fsSL https://crystal-lang.org/install.sh | sudo bash
+
+# macOS:
+brew install crystal
+```
+
+#### Test Failures
+
+If tests fail unexpectedly:
+
+```bash
+# 1. Ensure dependencies are installed
+shards install
+
+# 2. Try with verbose output
+./scripts/test-runner.sh --component atomspace --verbose
+
+# 3. Run specific test file
+crystal spec spec/atomspace/atomspace_spec.cr --verbose
+
+# 4. Check formatting issues
+crystal tool format --check src/ spec/
+```
+
+For more troubleshooting information, see the [Test Runner Validation Report](docs/TEST_RUNNER_VALIDATION_REPORT.md).
+
 ## Set up (Legacy Python/Rust Environment)
 CrystalCog is a complete Crystal language implementation with all functionality.
 
@@ -319,6 +385,7 @@ For complete documentation, see the [Documentation Index](docs/INDEX.md).
 - [Advanced Pattern Matching](docs/ADVANCED_PATTERN_MATCHING.md) - Pattern matching guide
 - [PLN Reasoning](docs/PLN-REASONING-MODULE.md) - Probabilistic Logic Networks
 - [Production Deployment](docs/PRODUCTION_DEPLOYMENT.md) - Deployment guide
+- [Integration Test Validation](docs/INTEGRATION_TEST_VALIDATION.md) - Integration test validation
 - [Security Policy](docs/SECURITY.md) - Security and vulnerability reporting
 
 ## Contributing

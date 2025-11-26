@@ -4,6 +4,11 @@
 
 set -e
 
+# Ensure we're running from the repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${REPO_ROOT}"
+
 echo "🔄 Package Script Validation: test_cogserver_integration.sh"
 echo "=========================================================="
 
@@ -36,7 +41,7 @@ echo ""
 echo "✅ Checking CogServer build compatibility..."
 if [ ! -f "cogserver_bin" ]; then
     echo "   • Building CogServer..."
-    crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
+    DISABLE_ROCKSDB=1 crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
     echo "   • CogServer built successfully"
 else
     echo "   • CogServer binary exists"
@@ -90,7 +95,7 @@ echo ""
 echo "✅ Running functional validation..."
 
 echo "   • Starting CogServer for testing..."
-crystal run examples/tests/start_test_cogserver.cr &
+DISABLE_ROCKSDB=1 crystal run examples/tests/start_test_cogserver.cr &
 COGSERVER_PID=$!
 
 # Give server time to start and verify it's responding
@@ -110,7 +115,8 @@ done
 
 # Run the integration test
 echo "   • Executing integration test script..."
-if ./test_cogserver_integration.sh > /tmp/test_output.log 2>&1; then
+if bash scripts/validation/test_cogserver_integration.sh > /tmp/test_output.log 2>&1; then
+if ./scripts/validation/test_cogserver_integration.sh > /tmp/test_output.log 2>&1; then
     echo "   • Integration test PASSED ✓"
     
     # Check for success indicators in output

@@ -78,6 +78,7 @@ This directory contains all documentation for the CrystalCog project - a Crystal
 ### Testing & Validation
 - [COMPREHENSIVE_TEST_SUITE_VALIDATION_REPORT.md](COMPREHENSIVE_TEST_SUITE_VALIDATION_REPORT.md) - Test suite validation
 - [COGSERVER_INTEGRATION_TEST_VALIDATION.md](COGSERVER_INTEGRATION_TEST_VALIDATION.md) - CogServer tests
+- [INTEGRATION_TEST_VALIDATION.md](INTEGRATION_TEST_VALIDATION.md) - Integration test validation
 - [TEST_AUTOMATION_VALIDATION_REPORT.md](TEST_AUTOMATION_VALIDATION_REPORT.md) - Test automation
 - [VALIDATION_SUMMARY.md](VALIDATION_SUMMARY.md) - Overall validation status
 

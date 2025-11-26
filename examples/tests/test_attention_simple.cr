@@ -1,4 +1,4 @@
-require "./src/attention/attention_main"
+require "../../src/attention/attention_main"
 
 # Simple test of attention system
 puts "Testing Attention System..."

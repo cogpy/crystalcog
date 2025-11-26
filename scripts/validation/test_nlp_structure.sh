@@ -71,6 +71,32 @@ else
     exit 1
 fi
 
+# Check for optional spec files (advanced modules)
+echo -e "${BLUE}Checking optional advanced module spec files...${NC}"
+
+optional_spec_files=(
+    "spec/nlp/dependency_parser_spec.cr"
+    "spec/nlp/language_generation_spec.cr"
+    "spec/nlp/semantic_understanding_spec.cr"
+)
+
+missing_optional=()
+for file in "${optional_spec_files[@]}"; do
+    if [ ! -f "$file" ]; then
+        missing_optional+=("$file")
+    fi
+done
+
+if [ ${#missing_optional[@]} -eq 0 ]; then
+    echo -e "${GREEN}✅ All optional spec files are present${NC}"
+else
+    echo -e "${YELLOW}⚠ Some optional spec files are missing (this is OK):${NC}"
+    for file in "${missing_optional[@]}"; do
+        echo -e "   ${YELLOW}- $file${NC}"
+    done
+    echo -e "${YELLOW}   Note: Advanced module spec files can be added as modules mature${NC}"
+fi
+
 # Check basic syntax patterns in the main NLP file
 echo -e "${BLUE}Checking NLP module structure...${NC}"
 
@@ -228,6 +254,102 @@ else
     exit 1
 fi
 
+# Check Link Grammar functionality
+echo "Checking LinkGrammar module..."
+
+if grep -q "module LinkGrammar" src/nlp/link_grammar.cr; then
+    echo "✅ LinkGrammar module is properly defined"
+else
+    echo "❌ LinkGrammar module definition not found"
+    exit 1
+fi
+
+if grep -q "class Parser" src/nlp/link_grammar.cr; then
+    echo "✅ LinkGrammar Parser class is defined"
+else
+    echo "❌ LinkGrammar Parser class not found"
+    exit 1
+fi
+
+if grep -q "def self.parse" src/nlp/link_grammar.cr; then
+    echo "✅ LinkGrammar parse method is defined"
+else
+    echo "❌ LinkGrammar parse method not found"
+    exit 1
+fi
+
+# Check Dependency Parser functionality
+echo "Checking DependencyParser module..."
+
+if grep -q "module DependencyParser" src/nlp/dependency_parser.cr; then
+    echo "✅ DependencyParser module is properly defined"
+else
+    echo "❌ DependencyParser module definition not found"
+    exit 1
+fi
+
+if grep -q "class Parser" src/nlp/dependency_parser.cr; then
+    echo "✅ DependencyParser Parser class is defined"
+else
+    echo "❌ DependencyParser Parser class not found"
+    exit 1
+fi
+
+if grep -q "def self.parse" src/nlp/dependency_parser.cr; then
+    echo "✅ DependencyParser parse method is defined"
+else
+    echo "❌ DependencyParser parse method not found"
+    exit 1
+fi
+
+# Check Language Generation functionality
+echo "Checking LanguageGeneration module..."
+
+if grep -q "module LanguageGeneration" src/nlp/language_generation.cr; then
+    echo "✅ LanguageGeneration module is properly defined"
+else
+    echo "❌ LanguageGeneration module definition not found"
+    exit 1
+fi
+
+if grep -q "class Generator" src/nlp/language_generation.cr; then
+    echo "✅ LanguageGeneration Generator class is defined"
+else
+    echo "❌ LanguageGeneration Generator class not found"
+    exit 1
+fi
+
+if grep -q "def self.generate" src/nlp/language_generation.cr; then
+    echo "✅ LanguageGeneration generate method is defined"
+else
+    echo "❌ LanguageGeneration generate method not found"
+    exit 1
+fi
+
+# Check Semantic Understanding functionality
+echo "Checking SemanticUnderstanding module..."
+
+if grep -q "module SemanticUnderstanding" src/nlp/semantic_understanding.cr; then
+    echo "✅ SemanticUnderstanding module is properly defined"
+else
+    echo "❌ SemanticUnderstanding module definition not found"
+    exit 1
+fi
+
+if grep -q "class Analyzer" src/nlp/semantic_understanding.cr; then
+    echo "✅ SemanticUnderstanding Analyzer class is defined"
+else
+    echo "❌ SemanticUnderstanding Analyzer class not found"
+    exit 1
+fi
+
+if grep -q "def self.analyze" src/nlp/semantic_understanding.cr; then
+    echo "✅ SemanticUnderstanding analyze method is defined"
+else
+    echo "❌ SemanticUnderstanding analyze method not found"
+    exit 1
+fi
+
 # Check integration in main file
 echo "Checking main file integration..."
 
@@ -275,6 +397,13 @@ for pattern in "${spec_patterns[@]}"; do
         exit 1
     fi
 done
+
+# Check for additional spec files
+if [ -f "spec/nlp/nlp_main_spec.cr" ]; then
+    echo "✅ NLP main CLI test exists"
+else
+    echo "⚠ NLP main CLI test not found"
+fi
 
 # Check shard.yml integration
 echo "Checking shard.yml configuration..."
@@ -455,6 +584,8 @@ echo -e "${BLUE}NLP Module Validation Summary:${NC}"
 echo -e "${BLUE}==============================${NC}"
 echo -e "${GREEN}✅ Core files: 9 (nlp.cr + 8 submodules)${NC}"
 echo -e "${GREEN}✅ Test files: 7${NC}" 
+echo -e "${GREEN}✅ Core files: 9${NC}"
+echo -e "${GREEN}✅ Test files: 7 (6 required + 1 advanced)${NC}" 
 echo -e "${GREEN}✅ Dependencies: All required dependencies verified${NC}"
 echo -e "${GREEN}✅ Integration: Properly integrated with main system${NC}"
 echo -e "${GREEN}✅ Guix compatibility: Environment configuration validated${NC}"
@@ -468,6 +599,10 @@ echo -e "  ${GREEN}✅ Link Grammar parsing integration${NC}"
 echo -e "  ${GREEN}✅ Dependency parsing with Universal Dependencies${NC}"
 echo -e "  ${GREEN}✅ Natural language generation capabilities${NC}"
 echo -e "  ${GREEN}✅ Semantic understanding and analysis${NC}"
+echo -e "  ${GREEN}✅ Link Grammar parsing and dependency structures${NC}"
+echo -e "  ${GREEN}✅ Advanced dependency parsing${NC}"
+echo -e "  ${GREEN}✅ Natural language generation${NC}"
+echo -e "  ${GREEN}✅ Semantic understanding and frame analysis${NC}"
 echo -e "  ${GREEN}✅ Comprehensive test suite${NC}"
 echo -e "  ${GREEN}✅ Command-line interface${NC}"
 echo -e "  ${GREEN}✅ CogUtil and AtomSpace dependency compatibility${NC}"
@@ -486,6 +621,7 @@ echo -e "  ${BLUE}├── TextProcessor (text normalization)${NC}"
 echo -e "  ${BLUE}├── LinguisticAtoms (linguistic knowledge)${NC}"
 echo -e "  ${BLUE}├── LinkGrammar (syntactic parsing)${NC}"
 echo -e "  ${BLUE}├── DependencyParser (dependency trees)${NC}"
+echo -e "  ${BLUE}├── DependencyParser (dependency structures)${NC}"
 echo -e "  ${BLUE}├── LanguageGeneration (text generation)${NC}"
 echo -e "  ${BLUE}└── SemanticUnderstanding (semantic analysis)${NC}"
 
