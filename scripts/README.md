@@ -4,6 +4,59 @@ This directory contains utility scripts for the CrystalCog project.
 
 ## Available Scripts
 
+### `validation/test_nlp_structure.sh` - NLP Module Structure Validation
+Comprehensive validation script for the Natural Language Processing (NLP) module structure, dependencies, and integration.
+
+**Purpose:**
+- Validates all NLP module files exist and are properly structured
+- Checks module definitions and method signatures
+- Verifies dependency compatibility (CogUtil, AtomSpace, PLN, URE)
+- Validates integration with reasoning systems
+- Ensures Guix environment compatibility
+
+**Usage:**
+```bash
+# Must be run from repository root
+cd /path/to/crystalcog
+bash scripts/validation/test_nlp_structure.sh
+```
+
+**What It Validates:**
+- **Core NLP Files (9):**
+  - `nlp.cr` - Main NLP module
+  - `tokenizer.cr` - Text tokenization
+  - `text_processor.cr` - Text normalization and processing
+  - `linguistic_atoms.cr` - Linguistic knowledge representation
+  - `nlp_main.cr` - CLI interface
+  - `link_grammar.cr` - Link Grammar parsing integration
+  - `dependency_parser.cr` - Dependency tree parsing
+  - `language_generation.cr` - Natural language generation
+  - `semantic_understanding.cr` - Semantic analysis
+
+- **Test Files (7):**
+  - Basic module tests (nlp_spec.cr, tokenizer_spec.cr, etc.)
+  - Advanced integration tests (link_grammar_spec.cr, language_processing_capabilities_spec.cr)
+
+- **Dependencies:**
+  - CogUtil (logging, configuration)
+  - AtomSpace (knowledge representation)
+  - Cross-module dependencies (LinkGrammar → DependencyParser → SemanticUnderstanding)
+
+- **Integration Points:**
+  - Main file integration (src/crystalcog.cr)
+  - Spec helper integration (spec/spec_helper.cr)
+  - Reasoning system integration (PLN/URE compatibility)
+  - Guix package manifest configuration
+
+**Validation Status:**
+- ✅ All 9 core NLP module files validated
+- ✅ All 7 test files validated
+- ✅ Dependency graph fully validated
+- ✅ Cross-module dependencies verified
+- ✅ Guix environment compatibility confirmed
+- ✅ Reasoning system integration validated
+- ✅ Advanced NLP features (Link Grammar, Dependency Parsing, Language Generation, Semantic Understanding) verified
+
 ### `test-runner.sh` - Comprehensive Test Runner
 A comprehensive testing script that provides local development testing capabilities matching the CI/CD pipeline.
 
