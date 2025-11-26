@@ -49,6 +49,59 @@ Options:
 - ✅ Error handling improved for problematic spec files
 - ✅ Dependencies cleaned up and working correctly
 
+## Validation Scripts
+
+### `validation/test_integration.sh` - Crystal Integration Test
+Validates the CrystalCog Crystal implementation with comprehensive checks.
+
+**Usage:**
+```bash
+./scripts/validation/test_integration.sh
+```
+
+**Features:**
+- ✅ Crystal compiler and dependencies validation
+- ✅ Crystal spec suite execution with error handling
+- ✅ Individual component test execution
+- ✅ Dependency compatibility checks
+- ✅ Guix environment validation
+- ✅ Proper exit codes on test failures
+- ✅ Graceful handling of incomplete implementations
+
+**Validation Checks:**
+1. Prerequisites (Crystal, Shards, libevent)
+2. Crystal specs compilation and execution
+3. Individual component tests (test_basic.cr, test_attention_simple.cr, test_pattern_matching.cr)
+4. Dependency compatibility (shard.yml, shard.lock, installed dependencies)
+5. Guix environment configuration (guix.scm, .guix-channel)
+6. Repository structure and symlinks
+
+**Exit Codes:**
+- 0: All tests passed or skipped (expected during development)
+- 1: One or more critical tests failed
+
+**Validation Status:**
+- ✅ Script functionality validated and improved
+- ✅ Proper error detection and reporting
+- ✅ Dependency checking implemented
+- ✅ Guix environment validation added
+- ✅ Test result tracking and summary
+
+### `validation/test_cogserver_integration.sh` - CogServer API Test
+Tests the CogServer network API functionality.
+
+### `validation/test_nlp_structure.sh` - NLP Structure Validation
+Validates the natural language processing component structure.
+
+### `validation/validate-guix-packages.sh` - Guix Package Validation
+Validates Guix package definitions and manifest files.
+
+### `validation/validate-setup-production.sh` - Production Setup Validation
+Validates production deployment configuration.
+
+### `validation/validate_integration_test.sh` - Integration Test Validator
+Meta-validator that tests the integration testing framework itself.
+
 ### `generate-system-image.sh` - Agent-Zero System Image Generation
 Generates bootable system images for the Agent-Zero Genesis cognitive operating system using Guix.
 
