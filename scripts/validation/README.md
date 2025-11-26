@@ -30,7 +30,7 @@ The validation scripts perform comprehensive testing of:
 
 **Usage**:
 ```bash
-cd /home/runner/work/crystalcog/crystalcog
+cd /path/to/crystalcog
 bash scripts/validation/test_integration.sh
 ```
 
@@ -182,7 +182,7 @@ bash scripts/install-crystal.sh
 ### Dependencies not installed
 ```bash
 # Install shards dependencies
-cd /home/runner/work/crystalcog/crystalcog
+cd /path/to/crystalcog
 shards install
 ```
 

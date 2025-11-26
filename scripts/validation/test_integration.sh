@@ -109,11 +109,13 @@ fi
 # Verify repository structure
 echo
 echo "3. Validating repository structure..."
-REPO_ROOT="/home/runner/work/crystalcog/crystalcog"
+# Dynamically determine repository root
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT" || {
     print_error "Failed to navigate to repository root"
     exit 1
 }
+print_status "Repository root: $REPO_ROOT"
 
 required_dirs=("src" "spec" "examples" "scripts")
 for dir in "${required_dirs[@]}"; do
