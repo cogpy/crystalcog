@@ -280,7 +280,7 @@ module AtomSpace
     end
 
     def add_variable_node(*names : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      variable_nodes = names.map { |name| add_node(AtomType::VARIABLE_NODE, name, tv) }
+      variable_nodes = names.to_a.map { |name| add_node(AtomType::VARIABLE_NODE, name, tv) }
       if variable_nodes.size == 1
         variable_nodes[0]
       else
