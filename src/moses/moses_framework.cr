@@ -206,6 +206,10 @@ module MOSES
     }
   end
 
+  # Scoring module for organizing scoring-related functionality
+  module Scoring
+  end
+
   # Scorer interface alias for compatibility
   alias Scorer = Moses::ScoringFunction
 
@@ -279,6 +283,11 @@ module MOSES
 
   # Types module for compatibility
   module Types
+    # Module exists for test compatibility
+  end
+
+  # Representation module for test compatibility
+  module Representation
     # Module exists for test compatibility
   end
 

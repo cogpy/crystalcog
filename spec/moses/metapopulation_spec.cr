@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/metapopulation"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Metapopulation do
   describe "initialization" do

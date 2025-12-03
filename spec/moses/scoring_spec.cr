@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/scoring"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Scoring do
   describe "scorer interface" do

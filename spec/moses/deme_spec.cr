@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/deme"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Deme do
   describe "initialization" do

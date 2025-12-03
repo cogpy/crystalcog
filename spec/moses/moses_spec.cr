@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/moses"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Optimizer do
   describe "initialization" do

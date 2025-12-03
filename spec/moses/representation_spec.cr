@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/representation"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Representation do
   describe "representation types" do
