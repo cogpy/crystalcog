@@ -133,7 +133,11 @@ describe "CrystalCog Performance Tests" do
       # Should search quickly
       duration.should be < 2.seconds
 
-      rate = num_searches / duration.total_seconds
+      rate = if duration.total_seconds > 0
+               num_searches / duration.total_seconds
+             else
+               0.0
+             end
       puts "Search rate: #{rate.round(2)} searches/second"
     end
 
@@ -208,7 +212,11 @@ describe "CrystalCog Performance Tests" do
       # Should have inferred new relationships
       atomspace.size.should be > initial_size
 
-      rate = new_atoms.size / duration.total_seconds if duration.total_seconds > 0
+      rate = if duration.total_seconds > 0
+               new_atoms.size / duration.total_seconds
+             else
+               0.0
+             end
       puts "PLN inference rate: #{rate.round(2)} inferences/second"
     end
 
@@ -351,7 +359,11 @@ describe "CrystalCog Performance Tests" do
       # Should complete quickly
       duration.should be < 5.seconds
 
-      rate = new_atoms.size / duration.total_seconds if duration.total_seconds > 0
+      rate = if duration.total_seconds > 0
+               new_atoms.size / duration.total_seconds
+             else
+               0.0
+             end
       puts "URE forward chaining rate: #{rate.round(2)} inferences/second"
     end
 
@@ -392,7 +404,11 @@ describe "CrystalCog Performance Tests" do
       duration.should be < 3.seconds
 
       success_count = results.count { |r| r == true }
-      rate = num_queries / duration.total_seconds
+      rate = if duration.total_seconds > 0
+               num_queries / duration.total_seconds
+             else
+               0.0
+             end
 
       puts "URE backward chaining: #{success_count}/#{num_queries} goals found, #{rate.round(2)} queries/second"
     end
@@ -534,14 +550,14 @@ describe "CrystalCog Performance Tests" do
         tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
 
         # Add inheritance relationships
-        (num_concepts / 2).times do
+        (num_concepts / 2).to_i.times do
           c1, c2 = concepts.sample(2)
           atomspace.add_inheritance_link(c1, c2, tv)
         end
 
         # Add evaluations
         pred = atomspace.add_predicate_node("scale_pred_#{factor}")
-        (num_concepts / 3).times do
+        (num_concepts / 3).to_i.times do
           c1, c2 = concepts.sample(2)
           atomspace.add_evaluation_link(pred, atomspace.add_list_link([c1, c2]), tv)
         end
@@ -567,7 +583,11 @@ describe "CrystalCog Performance Tests" do
 
       puts "Scalability results:"
       results.each do |result|
-        rate = result[:new_atoms] / result[:duration] if result[:duration] > 0
+        rate = if result[:duration] > 0
+                 result[:new_atoms] / result[:duration]
+               else
+                 0.0
+               end
         puts "  Scale #{result[:scale_factor]}x: #{result[:initial_atoms]} atoms → #{result[:new_atoms]} inferences in #{result[:duration].round(2)}s (#{rate.round(2)} inf/s)"
       end
 
@@ -687,8 +707,16 @@ describe "CrystalCog Performance Tests" do
       ure_atoms = ure_engine.forward_chain(3)
       ure_duration = Time.monotonic - ure_start
 
-      pln_rate = pln_atoms.size / pln_duration.total_seconds if pln_duration.total_seconds > 0
-      ure_rate = ure_atoms.size / ure_duration.total_seconds if ure_duration.total_seconds > 0
+      pln_rate = if pln_duration.total_seconds > 0
+                   pln_atoms.size / pln_duration.total_seconds
+                 else
+                   0.0
+                 end
+      ure_rate = if ure_duration.total_seconds > 0
+                   ure_atoms.size / ure_duration.total_seconds
+                 else
+                   0.0
+                 end
 
       puts "Comparative performance:"
       puts "  PLN: #{pln_atoms.size} inferences in #{pln_duration.total_seconds.round(3)}s (#{pln_rate.round(2)} inf/s)"
@@ -759,7 +787,7 @@ describe "CrystalCog Performance Tests" do
       # Quality should generally improve with more iterations (up to a point)
       # Speed should degrade with more iterations
       results.each do |result|
-        result[:duration].should be < 5.seconds # Should stay reasonable
+        result[:duration].should be < 5.0 # Should stay reasonable (in seconds)
       end
     end
   end
