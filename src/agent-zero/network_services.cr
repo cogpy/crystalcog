@@ -539,7 +539,7 @@ module AgentZero
         execution.status = TaskStatus::Completed
       rescue ex
         execution.status = TaskStatus::Failed
-        execution.errors << ex.message
+        execution.errors << (ex.message || "Unknown error")
         CogUtil::Logger.error("Task execution failed: #{ex.message}")
       end
 
@@ -641,6 +641,11 @@ module AgentZero
 
     def get_task_status(task_id : String) : TaskStatus?
       @active_tasks[task_id]?.status
+    end
+
+    def stop
+      @active_tasks.clear
+      CogUtil::Logger.info("TaskCoordinator stopped")
     end
   end
 end

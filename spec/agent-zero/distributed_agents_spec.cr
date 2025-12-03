@@ -477,8 +477,8 @@ describe AgentZero::TaskCoordinator do
       result = coordinator.execute_task(task, agents)
 
       result.success.should be_true
-      result.results.should have_key("knowledge_id")
-      result.results.should have_key("successful_shares")
+      result.results.keys.should contain("knowledge_id")
+      result.results.keys.should contain("successful_shares")
 
       agents.each(&.stop)
     end

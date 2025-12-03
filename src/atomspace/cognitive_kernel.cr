@@ -439,7 +439,6 @@ module AtomSpace
       factor = 1.0 / std_dev
       centered.map { |x| x * factor }
     end
-    end
 
     # Convenience methods for AtomSpace operations
     def add_concept_node(name : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
@@ -528,3 +527,4 @@ module AtomSpace
   #     @kernels.size
   #   end
   # end
+end

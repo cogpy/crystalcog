@@ -268,16 +268,18 @@ module AgentZero
     # Get network status and peer information
     def network_status : Hash(String, JSON::Any)
       peer_status = @peers.map do |id, peer|
-        {id => {
-          "name" => peer.name,
-          "host" => peer.host,
-          "port" => peer.port,
-          "status" => peer.status.to_s,
-          "capabilities" => peer.capabilities,
-          "trust_level" => peer.trust_level,
-          "last_seen" => peer.last_seen.to_rfc3339,
-          "is_stale" => peer.is_stale?
-        }}
+        {
+          id => JSON::Any.new({
+            "name" => JSON::Any.new(peer.name),
+            "host" => JSON::Any.new(peer.host),
+            "port" => JSON::Any.new(peer.port.to_i64),
+            "status" => JSON::Any.new(peer.status.to_s),
+            "capabilities" => JSON::Any.new(peer.capabilities.map { |c| JSON::Any.new(c) }),
+            "trust_level" => JSON::Any.new(peer.trust_level),
+            "last_seen" => JSON::Any.new(peer.last_seen.to_rfc3339),
+            "is_stale" => JSON::Any.new(peer.is_stale?)
+          })
+        }
       end.reduce({} of String => JSON::Any) { |acc, item| acc.merge!(item) }
 
       {
