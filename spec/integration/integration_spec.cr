@@ -315,7 +315,7 @@ describe "CrystalCog Integration Scenarios" do
       tv_high = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
 
       # Create a long chain: A -> B -> C -> D -> E
-      concepts = ['A', 'B', 'C', 'D', 'E'].map { |name|
+      concepts = ["A", "B", "C", "D", "E"].map { |name|
         atomspace.add_concept_node(name)
       }
 
