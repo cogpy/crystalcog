@@ -392,7 +392,20 @@ Perfect! The task is complete. Let me create a final summary of what was accompl
 
 ---
 
+Perfect! The fix is complete and looks correct. Let me store this knowledge for future reference:
 
+Call to store_memory
+Input
+{
+  "subject": "Crystal string vs character literals",
+  "fact": "In Crystal, single quotes create Char literals, double quotes create String literals. Use double quotes for strings.",
+  "category": "general",
+  "reason": "This is a critical Crystal language convention that differs from some other languages. In the integration spec (spec/integration/integration_spec.cr:318), using ['A', 'B', 'C'] created an Array(Char) instead of Array(String), causing a type error when calling add_concept_node(name : String). This knowledge will help prevent similar type errors in future Crystal code, especially when working with string collections or method parameters that expect String types.",
+  "citations": "spec/integration/integration_spec.cr:318 (fixed), src/atomspace/atomspace.cr:274 (method signature)"
+}
+Failed to store memory with error: Resource not found
+
+Now let me create a final summary and mark the task as complete
 
 ---
 
