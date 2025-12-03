@@ -20,15 +20,15 @@ describe "MOSES Main" do
 
   describe "optimization functionality" do
     it "provides evolutionary optimization" do
-      MOSES.respond_to?(:optimize).should be_true
+      MOSES.responds_to?(:optimize).should be_true
     end
 
     it "provides metapopulation management" do
-      MOSES.respond_to?(:create_metapopulation).should be_true
+      MOSES.responds_to?(:create_metapopulation).should be_true
     end
 
     it "provides scoring functions" do
-      MOSES.respond_to?(:create_scorer).should be_true
+      MOSES.responds_to?(:create_scorer).should be_true
     end
   end
 

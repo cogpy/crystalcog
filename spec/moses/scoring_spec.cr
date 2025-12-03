@@ -30,7 +30,7 @@ describe MOSES::Scoring do
       scorer = MOSES::TestScorer.new
 
       # Should respond to fitness methods
-      scorer.respond_to?(:evaluate).should be_true
+      scorer.responds_to?(:evaluate).should be_true
     end
   end
 
