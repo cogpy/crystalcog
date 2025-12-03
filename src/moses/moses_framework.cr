@@ -13,13 +13,13 @@ module MOSES
     property params : Moses::MosesParams
     property metapopulation : Moses::MetaPopulation?
     property scorer : Moses::ScoringFunction?
-    property atomspace : AtomSpace?
+    property atomspace : AtomSpace::AtomSpace?
 
     # For backward compatibility with tests
     getter max_evals : Int32
     getter population_size : Int32
 
-    def initialize(@params : Moses::MosesParams, @atomspace : AtomSpace? = nil)
+    def initialize(@params : Moses::MosesParams, @atomspace : AtomSpace::AtomSpace? = nil)
       @metapopulation = nil
       @scorer = nil
       @max_evals = @params.max_evals
@@ -112,7 +112,7 @@ module MOSES
   end
 
   # Create a MOSES optimizer with default parameters
-  def self.create_optimizer(atomspace : AtomSpace? = nil) : Optimizer
+  def self.create_optimizer(atomspace : AtomSpace::AtomSpace? = nil) : Optimizer
     # Create default parameters for demonstration
     default_params = Moses::MosesParams.new(
       problem_type: Moses::ProblemType::BooleanClassification,
@@ -128,7 +128,7 @@ module MOSES
   end
 
   # Create an optimizer with custom parameters
-  def self.create_optimizer(params : Moses::MosesParams, atomspace : AtomSpace? = nil) : Optimizer
+  def self.create_optimizer(params : Moses::MosesParams, atomspace : AtomSpace::AtomSpace? = nil) : Optimizer
     Optimizer.new(params, atomspace)
   end
 
@@ -206,6 +206,10 @@ module MOSES
     }
   end
 
+  # Scoring module for organizing scoring-related functionality
+  module Scoring
+  end
+
   # Scorer interface alias for compatibility
   alias Scorer = Moses::ScoringFunction
 
@@ -279,6 +283,11 @@ module MOSES
 
   # Types module for compatibility
   module Types
+    # Module exists for test compatibility
+  end
+
+  # Representation module for test compatibility
+  module Representation
     # Module exists for test compatibility
   end
 

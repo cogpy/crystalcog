@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/optimization"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Optimization do
   describe "optimization algorithms" do

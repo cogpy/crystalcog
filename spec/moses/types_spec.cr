@@ -1,5 +1,5 @@
 require "spec"
-require "../../src/moses/types"
+require "../../src/moses/moses_framework"
 
 describe MOSES::Types do
   describe "basic types" do
