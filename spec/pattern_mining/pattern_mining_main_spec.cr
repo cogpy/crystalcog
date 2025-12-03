@@ -21,11 +21,27 @@ describe "Pattern Mining Main" do
 
   describe "mining functionality" do
     it "provides mining utilities" do
-      PatternMining.respond_to?(:mine_patterns).should be_true
+      # Test that the mine method exists and works
+      atomspace = AtomSpace::AtomSpace.new
+      # Add some atoms to the atomspace
+      atomspace.add_concept_node("test1")
+      atomspace.add_concept_node("test2")
+      
+      # The mine method should exist and be callable
+      result = PatternMining.mine(atomspace, min_support: 1, max_patterns: 10, timeout_seconds: 5)
+      result.should be_a(PatternMining::MiningResult)
     end
 
     it "provides frequency analysis" do
-      PatternMining.respond_to?(:analyze_frequency).should be_true
+      # Test that frequency analysis is available through MiningResult
+      atomspace = AtomSpace::AtomSpace.new
+      atomspace.add_concept_node("test1")
+      atomspace.add_concept_node("test2")
+      
+      result = PatternMining.mine(atomspace, min_support: 1, max_patterns: 10, timeout_seconds: 5)
+      # The result should have frequency analysis methods
+      frequent = result.frequent_patterns(1)
+      frequent.should_not be_nil
     end
   end
 
