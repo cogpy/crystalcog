@@ -44,7 +44,7 @@ module AtomSpace
   end
 
   # Information about a cluster node
-  struct ClusterNodeInfo
+  class ClusterNodeInfo
     property id : String
     property host : String
     property port : Int32

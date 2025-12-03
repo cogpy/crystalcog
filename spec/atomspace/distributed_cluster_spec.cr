@@ -26,12 +26,17 @@ describe AtomSpace::DistributedAtomSpaceCluster do
         local_atomspace: atomspace
       )
 
+      cluster.start
+      sleep 0.01  # Give cluster time to start
+
       stats = cluster.cluster_stats
       stats["cluster_id"].as_s.should eq("stats_test")
       stats["total_nodes"].as_i64.should eq(1)
       stats["active_nodes"].as_i64.should eq(1)
       stats["local_atomspace_size"].as_i64.should eq(0)
       stats["pending_sync_operations"].as_i64.should eq(0)
+
+      cluster.stop
     end
 
     it "manages cluster nodes correctly" do
@@ -42,6 +47,7 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       )
 
       cluster.start
+      sleep 0.01  # Give cluster time to start
 
       nodes = cluster.cluster_nodes
       nodes.size.should eq(1)
@@ -293,6 +299,9 @@ describe AtomSpace::DistributedStorageNode do
         local_atomspace: atomspace
       )
 
+      cluster.start
+      sleep 0.01  # Give cluster time to start
+
       storage = AtomSpace::DistributedStorageNode.new(
         name: "local_test_storage",
         cluster: cluster,
@@ -315,6 +324,7 @@ describe AtomSpace::DistributedStorageNode do
       end
 
       storage.close
+      cluster.stop
     end
 
     it "handles atom removal" do
@@ -323,6 +333,9 @@ describe AtomSpace::DistributedStorageNode do
         cluster_id: "removal_test",
         local_atomspace: atomspace
       )
+
+      cluster.start
+      sleep 0.01  # Give cluster time to start
 
       storage = AtomSpace::DistributedStorageNode.new(
         name: "removal_storage",
@@ -349,6 +362,7 @@ describe AtomSpace::DistributedStorageNode do
       retrieved.should be_nil
 
       storage.close
+      cluster.stop
     end
 
     it "stores and loads complete atomspaces" do

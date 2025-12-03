@@ -79,6 +79,8 @@ module AtomSpace
   class FileStorageNode < StorageNode
     @file_path : String
     @connected : Bool = false
+    @atom_index : Hash(Handle, Atom) = Hash(Handle, Atom).new
+    @index_dirty : Bool = false
 
     def initialize(name : String, @file_path : String)
       super(name)
@@ -97,6 +99,10 @@ module AtomSpace
         File.touch(@file_path) unless File.exists?(@file_path)
 
         @connected = true
+        
+        # Build index from existing file
+        rebuild_index
+        
         log_info("Opened file storage: #{@file_path}")
         true
       rescue ex
@@ -107,6 +113,8 @@ module AtomSpace
 
     def close : Bool
       @connected = false
+      @atom_index.clear
+      @index_dirty = false
       log_info("Closed file storage: #{@file_path}")
       true
     end
@@ -122,6 +130,10 @@ module AtomSpace
         File.open(@file_path, "a") do |file|
           file.puts(atom_to_scheme(atom))
         end
+        
+        # Update index
+        @atom_index[atom.handle] = atom
+        
         log_debug("Stored atom: #{atom}")
         true
       rescue ex
@@ -133,20 +145,20 @@ module AtomSpace
     def fetch_atom(handle : Handle) : Atom?
       return nil unless @connected
 
-      # This is a simple implementation - in practice, we'd want indexing
-      load_all_atoms.find { |atom| atom.handle == handle }
+      # Use index for O(1) lookup
+      @atom_index[handle]?
     end
 
     def remove_atom(atom : Atom) : Bool
       return false unless @connected
 
       begin
-        # Read all atoms except the one to remove
-        atoms = load_all_atoms.reject { |a| a.handle == atom.handle }
-
-        # Rewrite file
+        # Remove from index
+        @atom_index.delete(atom.handle)
+        
+        # Rewrite file with remaining atoms
         File.open(@file_path, "w") do |file|
-          atoms.each { |a| file.puts(atom_to_scheme(a)) }
+          @atom_index.each_value { |a| file.puts(atom_to_scheme(a)) }
         end
 
         log_debug("Removed atom: #{atom}")
@@ -161,9 +173,13 @@ module AtomSpace
       return false unless @connected
 
       begin
+        # Clear and rebuild index
+        @atom_index.clear
+        
         File.open(@file_path, "w") do |file|
           atomspace.get_all_atoms.each do |atom|
             file.puts(atom_to_scheme(atom))
+            @atom_index[atom.handle] = atom
           end
         end
 
@@ -291,6 +307,24 @@ module AtomSpace
       end
 
       atoms
+    end
+    
+    # Rebuild the in-memory index from file
+    private def rebuild_index
+      @atom_index.clear
+      return unless File.exists?(@file_path)
+      
+      File.each_line(@file_path) do |line|
+        line = line.strip
+        next if line.empty? || line.starts_with?(';')
+        
+        atom = scheme_to_atom(line)
+        if atom
+          @atom_index[atom.handle] = atom
+        end
+      end
+      
+      log_debug("Rebuilt index with #{@atom_index.size} atoms")
     end
   end
 

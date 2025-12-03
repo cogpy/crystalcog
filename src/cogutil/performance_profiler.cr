@@ -9,7 +9,7 @@ module CogUtil
   # Core performance profiler with CPU, memory, and timing metrics
   class PerformanceProfiler
     # Performance metrics data structure
-    struct Metrics
+    class Metrics
       property cpu_time : Float64
       property memory_used : UInt64
       property memory_peak : UInt64
@@ -135,12 +135,13 @@ module CogUtil
       
       begin
         result = yield
-        session.end_profile(name)
         
-        # Update GC metrics
+        # Update GC metrics BEFORE ending profile
         gc_stats_after = GC.stats
         metrics = session.get_metrics(name).not_nil!
         metrics.gc_time += (gc_stats_after.total_bytes - gc_stats_before.total_bytes).to_f64 / 1_000_000
+        
+        session.end_profile(name)
         
         result
       rescue ex

@@ -272,15 +272,20 @@ module AtomSpace
 
     # Specific atom creation methods
     def add_concept_node(name : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      add_node(AtomType::CONCEPT_NODE, name, tv)
+      node = ConceptNode.new(name, tv)
+      add_atom(node)
     end
 
     def add_predicate_node(name : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      add_node(AtomType::PREDICATE_NODE, name, tv)
+      node = PredicateNode.new(name, tv)
+      add_atom(node)
     end
 
     def add_variable_node(*names : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      variable_nodes = names.to_a.map { |name| add_node(AtomType::VARIABLE_NODE, name, tv) }
+      variable_nodes = names.to_a.map { |name| 
+        node = VariableNode.new(name, tv)
+        add_atom(node)
+      }
       if variable_nodes.size == 1
         variable_nodes[0]
       else
