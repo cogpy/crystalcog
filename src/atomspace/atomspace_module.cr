@@ -20,7 +20,7 @@ module AtomSpace
 
   # Create a new AtomSpace instance
   def self.create_atomspace : AtomSpace
-    AtomSpace::AtomSpace.new
+    AtomSpace.new
   end
 
   # Create a distributed AtomSpace cluster

@@ -21,11 +21,18 @@ describe "Pattern Matching Main" do
 
   describe "main functionality" do
     it "provides pattern creation utilities" do
-      PatternMatching.respond_to?(:create_pattern).should be_true
+      atomspace = AtomSpace::AtomSpace.new
+      concept = atomspace.add_concept_node("test")
+      pattern = PatternMatching.create_pattern(concept)
+      pattern.should be_a(PatternMatching::Pattern)
     end
 
     it "provides matching utilities" do
-      PatternMatching.respond_to?(:match_pattern).should be_true
+      atomspace = AtomSpace::AtomSpace.new
+      concept = atomspace.add_concept_node("test")
+      pattern = PatternMatching::Pattern.new(concept)
+      results = PatternMatching.match_pattern(atomspace, pattern)
+      results.should be_a(Array(PatternMatching::MatchResult))
     end
   end
 

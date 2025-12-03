@@ -280,4 +280,22 @@ module PatternMatching
       @statistical_matcher.monte_carlo_sampling(pattern, num_samples)
     end
   end
+
+  # Module-level convenience methods for pattern matching
+  
+  # Create a pattern matcher for the given atomspace
+  def self.create_matcher(atomspace : AtomSpace::AtomSpace) : PatternMatcher
+    PatternMatcher.new(atomspace)
+  end
+
+  # Create a pattern from a template atom
+  def self.create_pattern(template : AtomSpace::Atom) : Pattern
+    Pattern.new(template)
+  end
+
+  # Match a pattern in the given atomspace
+  def self.match_pattern(atomspace : AtomSpace::AtomSpace, pattern : Pattern) : Array(MatchResult)
+    matcher = PatternMatcher.new(atomspace)
+    matcher.match(pattern)
+  end
 end
