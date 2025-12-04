@@ -157,6 +157,120 @@ module AtomSpace
     end
   end
 
+  # Remote partition info cache - caches partition information from remote queries
+  # Reduces repeated network lookups for partition ownership
+  class PartitionInfoCache
+    @cache : Hash(String, PartitionInfo)
+    @max_size : Int32
+    @ttl : Time::Span
+    @hits : UInt64 = 0_u64
+    @misses : UInt64 = 0_u64
+    @mutex : Mutex
+
+    struct PartitionInfo
+      property node_id : String
+      property replicas : Array(String)
+      property cached_at : Time
+      property verified : Bool
+
+      def initialize(@node_id : String, @replicas : Array(String) = [] of String, @verified : Bool = false)
+        @cached_at = Time.utc
+      end
+
+      def expired?(ttl : Time::Span) : Bool
+        (Time.utc - @cached_at) > ttl
+      end
+    end
+
+    def initialize(@max_size : Int32 = 50000, @ttl : Time::Span = 5.minutes)
+      @cache = Hash(String, PartitionInfo).new
+      @mutex = Mutex.new
+    end
+
+    def get(atom_handle : String) : PartitionInfo?
+      @mutex.synchronize do
+        if info = @cache[atom_handle]?
+          if info.expired?(@ttl)
+            @cache.delete(atom_handle)
+            @misses += 1
+            return nil
+          end
+          @hits += 1
+          return info
+        end
+        @misses += 1
+        nil
+      end
+    end
+
+    def put(atom_handle : String, node_id : String, replicas : Array(String) = [] of String, verified : Bool = false)
+      @mutex.synchronize do
+        evict_if_needed
+        @cache[atom_handle] = PartitionInfo.new(node_id, replicas, verified)
+      end
+    end
+
+    def invalidate(atom_handle : String)
+      @mutex.synchronize do
+        @cache.delete(atom_handle)
+      end
+    end
+
+    def invalidate_node(node_id : String)
+      @mutex.synchronize do
+        @cache.reject! { |_, info| info.node_id == node_id || info.replicas.includes?(node_id) }
+      end
+    end
+
+    def clear
+      @mutex.synchronize do
+        @cache.clear
+      end
+    end
+
+    def size : Int32
+      @cache.size
+    end
+
+    def stats : Hash(String, UInt64 | Int32 | Float64)
+      @mutex.synchronize do
+        total = @hits + @misses
+        hit_rate = total > 0 ? (@hits.to_f64 / total.to_f64) * 100.0 : 0.0
+        {
+          "size" => @cache.size.to_u64,
+          "max_size" => @max_size.to_u64,
+          "hits" => @hits,
+          "misses" => @misses,
+          "hit_rate_percent" => hit_rate,
+          "ttl_seconds" => @ttl.total_seconds.to_u64
+        }
+      end
+    end
+
+    private def evict_if_needed
+      return if @cache.size < @max_size
+
+      # Remove expired entries first
+      @cache.reject! { |_, info| info.expired?(@ttl) }
+
+      # If still over capacity, remove oldest unverified entries
+      return if @cache.size < @max_size
+
+      oldest_handle : String? = nil
+      oldest_time = Time.utc
+      @cache.each do |handle, info|
+        if !info.verified && info.cached_at < oldest_time
+          oldest_time = info.cached_at
+          oldest_handle = handle
+        end
+      end
+
+      if handle = oldest_handle
+        @cache.delete(handle)
+      end
+    end
+  end
+
   # Storage node that participates in distributed clustering
   class DistributedStorageNode < StorageNode
     property cluster : DistributedAtomSpaceCluster
@@ -165,11 +279,13 @@ module AtomSpace
     property replication_factor : Int32
     property enable_compression : Bool
     property enable_cache : Bool
+    property enable_partition_cache : Bool
 
     @local_storage : StorageNode
     @partition_map : Hash(String, String)  # atom_handle -> responsible_node_id
     @replica_map : Hash(String, Array(String))  # atom_handle -> replica_node_ids
     @lru_cache : LRUCache
+    @partition_info_cache : PartitionInfoCache
 
     def initialize(name : String, @cluster : DistributedAtomSpaceCluster,
                    local_storage_backend : String = "file",
@@ -179,12 +295,16 @@ module AtomSpace
                    @replication_factor : Int32 = 2,
                    @enable_compression : Bool = true,
                    @enable_cache : Bool = true,
-                   cache_size : Int32 = 10000)
+                   @enable_partition_cache : Bool = true,
+                   cache_size : Int32 = 10000,
+                   partition_cache_size : Int32 = 50000,
+                   partition_cache_ttl : Time::Span = 5.minutes)
       super(name)
 
       @partition_map = Hash(String, String).new
       @replica_map = Hash(String, Array(String)).new
       @lru_cache = LRUCache.new(cache_size)
+      @partition_info_cache = PartitionInfoCache.new(partition_cache_size, partition_cache_ttl)
 
       # Create local storage backend
       @local_storage = create_local_storage(local_storage_backend, storage_path)
@@ -194,7 +314,7 @@ module AtomSpace
         handle_cluster_event(event, node_id)
       })
 
-      log_info("DistributedStorageNode created with #{partition_strategy} partitioning, #{replication_strategy} replication, compression=#{@enable_compression}, cache=#{@enable_cache}")
+      log_info("DistributedStorageNode created with #{partition_strategy} partitioning, #{replication_strategy} replication, compression=#{@enable_compression}, cache=#{@enable_cache}, partition_cache=#{@enable_partition_cache}")
     end
 
     private def find_cluster_node(node_id : String) : ClusterNodeInfo?
@@ -327,12 +447,27 @@ module AtomSpace
         return nil
       end
 
-      # If not found locally, check if we know which node has it
+      # Check partition info cache first (faster than local partition map for remote lookups)
+      if @enable_partition_cache
+        if partition_info = @partition_info_cache.get(handle_str)
+          if partition_info.node_id != @cluster.node_id
+            if atom = fetch_atom_from_node(handle, partition_info.node_id)
+              # Update LRU cache if enabled
+              @lru_cache.put(atom) if @enable_cache
+              log_debug("Partition cache hit for atom: #{handle} -> node #{partition_info.node_id}")
+              return atom
+            end
+          end
+        end
+      end
+
+      # If not found locally, check if we know which node has it from local partition map
       if responsible_node = @partition_map[handle_str]?
         if responsible_node != @cluster.node_id
           if atom = fetch_atom_from_node(handle, responsible_node)
-            # Update cache if enabled
+            # Update caches if enabled
             @lru_cache.put(atom) if @enable_cache
+            @partition_info_cache.put(handle_str, responsible_node, verified: true) if @enable_partition_cache
             return atom
           end
         end
@@ -343,9 +478,10 @@ module AtomSpace
         next if node_info.id == @cluster.node_id
 
         if atom = fetch_atom_from_node(handle, node_info.id)
-          # Cache the partition info for future lookups
+          # Cache the partition info for future lookups (both local and partition cache)
           @partition_map[handle_str] = node_info.id
-          # Update cache if enabled
+          @partition_info_cache.put(handle_str, node_info.id, verified: true) if @enable_partition_cache
+          # Update LRU cache if enabled
           @lru_cache.put(atom) if @enable_cache
           return atom
         end
@@ -361,8 +497,9 @@ module AtomSpace
 
       success = true
 
-      # Invalidate cache first
+      # Invalidate caches first
       @lru_cache.invalidate(atom.handle) if @enable_cache
+      @partition_info_cache.invalidate(handle_str) if @enable_partition_cache
 
       # Remove locally if present
       if @local_storage.fetch_atom(atom.handle)
@@ -453,6 +590,15 @@ module AtomSpace
         stats["cache_misses"] = cache_stats["misses"].as(UInt64).to_i64
       end
 
+      # Add partition cache statistics if enabled
+      stats["partition_cache_enabled"] = @enable_partition_cache ? "true" : "false"
+      if @enable_partition_cache
+        pcache_stats = @partition_info_cache.stats
+        stats["partition_cache_size"] = pcache_stats["size"].as(UInt64).to_i64
+        stats["partition_cache_hits"] = pcache_stats["hits"].as(UInt64).to_i64
+        stats["partition_cache_misses"] = pcache_stats["misses"].as(UInt64).to_i64
+      end
+
       stats
     end
 
@@ -461,9 +607,25 @@ module AtomSpace
       @lru_cache.stats
     end
 
+    # Get detailed partition cache statistics
+    def partition_cache_stats : Hash(String, UInt64 | Int32 | Float64)
+      @partition_info_cache.stats
+    end
+
     # Clear the LRU cache
     def clear_cache
       @lru_cache.clear
+    end
+
+    # Clear the partition info cache
+    def clear_partition_cache
+      @partition_info_cache.clear
+    end
+
+    # Clear all caches
+    def clear_all_caches
+      @lru_cache.clear
+      @partition_info_cache.clear
     end
 
     # Rebalance data across cluster nodes
@@ -814,9 +976,12 @@ module AtomSpace
     private def handle_node_departure(departed_node : String)
       # Find atoms that were stored on the departed node
       orphaned_atoms = @partition_map.select { |_, node| node == departed_node }.keys
-      
+
       log_info("Handling departure of node #{departed_node}, #{orphaned_atoms.size} orphaned atoms")
-      
+
+      # Invalidate partition info cache for the departed node
+      @partition_info_cache.invalidate_node(departed_node) if @enable_partition_cache
+
       # Reassign orphaned atoms to other nodes
       orphaned_atoms.each do |atom_handle|
         new_responsible_node = determine_responsible_node(atom_handle)
