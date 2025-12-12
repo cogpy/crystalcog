@@ -101,10 +101,10 @@ module AtomSpace
         total = @hits + @misses
         hit_rate = total > 0 ? (@hits.to_f64 / total.to_f64) * 100.0 : 0.0
         {
-          "size" => @cache.size.to_u64,
-          "max_size" => @max_size.to_u64,
-          "hits" => @hits,
-          "misses" => @misses,
+          "size" => @cache.size.to_i32,
+          "max_size" => @max_size.to_i32,
+          "hits" => @hits.to_u64,
+          "misses" => @misses.to_u64,
           "hit_rate_percent" => hit_rate
         }
       end
@@ -237,10 +237,10 @@ module AtomSpace
         total = @hits + @misses
         hit_rate = total > 0 ? (@hits.to_f64 / total.to_f64) * 100.0 : 0.0
         {
-          "size" => @cache.size.to_u64,
-          "max_size" => @max_size.to_u64,
-          "hits" => @hits,
-          "misses" => @misses,
+          "size" => @cache.size.to_i32,
+          "max_size" => @max_size.to_i32,
+          "hits" => @hits.to_u64,
+          "misses" => @misses.to_u64,
           "hit_rate_percent" => hit_rate,
           "ttl_seconds" => @ttl.total_seconds.to_u64
         }
