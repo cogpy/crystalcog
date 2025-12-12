@@ -124,15 +124,67 @@ jobs:
         crystal build --error-trace --progress src/crystalcog.cr
         ls -lh crystalcog
 
-    - name: Build core components
+    - name: Build all components
       run: |
         mkdir -p bin
         
+        echo "Building core libraries..."
+        echo "========================="
+        
+        # Core libraries
         echo "Building cogutil..."
-        crystal build --error-trace src/cogutil/cogutil.cr -o bin/cogutil || echo "cogutil build skipped"
+        crystal build --error-trace src/cogutil/cogutil.cr -o bin/cogutil || echo "⚠️  cogutil build skipped"
         
         echo "Building atomspace..."
-        crystal build --error-trace src/atomspace/atomspace.cr -o bin/atomspace || echo "atomspace build skipped"
+        crystal build --error-trace src/atomspace/atomspace.cr -o bin/atomspace || echo "⚠️  atomspace build skipped"
+        
+        echo "Building opencog..."
+        crystal build --error-trace src/opencog/opencog.cr -o bin/opencog || echo "⚠️  opencog build skipped"
+        
+        echo "Building pln..."
+        crystal build --error-trace src/pln/pln.cr -o bin/pln || echo "⚠️  pln build skipped"
+        
+        echo "Building ure..."
+        crystal build --error-trace src/ure/ure.cr -o bin/ure || echo "⚠️  ure build skipped"
+        
+        echo ""
+        echo "Building main executables..."
+        echo "============================"
+        
+        # Main executables
+        echo "Building atomspace_main..."
+        crystal build --error-trace src/atomspace/atomspace_main.cr -o bin/atomspace_main || echo "⚠️  atomspace_main build skipped"
+        
+        echo "Building cogserver..."
+        crystal build --error-trace src/cogserver/cogserver_main.cr -o bin/cogserver || echo "⚠️  cogserver build skipped"
+        
+        echo "Building attention..."
+        crystal build --error-trace src/attention/attention_main.cr -o bin/attention || echo "⚠️  attention build skipped"
+        
+        echo "Building pattern_matching..."
+        crystal build --error-trace src/pattern_matching/pattern_matching_main.cr -o bin/pattern_matching || echo "⚠️  pattern_matching build skipped"
+        
+        echo "Building pattern_mining..."
+        crystal build --error-trace src/pattern_mining/pattern_mining_main.cr -o bin/pattern_mining || echo "⚠️  pattern_mining build skipped"
+        
+        echo "Building nlp..."
+        crystal build --error-trace src/nlp/nlp_main.cr -o bin/nlp || echo "⚠️  nlp build skipped"
+        
+        echo "Building moses..."
+        crystal build --error-trace src/moses/moses_main.cr -o bin/moses || echo "⚠️  moses build skipped"
+        
+        echo "Building learning..."
+        crystal build --error-trace src/learning/learning_main.cr -o bin/learning || echo "⚠️  learning build skipped"
+        
+        echo "Building ml..."
+        crystal build --error-trace src/ml/ml_main.cr -o bin/ml || echo "⚠️  ml build skipped"
+        
+        echo ""
+        echo "Build Summary:"
+        echo "=============="
+        ls -lh bin/ 2>/dev/null || echo "No binaries built"
+        echo ""
+        echo "Total binaries: $(ls -1 bin/ 2>/dev/null | wc -l)"
 
     - name: Run unit tests
       run: |
