@@ -83,15 +83,17 @@ module CogUtil
     @monitoring_active : Bool
     @sample_buffer_size : Int32
     @http_server : HTTP::Server?
-    # @websocket_clients : Array(HTTP::WebSocket)
+    @websocket_clients : Array(HTTP::WebSocket)
     @monitoring_fiber : Fiber?
+    @websocket_mutex : Mutex
     
     def initialize(@sample_buffer_size : Int32 = 10000)
       @samples = Array(MetricSample).new
       @alert_rules = Array(AlertRule).new
       @active_alerts = Array(ActiveAlert).new
       @monitoring_active = false
-      # @websocket_clients = Array(HTTP::WebSocket).new
+      @websocket_clients = Array(HTTP::WebSocket).new
+      @websocket_mutex = Mutex.new
       
       setup_default_alert_rules
     end
@@ -529,10 +531,89 @@ module CogUtil
     end
     
     private def handle_websocket(context : HTTP::Server::Context)
-      # TODO: Implement proper WebSocket handling
-      # For now, return a 501 Not Implemented
-      context.response.status_code = 501
-      context.response.print "WebSocket support not yet implemented"
+      # Upgrade HTTP connection to WebSocket using response.upgrade
+      context.response.upgrade do |io|
+        # Create WebSocket protocol handler
+        ws_protocol = HTTP::WebSocket::Protocol.new(io, masked: false)
+        ws = HTTP::WebSocket.new(ws_protocol)
+        
+        # Add client to active connections
+        @websocket_mutex.synchronize do
+          @websocket_clients << ws
+        end
+        
+        puts "WebSocket client connected (total: #{@websocket_clients.size})"
+        
+        # Send initial state
+        initial_state = {
+          "type" => "initial_state",
+          "data" => {
+            "monitoring_active" => @monitoring_active,
+            "sample_count" => @samples.size,
+            "active_alerts" => @active_alerts.size,
+            "alert_rules" => @alert_rules.size
+          }
+        }
+        
+        begin
+          ws.send(initial_state.to_json)
+          
+          # Handle incoming messages
+          ws.on_message do |message|
+            handle_websocket_message(ws, message)
+          end
+          
+          # Handle client disconnect
+          ws.on_close do
+            @websocket_mutex.synchronize do
+              @websocket_clients.delete(ws)
+            end
+            puts "WebSocket client disconnected (remaining: #{@websocket_clients.size})"
+          end
+          
+          # Run the WebSocket
+          ws.run
+        rescue ex
+          puts "WebSocket error: #{ex.message}"
+          @websocket_mutex.synchronize do
+            @websocket_clients.delete(ws)
+          end
+        end
+      end
+    end
+    
+    private def handle_websocket_message(ws : HTTP::WebSocket, message : String)
+      begin
+        data = JSON.parse(message)
+        command = data["command"]?.try(&.as_s)
+        
+        case command
+        when "get_summary"
+          summary = get_performance_summary
+          ws.send({"type" => "summary", "data" => summary}.to_json)
+        when "get_alerts"
+          alerts = @active_alerts.map do |alert|
+            {
+              "name" => alert.rule.name,
+              "severity" => alert.rule.severity,
+              "value" => alert.current_value,
+              "threshold" => alert.rule.threshold,
+              "triggered_at" => alert.triggered_at.to_rfc3339,
+              "acknowledged" => alert.acknowledged
+            }
+          end
+          ws.send({"type" => "alerts", "data" => alerts}.to_json)
+        when "acknowledge_alert"
+          if rule_name = data["rule_name"]?.try(&.as_s)
+            acknowledge_alert(rule_name)
+            ws.send({"type" => "ack_success", "data" => {"rule_name" => rule_name}}.to_json)
+          end
+        else
+          ws.send({"type" => "error", "message" => "Unknown command: #{command}"}.to_json)
+        end
+      rescue ex
+        ws.send({"type" => "error", "message" => ex.message}.to_json)
+      end
     end
     
     private def broadcast_metric_update(sample : MetricSample)
@@ -565,15 +646,25 @@ module CogUtil
     end
     
     private def broadcast_to_websockets(message : String)
-      # TODO: Implement WebSocket broadcasting
-      # @websocket_clients.each do |client|
-      #   begin
-      #     client.send(message)
-      #   rescue
-      #     # Remove disconnected clients
-      #     @websocket_clients.delete(client)
-      #   end
-      # end
+      # Broadcast message to all connected WebSocket clients
+      @websocket_mutex.synchronize do
+        disconnected = [] of HTTP::WebSocket
+        
+        @websocket_clients.each do |client|
+          begin
+            client.send(message)
+          rescue ex
+            # Mark disconnected clients for removal
+            disconnected << client
+            puts "Failed to send to WebSocket client: #{ex.message}"
+          end
+        end
+        
+        # Remove disconnected clients
+        disconnected.each do |client|
+          @websocket_clients.delete(client)
+        end
+      end
     end
     
     private def calculate_trend(values : Array(Float64)) : Float64
