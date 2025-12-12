@@ -431,3 +431,20 @@ state.scm
 profile/
 coverage-report.txt
 cogserver_bin
+
+# Archive directory
+archive/
+
+# Build artifacts
+bin/
+*.o
+*.so
+*.dylib
+*.a
+test-cognitive
+crystalcog_new
+
+# Temporary files
+*.log
+*.tmp
+test_output.log
