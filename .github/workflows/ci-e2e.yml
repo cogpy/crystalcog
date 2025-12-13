@@ -179,6 +179,9 @@ jobs:
         echo "Building ml..."
         crystal build --error-trace src/ml/ml_main.cr -o bin/ml || echo "⚠️  ml build skipped"
         
+        echo "Building agent-zero..."
+        crystal build --error-trace src/agent-zero/agent_zero_main.cr -o bin/agent_zero || echo "⚠️  agent_zero build skipped"
+        
         echo ""
         echo "Build Summary:"
         echo "=============="
@@ -273,6 +276,10 @@ jobs:
           echo "✓ Running test_websocket_monitoring.cr..."
           timeout 120 crystal run --error-trace examples/tests/test_websocket_monitoring.cr || echo "test_websocket_monitoring.cr failed or timed out"
         fi
+        
+        # Test Agent-Zero E2E
+        echo "✓ Running agent-zero E2E tests..."
+        timeout 180 crystal spec spec/agent-zero/agent_zero_e2e_spec.cr --error-trace --verbose || echo "agent-zero E2E tests failed or timed out"
 
     - name: Generate integration test report
       if: always()

@@ -69,6 +69,7 @@ build_component "src/nlp/nlp_main.cr" "bin/nlp" "nlp"
 build_component "src/moses/moses_main.cr" "bin/moses" "moses"
 build_component "src/learning/learning_main.cr" "bin/learning" "learning"
 build_component "src/ml/ml_main.cr" "bin/ml" "ml"
+build_component "src/agent-zero/agent_zero_main.cr" "bin/agent_zero" "agent_zero"
 echo ""
 
 # Summary
