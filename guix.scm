@@ -8,11 +8,10 @@
              (gnu packages boost)
              (gnu packages cmake)
              (gnu packages gcc)
-             (gnu packages opencog))
+             (gnu packages opencog)
              (gnu packages crystalcog)
              (gnu packages crystal)
-             (gnu packages databases)
-             (gnu packages pkg-config))
+             (gnu packages databases))
 
 (packages->manifest
   (list

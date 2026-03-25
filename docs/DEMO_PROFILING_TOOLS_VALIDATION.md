@@ -4,7 +4,7 @@
 This document provides the validation report for the `scripts/demo_profiling_tools.sh` script, which was flagged for validation by the automated ecosystem monitoring system.
 
 ## Validation Date
-2025-11-26
+2026-03-25
 
 ## Changes Made
 
@@ -82,12 +82,12 @@ All expected content found in output:
 
 #### Test 5: Line Count Accuracy
 Verified line counts match actual file sizes:
-- ✅ performance_profiler.cr: 371 lines
+- ✅ performance_profiler.cr: 372 lines
 - ✅ performance_regression.cr: 456 lines
 - ✅ optimization_engine.cr: 529 lines
-- ✅ performance_monitor.cr: 811 lines
+- ✅ performance_monitor.cr: 902 lines
 - ✅ profiling_cli.cr: 605 lines
-- **Total**: 2,772 lines of Crystal code
+- **Total**: 2,864 lines of Crystal code
 
 #### Test 6: Executable Status
 - **Status**: ✅ PASS
@@ -187,4 +187,4 @@ The script is ready for use and meets all requirements of the CrystalCog cogniti
 
 ---
 *Validation performed by: CrystalCog Ecosystem Monitoring*
-*Report generated: 2025-11-26*
+*Report generated: 2026-03-25*
