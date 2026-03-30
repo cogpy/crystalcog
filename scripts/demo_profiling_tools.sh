@@ -4,6 +4,15 @@
 echo "🚀 CrystalCog Performance Profiling Tools Demo"
 echo "=============================================="
 
+# Check if Crystal is installed (required to run the profiler and benchmarks)
+if command -v crystal &> /dev/null; then
+  CRYSTAL_VERSION=$(crystal --version 2>&1 | head -1)
+  echo "ℹ️  Crystal installed: ${CRYSTAL_VERSION}"
+else
+  echo "⚠️  Crystal is not installed. Install it to run the profiler and benchmarks."
+  echo "   See docs/CRYSTAL_INSTALLATION.md for installation instructions."
+fi
+
 echo ""
 echo "📁 Files created:"
 echo "  Core profiling engine: src/cogutil/performance_profiler.cr"

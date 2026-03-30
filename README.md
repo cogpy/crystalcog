@@ -314,6 +314,9 @@ Run all validation checks at once:
 # Run profiling tools validation
 ./scripts/validation/validate_profiling_tools.sh
 
+# Run demo profiling tools validation
+./scripts/validation/validate-demo-profiling-tools.sh
+
 # Run dependency compatibility check
 ./scripts/validation/check_dependencies.sh
 
@@ -323,6 +326,7 @@ Run all validation checks at once:
 
 For detailed validation reports, see:
 - [Profiling Tools Validation Report](scripts/validation/PROFILING_TOOLS_VALIDATION_REPORT.md)
+- [Demo Profiling Tools Validation Report](docs/DEMO_PROFILING_TOOLS_VALIDATION.md)
 
 ## Production Deployment
 
