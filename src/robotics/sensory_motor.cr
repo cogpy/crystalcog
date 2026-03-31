@@ -33,12 +33,15 @@ module Robotics
       getter max_range : Float64
       getter noise_stddev : Float64
 
+      @rng : Random
+
       def initialize(@id : String, @max_range : Float64 = 10.0, @noise_stddev : Float64 = 0.02)
+        @rng = Random.new
       end
 
       # Simulate a distance measurement given actual distance
       def measure(actual_distance : Float64) : SensorReading
-        noisy = actual_distance + (Random.new.next_float * 2.0 - 1.0) * @noise_stddev
+        noisy = actual_distance + (@rng.next_float * 2.0 - 1.0) * @noise_stddev
         noisy = noisy.clamp(0.0, @max_range)
         SensorReading.new(@id, noisy, noisy < @max_range)
       end

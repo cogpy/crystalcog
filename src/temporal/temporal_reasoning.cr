@@ -22,7 +22,7 @@ module Temporal
     getter end_time : Float64
 
     def initialize(@start_time : Float64, @end_time : Float64)
-      raise TemporalException.new("start_time must be <= end_time") if @start_time > @end_time
+      raise TemporalException.new("start_time must not be greater than end_time") if @start_time > @end_time
     end
 
     def duration : Float64
@@ -164,7 +164,8 @@ module Temporal
       fluent.holds_at?(t) ? fluent.value : nil
     end
 
-    # Find causal chains: events where the end of one overlaps or meets the start of next
+    # Find causal chains: sequences of events where consecutive events meet or
+    # are immediately adjacent (before with no other event in between).
     def causal_chains : Array(Array(Event))
       chains = [] of Array(Event)
       @events.each_with_index do |event, i|
@@ -172,6 +173,7 @@ module Temporal
         remaining = @events[(i + 1)..]
         remaining.each do |next_event|
           rel = Temporal.allen_relation(chain.last.interval, next_event.interval)
+          # Include MEETS (direct adjacency) and BEFORE (temporal sequence)
           if rel == IntervalRelation::MEETS || rel == IntervalRelation::BEFORE
             chain << next_event
           end

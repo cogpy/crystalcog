@@ -100,7 +100,7 @@ module Explanation
         else
           lines << "#{prefix} Using #{step.rule_applied}: #{step.premise} → #{step.conclusion}."
         end
-        if step.rule_applied.size > 0
+        unless step.rule_applied.empty?
           lines << "       (rule: #{step.rule_applied}, confidence: #{(step.confidence * 100).round(1)}%)"
         end
       end
