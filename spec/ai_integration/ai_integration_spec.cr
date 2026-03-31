@@ -2,18 +2,6 @@ require "spec"
 require "../../src/ai_integration/ai_bridge"
 
 describe "AI Integration - Milestone 5" do
-  before_each do
-    # Initialize fresh systems for each test
-    @atomspace = AtomSpace::AtomSpace.new
-    @integration = AIIntegration::CognitiveAIIntegration.new(@atomspace)
-    @integration.setup_cognitive_engines
-  end
-  
-  # Helper method to access atomspace instance
-  def atomspace
-    @atomspace
-  end
-
   describe "AI Manager Core Functionality" do
     it "initializes AI manager successfully" do
       ai_manager = AIIntegration::CrystalAIManager.new
@@ -75,33 +63,46 @@ describe "AI Integration - Milestone 5" do
     end
   end
 
+  def new_integration
+    atomspace = AtomSpace::AtomSpace.new
+    integration = AIIntegration::CognitiveAIIntegration.new(atomspace)
+    integration.setup_cognitive_engines
+    integration
+  end
+
   describe "Cognitive AI Integration" do
     it "initializes cognitive AI integration" do
-      @integration.should_not be_nil
-      status = @integration.get_integration_status
+      integration = new_integration
+
+      integration.should_not be_nil
+      status = integration.get_integration_status
       status["atomspace_size"].should eq("0")
       status["pln_engine"].should eq("active")
       status["ure_engine"].should eq("active")
     end
 
     it "sets up AI workbench successfully" do
-      config = @integration.create_default_workbench
+      integration = new_integration
+
+      config = integration.create_default_workbench
       config.name.should eq("crystal_cognitive_workbench")
       config.models.size.should eq(2)
 
-      result = @integration.setup_ai_workbench(config)
+      result = integration.setup_ai_workbench(config)
       result.should be_true
 
-      status = @integration.get_integration_status
+      status = integration.get_integration_status
       status["integration_active"].should eq("true")
       status["ai_models"].should contain("demo_model")
     end
 
     it "performs knowledge enrichment" do
-      config = @integration.create_default_workbench
-      @integration.setup_ai_workbench(config)
+      integration = new_integration
 
-      enrichments = @integration.knowledge_enrichment("machine_learning")
+      config = integration.create_default_workbench
+      integration.setup_ai_workbench(config)
+
+      enrichments = integration.knowledge_enrichment("machine_learning")
       enrichments.size.should be > 1
       enrichments.should_not contain("AI integration not active")
 
@@ -114,10 +115,12 @@ describe "AI Integration - Milestone 5" do
     end
 
     it "performs cognitive-AI reasoning cycles" do
-      config = @integration.create_default_workbench
-      @integration.setup_ai_workbench(config)
+      integration = new_integration
 
-      results = @integration.cognitive_ai_reasoning("What is artificial intelligence?", 3)
+      config = integration.create_default_workbench
+      integration.setup_ai_workbench(config)
+
+      results = integration.cognitive_ai_reasoning("What is artificial intelligence?", 3)
 
       results.should_not have_key("error")
       results.should have_key("ai_analysis")
@@ -130,10 +133,12 @@ describe "AI Integration - Milestone 5" do
     end
 
     it "handles interactive reasoning sessions" do
-      config = @integration.create_default_workbench
-      @integration.setup_ai_workbench(config)
+      integration = new_integration
 
-      response = @integration.interactive_reasoning_session("Explain cognitive architectures")
+      config = integration.create_default_workbench
+      integration.setup_ai_workbench(config)
+
+      response = integration.interactive_reasoning_session("Explain cognitive architectures")
 
       response.should contain("AI Response:")
       response.should contain("Knowledge Base:")
@@ -151,21 +156,26 @@ describe "AI Integration - Milestone 5" do
     end
 
     it "handles cognitive reasoning without AI integration" do
+      integration = new_integration
+
       # Don't setup workbench
-      results = @integration.cognitive_ai_reasoning("Test query")
+      results = integration.cognitive_ai_reasoning("Test query")
       results.should have_key("error")
       results["error"].should eq("AI integration not active")
     end
 
     it "handles knowledge enrichment without AI integration" do
+      integration = new_integration
+
       # Don't setup workbench
-      enrichments = @integration.knowledge_enrichment("test_concept")
+      enrichments = integration.knowledge_enrichment("test_concept")
       enrichments.should eq(["AI integration not active"])
     end
   end
 
   describe "Module-level Functions" do
     it "creates integration from atomspace" do
+      atomspace = AtomSpace::AtomSpace.new
       integration = AIIntegration.create_integration(atomspace)
 
       integration.should_not be_nil
