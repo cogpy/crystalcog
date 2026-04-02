@@ -1,6 +1,13 @@
 require "spec"
 require "../../src/ai_integration/ai_bridge"
 
+def new_integration
+  atomspace = AtomSpace::AtomSpace.new
+  integration = AIIntegration::CognitiveAIIntegration.new(atomspace)
+  integration.setup_cognitive_engines
+  integration
+end
+
 describe "AI Integration - Milestone 5" do
   describe "AI Manager Core Functionality" do
     it "initializes AI manager successfully" do
@@ -61,13 +68,6 @@ describe "AI Integration - Milestone 5" do
       responses.size.should eq(3)
       responses.all?(&.success).should be_true
     end
-  end
-
-  def new_integration
-    atomspace = AtomSpace::AtomSpace.new
-    integration = AIIntegration::CognitiveAIIntegration.new(atomspace)
-    integration.setup_cognitive_engines
-    integration
   end
 
   describe "Cognitive AI Integration" do
