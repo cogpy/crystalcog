@@ -243,8 +243,14 @@ module CogServer
       case context.request.path
       when "/status"
         handle_status_request(context)
+      when "/summary"
+        handle_summary_request(context)
+      when "/metrics"
+        handle_metrics_request(context)
       when "/atomspace"
         handle_atomspace_request(context)
+      when "/atom"
+        handle_create_atom(context)
       when "/atoms"
         handle_atoms_request(context)
       when "/sessions"
@@ -278,6 +284,38 @@ module CogServer
     private def handle_status_request(context)
       context.response.content_type = "application/json"
       context.response.print(stats.to_json)
+    end
+
+    private def handle_summary_request(context)
+      response = {
+        "server"          => "CogServer #{VERSION}",
+        "host"            => @host,
+        "port"            => @port,
+        "ws_port"         => @ws_port,
+        "running"         => @running,
+        "active_sessions" => @sessions.size,
+        "atomspace"       => {
+          "size"  => @atomspace.size,
+          "nodes" => @atomspace.node_count,
+          "links" => @atomspace.link_count,
+        },
+        "uptime" => Time.utc.to_rfc3339,
+      }
+      context.response.content_type = "application/json"
+      context.response.print(response.to_json)
+    end
+
+    private def handle_metrics_request(context)
+      response = {
+        "atomspace_size"  => @atomspace.size,
+        "atomspace_nodes" => @atomspace.node_count,
+        "atomspace_links" => @atomspace.link_count,
+        "active_sessions" => @sessions.size,
+        "server_running"  => @running,
+        "timestamp"       => Time.utc.to_rfc3339,
+      }
+      context.response.content_type = "application/json"
+      context.response.print(response.to_json)
     end
 
     private def handle_atomspace_request(context)
