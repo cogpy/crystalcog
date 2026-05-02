@@ -259,15 +259,15 @@ describe Moses::ProgramNode do
   describe "ConstantNode" do
     it "evaluates boolean (value > 0.5 = true)" do
       cn = Moses::ConstantNode.new(1.0)
-      cn.evaluate_boolean([]).should be_true
+      cn.evaluate_boolean([] of Float64).should be_true
 
       cn2 = Moses::ConstantNode.new(0.3)
-      cn2.evaluate_boolean([]).should be_false
+      cn2.evaluate_boolean([] of Float64).should be_false
     end
 
     it "evaluates numeric to its constant value" do
       cn = Moses::ConstantNode.new(42.0)
-      cn.evaluate_numeric([]).should eq(42.0)
+      cn.evaluate_numeric([] of Float64).should eq(42.0)
     end
 
     it "reports correct complexity (1)" do
@@ -300,7 +300,7 @@ describe Moses::ProgramNode do
       right = Moses::ConstantNode.new(3.0)
       op = Moses::BinaryOpNode.new("+", left, right)
 
-      op.evaluate_numeric([]).should eq(5.0)
+      op.evaluate_numeric([] of Float64).should eq(5.0)
     end
 
     it "evaluates numeric division with zero denominator returns 0" do
@@ -308,7 +308,7 @@ describe Moses::ProgramNode do
       right = Moses::ConstantNode.new(0.0)
       op = Moses::BinaryOpNode.new("/", left, right)
 
-      op.evaluate_numeric([]).should eq(0.0)
+      op.evaluate_numeric([] of Float64).should eq(0.0)
     end
 
     it "reports complexity as 1 + left + right" do
@@ -333,7 +333,7 @@ describe Moses::ProgramNode do
       operand = Moses::ConstantNode.new(5.0)
       op = Moses::UnaryOpNode.new("-", operand)
 
-      op.evaluate_numeric([]).should eq(-5.0)
+      op.evaluate_numeric([] of Float64).should eq(-5.0)
     end
 
     it "reports complexity as 1 + operand complexity" do
