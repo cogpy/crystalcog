@@ -215,7 +215,7 @@ describe Moses::ClusteringScoring do
       result.should be_a(Moses::CompositeScore)
     end
 
-    it "returns poor score for insufficient data" do
+    it "returns poor score for single data point" do
       training = [[1.0, 2.0]]
       scorer = Moses::ClusteringScoring.new(training)
 

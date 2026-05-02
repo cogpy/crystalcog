@@ -154,6 +154,7 @@ describe Moses::Program do
       prog = Moses::Program.new("$0")
       result = prog.execute([3.14], Moses::ProblemType::Regression)
       result.should be_a(Float64)
+      result.as(Float64).should be_close(3.14, 0.001)
     end
   end
 end

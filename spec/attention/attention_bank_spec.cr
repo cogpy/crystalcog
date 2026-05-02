@@ -18,7 +18,7 @@ describe Attention::AttentionBank do
       bank.lti_funds.should eq(10000)
     end
 
-    it "allows custom AF sizes" do
+    it "allows custom attentional focus sizes" do
       atomspace = AtomSpace::AtomSpace.new
       bank = Attention::AttentionBank.new(atomspace, 50, 10)
 
