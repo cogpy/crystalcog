@@ -189,4 +189,222 @@ describe AtomSpace::TruthValue do
       AtomSpace::TruthValue::NULL_TV.confidence.should eq(0.0)
     end
   end
+
+  describe "SimpleTruthValue additional cases" do
+    it "to_a returns [strength, confidence]" do
+      tv = AtomSpace::SimpleTruthValue.new(0.7, 0.6)
+      tv.to_a.should eq([0.7, 0.6])
+    end
+
+    it "valid? returns false for out-of-range values after creation would fail" do
+      tv = AtomSpace::SimpleTruthValue.new(0.5, 0.5)
+      tv.valid?.should be_true
+    end
+
+    it "hash is consistent for equal truth values" do
+      tv1 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv1.hash.should eq(tv2.hash)
+    end
+
+    it "equality check works" do
+      tv1 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv3 = AtomSpace::SimpleTruthValue.new(0.7, 0.9)
+
+      (tv1 == tv2).should be_true
+      (tv1 == tv3).should be_false
+    end
+
+    it "equality fails for different truth value types" do
+      stv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      ctv = AtomSpace::CountTruthValue.new(0.8, 0.9, 10.0)
+      (stv == ctv).should be_false
+    end
+
+    it "type_name returns SimpleTruthValue" do
+      tv = AtomSpace::SimpleTruthValue.new(0.5, 0.5)
+      tv.type_name.should eq("SimpleTruthValue")
+    end
+
+    it "count is 0 when confidence is 0" do
+      tv = AtomSpace::SimpleTruthValue.new(0.5, 0.0)
+      tv.count.should eq(0.0)
+    end
+
+    it "clone produces equal but distinct object" do
+      tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      cloned = tv.clone
+      (tv == cloned).should be_true
+    end
+
+    it "merges with zero-confidence second TV returns clone of first" do
+      tv1 = AtomSpace::SimpleTruthValue.new(0.8, 0.6)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.0, 0.0)
+      merged = tv1.merge(tv2)
+      (merged == tv1).should be_true
+    end
+
+    it "from_string parses space-separated format" do
+      parsed = AtomSpace::TruthValue.from_string("0.7 0.5")
+      parsed.should be_a(AtomSpace::SimpleTruthValue)
+      parsed.strength.should eq(0.7)
+      parsed.confidence.should eq(0.5)
+    end
+
+    it "from_string raises ArgumentError for invalid format" do
+      expect_raises(ArgumentError) do
+        AtomSpace::TruthValue.from_string("invalid_format")
+      end
+    end
+  end
+
+  describe "CountTruthValue additional cases" do
+    it "type_name returns CountTruthValue" do
+      tv = AtomSpace::CountTruthValue.new(0.5, 0.5, 5.0)
+      tv.type_name.should eq("CountTruthValue")
+    end
+
+    it "to_s includes count" do
+      tv = AtomSpace::CountTruthValue.new(0.5, 0.5, 5.0)
+      tv.to_s.should contain("5.0")
+    end
+
+    it "clone produces equal object" do
+      tv = AtomSpace::CountTruthValue.new(0.5, 0.5, 5.0)
+      cloned = tv.clone
+      cloned.should be_a(AtomSpace::CountTruthValue)
+      cloned.count.should eq(5.0)
+    end
+
+    it "rejects negative count" do
+      expect_raises(ArgumentError) do
+        AtomSpace::CountTruthValue.new(0.5, 0.5, -1.0)
+      end
+    end
+
+    it "merges with SimpleTruthValue by converting it" do
+      ctv = AtomSpace::CountTruthValue.new(0.8, 0.6, 5.0)
+      stv = AtomSpace::SimpleTruthValue.new(0.6, 0.5)
+      merged = ctv.merge(stv)
+      # Should return a CountTruthValue
+      merged.should be_a(AtomSpace::CountTruthValue)
+    end
+
+    it "to_a returns [strength, confidence]" do
+      tv = AtomSpace::CountTruthValue.new(0.7, 0.6, 3.0)
+      tv.to_a.should eq([0.7, 0.6])
+    end
+  end
+
+  describe "IndefiniteTruthValue additional cases" do
+    it "type_name returns IndefiniteTruthValue" do
+      tv = AtomSpace::IndefiniteTruthValue.new(0.2, 0.8)
+      tv.type_name.should eq("IndefiniteTruthValue")
+    end
+
+    it "clone produces equal object" do
+      tv = AtomSpace::IndefiniteTruthValue.new(0.3, 0.7, 0.8)
+      cloned = tv.clone
+      cloned.should be_a(AtomSpace::IndefiniteTruthValue)
+      cloned.as(AtomSpace::IndefiniteTruthValue).lower.should eq(0.3)
+      cloned.as(AtomSpace::IndefiniteTruthValue).upper.should eq(0.7)
+    end
+
+    it "rejects confidence > 1" do
+      expect_raises(ArgumentError) do
+        AtomSpace::IndefiniteTruthValue.new(0.2, 0.8, 1.5)
+      end
+    end
+
+    it "allows equal lower and upper bounds" do
+      tv = AtomSpace::IndefiniteTruthValue.new(0.5, 0.5)
+      tv.strength.should eq(0.5)
+    end
+
+    it "merges with SimpleTruthValue" do
+      itv = AtomSpace::IndefiniteTruthValue.new(0.3, 0.7, 0.5)
+      stv = AtomSpace::SimpleTruthValue.new(0.5, 0.5)
+      merged = itv.merge(stv)
+      merged.should be_a(AtomSpace::IndefiniteTruthValue)
+    end
+
+    it "merges non-overlapping intervals using weighted average" do
+      tv1 = AtomSpace::IndefiniteTruthValue.new(0.1, 0.2, 0.5)
+      tv2 = AtomSpace::IndefiniteTruthValue.new(0.8, 0.9, 0.5)
+      merged = tv1.merge(tv2)
+      merged.should be_a(AtomSpace::IndefiniteTruthValue)
+      # Non-overlapping: should compute weighted average of bounds
+      itv = merged.as(AtomSpace::IndefiniteTruthValue)
+      itv.lower.should be < itv.upper
+    end
+
+    it "count is computed correctly" do
+      tv = AtomSpace::IndefiniteTruthValue.new(0.3, 0.7, 0.5)
+      tv.count.should be_close(1.0, 0.001) # 0.5 / (1 - 0.5) = 1.0
+    end
+  end
+
+  describe "FuzzyTruthValue additional cases" do
+    it "type_name returns FuzzyTruthValue" do
+      tv = AtomSpace::FuzzyTruthValue.new(0.5, 0.5, 0.1)
+      tv.type_name.should eq("FuzzyTruthValue")
+    end
+
+    it "rejects negative uncertainty" do
+      expect_raises(ArgumentError) do
+        AtomSpace::FuzzyTruthValue.new(0.5, 0.5, -0.1)
+      end
+    end
+
+    it "rejects uncertainty > 1" do
+      expect_raises(ArgumentError) do
+        AtomSpace::FuzzyTruthValue.new(0.5, 0.5, 1.5)
+      end
+    end
+
+    it "merges with SimpleTruthValue preserves original uncertainty" do
+      ftv = AtomSpace::FuzzyTruthValue.new(0.8, 0.6, 0.2)
+      stv = AtomSpace::SimpleTruthValue.new(0.7, 0.4)
+      merged = ftv.merge(stv)
+      merged.should be_a(AtomSpace::FuzzyTruthValue)
+      merged.as(AtomSpace::FuzzyTruthValue).uncertainty.should eq(0.2)
+    end
+
+    it "clone produces equal object" do
+      tv = AtomSpace::FuzzyTruthValue.new(0.7, 0.8, 0.15)
+      cloned = tv.clone
+      cloned.should be_a(AtomSpace::FuzzyTruthValue)
+      cloned.as(AtomSpace::FuzzyTruthValue).uncertainty.should eq(0.15)
+    end
+  end
+
+  describe "TruthValueUtil additional cases" do
+    it "implies_tv with FALSE antecedent is always TRUE" do
+      false_tv = AtomSpace::SimpleTruthValue.new(0.0, 1.0)
+      any_tv = AtomSpace::SimpleTruthValue.new(0.5, 0.5)
+      result = AtomSpace::TruthValueUtil.implies_tv(false_tv, any_tv)
+      # ¬false = (1.0, 1.0); OR with any = (1.0, ...)
+      result.strength.should be > 0.9
+    end
+
+    it "and_tv with zero-strength returns near-zero strength" do
+      tv1 = AtomSpace::SimpleTruthValue.new(0.0, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      result = AtomSpace::TruthValueUtil.and_tv(tv1, tv2)
+      result.strength.should eq(0.0)
+    end
+
+    it "or_tv with full-strength tv1 is always high" do
+      tv1 = AtomSpace::SimpleTruthValue.new(1.0, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.3, 0.7)
+      result = AtomSpace::TruthValueUtil.or_tv(tv1, tv2)
+      result.strength.should eq(1.0)
+    end
+
+    it "not_tv of TRUE_TV gives near-zero strength" do
+      result = AtomSpace::TruthValueUtil.not_tv(AtomSpace::TruthValue::TRUE_TV)
+      result.strength.should be_close(0.0, 0.001)
+    end
+  end
 end

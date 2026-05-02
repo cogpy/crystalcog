@@ -33,6 +33,7 @@ require "./nlp/tokenizer_spec"
 require "./nlp/text_processor_spec"
 require "./nlp/linguistic_atoms_spec"
 require "./nlp/language_processing_capabilities_spec"
+require "./nlp/dependency_parser_spec"
 
 # Require performance tests
 require "./performance/performance_spec"
