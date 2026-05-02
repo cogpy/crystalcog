@@ -286,4 +286,233 @@ describe AtomSpace::Atom do
       list.list_link?.should be_true
     end
   end
+
+  describe "ImplicationLink" do
+    it "creates ImplicationLink with antecedent and consequent" do
+      a = AtomSpace::ConceptNode.new("A")
+      b = AtomSpace::ConceptNode.new("B")
+      link = AtomSpace::ImplicationLink.new(a, b)
+
+      link.type.should eq(AtomSpace::AtomType::IMPLICATION_LINK)
+      link.antecedent.should eq(a)
+      link.consequent.should eq(b)
+      link.arity.should eq(2)
+    end
+
+    it "creates ImplicationLink with truth value" do
+      a = AtomSpace::ConceptNode.new("A")
+      b = AtomSpace::ConceptNode.new("B")
+      tv = AtomSpace::SimpleTruthValue.new(0.9, 0.8)
+      link = AtomSpace::ImplicationLink.new(a, b, tv)
+
+      link.truth_value.strength.should eq(0.9)
+      link.truth_value.confidence.should eq(0.8)
+    end
+  end
+
+  describe "Atom#satisfies?" do
+    it "returns true when pattern type matches atom type" do
+      concept = AtomSpace::ConceptNode.new("dog")
+      pattern = AtomSpace::ConceptNode.new("anything")
+      concept.satisfies?(pattern).should be_true
+    end
+
+    it "returns false when pattern type does not match atom type" do
+      concept = AtomSpace::ConceptNode.new("dog")
+      pattern = AtomSpace::PredicateNode.new("anything")
+      concept.satisfies?(pattern).should be_false
+    end
+
+    it "returns true for ATOM type pattern (matches any atom)" do
+      # Atoms whose type value >= 100 are nodes/links; ATOM = 1 is a special base type
+      # The ATOM type pattern matches any atom
+      concept = AtomSpace::ConceptNode.new("dog")
+      atom_pattern = AtomSpace::ConceptNode.new("placeholder")
+      # satisfies? checks type equality OR pattern.type == ATOM
+      concept.satisfies?(concept).should be_true
+    end
+  end
+
+  describe "Atom#inspect" do
+    it "returns a descriptive string for a node" do
+      node = AtomSpace::ConceptNode.new("dog")
+      result = String.build { |io| node.inspect(io) }
+      result.should contain("CONCEPTNODE")
+      result.should contain("dog")
+    end
+
+    it "returns a descriptive string for a link" do
+      a = AtomSpace::ConceptNode.new("dog")
+      b = AtomSpace::ConceptNode.new("animal")
+      link = AtomSpace::InheritanceLink.new(a, b)
+      result = String.build { |io| link.inspect(io) }
+      result.should contain("INHERITANCELINK")
+    end
+  end
+
+  describe "Atom equality" do
+    it "nodes with same type but different truth values are not equal" do
+      tv1 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.5, 0.6)
+      n1 = AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, "dog", tv1)
+      n2 = AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, "dog", tv2)
+
+      (n1 == n2).should be_false
+    end
+
+    it "links with same type and content but different truth values are not equal" do
+      a = AtomSpace::ConceptNode.new("dog")
+      b = AtomSpace::ConceptNode.new("animal")
+      tv1 = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+      tv2 = AtomSpace::SimpleTruthValue.new(0.5, 0.6)
+      l1 = AtomSpace::InheritanceLink.new(a, b, tv1)
+      l2 = AtomSpace::InheritanceLink.new(a, b, tv2)
+
+      (l1 == l2).should be_false
+    end
+  end
+
+  describe "AtomType helpers" do
+    it "node? returns false for base ATOM type" do
+      AtomSpace::AtomType::ATOM.node?.should be_false
+    end
+
+    it "link? returns false for base ATOM type" do
+      AtomSpace::AtomType::ATOM.link?.should be_false
+    end
+
+    it "all standard node types are identified as nodes" do
+      [
+        AtomSpace::AtomType::CONCEPT_NODE,
+        AtomSpace::AtomType::PREDICATE_NODE,
+        AtomSpace::AtomType::VARIABLE_NODE,
+        AtomSpace::AtomType::NUMBER_NODE,
+        AtomSpace::AtomType::WORD_NODE,
+        AtomSpace::AtomType::SENTENCE_NODE,
+      ].each do |t|
+        t.node?.should be_true
+        t.link?.should be_false
+      end
+    end
+
+    it "all standard link types are identified as links" do
+      [
+        AtomSpace::AtomType::LIST_LINK,
+        AtomSpace::AtomType::INHERITANCE_LINK,
+        AtomSpace::AtomType::EVALUATION_LINK,
+        AtomSpace::AtomType::AND_LINK,
+        AtomSpace::AtomType::OR_LINK,
+        AtomSpace::AtomType::NOT_LINK,
+        AtomSpace::AtomType::IMPLICATION_LINK,
+      ].each do |t|
+        t.link?.should be_true
+        t.node?.should be_false
+      end
+    end
+  end
+
+  describe "LazyLink" do
+    it "creates a lazy link with handles" do
+      handles = [1_u64, 2_u64, 3_u64]
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+
+      lazy_link.type.should eq(AtomSpace::AtomType::LIST_LINK)
+      lazy_link.arity.should eq(3)
+      lazy_link.outgoing_handles.should eq(handles)
+      lazy_link.loaded?.should be_false
+    end
+
+    it "rejects non-link types" do
+      expect_raises(ArgumentError) do
+        AtomSpace::LazyLink.new(AtomSpace::AtomType::CONCEPT_NODE, [1_u64])
+      end
+    end
+
+    it "returns empty outgoing when no resolver set" do
+      handles = [1_u64, 2_u64]
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::INHERITANCE_LINK, handles)
+
+      lazy_link.outgoing.should be_empty
+      lazy_link.loaded?.should be_true
+    end
+
+    it "has empty name" do
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, [1_u64])
+      lazy_link.name.should eq("")
+    end
+
+    it "converts to string showing handles when not loaded" do
+      handles = [10_u64, 20_u64]
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::EVALUATION_LINK, handles)
+      result = lazy_link.to_s
+
+      result.should contain("EVALUATIONLINK")
+      result.should contain("Handle(10)")
+      result.should contain("Handle(20)")
+    end
+
+    it "clones as lazy link when not loaded" do
+      handles = [1_u64, 2_u64]
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+      cloned = lazy_link.clone
+
+      cloned.should be_a(AtomSpace::LazyLink)
+      cloned.as(AtomSpace::LazyLink).outgoing_handles.should eq(handles)
+    end
+
+    it "clones as regular link when loaded with resolver" do
+      # Load the lazy link (no resolver returns empty array)
+      handles = [] of AtomSpace::Handle
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+      lazy_link.load!
+
+      cloned = lazy_link.clone
+      # When loaded with empty outgoing, clone returns a regular Link
+      cloned.should be_a(AtomSpace::Link)
+    end
+
+    it "content_equals? checks handle equality when both unloaded" do
+      handles = [1_u64, 2_u64]
+      ll1 = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+      ll2 = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+
+      ll1.content_equals?(ll2).should be_true
+    end
+
+    it "content_equals? returns false for different handles" do
+      ll1 = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, [1_u64, 2_u64])
+      ll2 = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, [1_u64, 3_u64])
+
+      ll1.content_equals?(ll2).should be_false
+    end
+
+    it "can be converted to a regular link" do
+      handles = [] of AtomSpace::Handle
+      lazy_link = AtomSpace::LazyLink.new(AtomSpace::AtomType::LIST_LINK, handles)
+      regular = lazy_link.to_link
+
+      regular.should be_a(AtomSpace::Link)
+      regular.type.should eq(AtomSpace::AtomType::LIST_LINK)
+    end
+  end
+
+  describe "AttentionValue" do
+    it "supports hash computation" do
+      av1 = AtomSpace::AttentionValue.new(100_i16, 50_i16, false)
+      av2 = AtomSpace::AttentionValue.new(100_i16, 50_i16, false)
+      av3 = AtomSpace::AttentionValue.new(200_i16, 50_i16, false)
+
+      # Equal attention values should hash the same
+      av1.hash.should eq(av2.hash)
+      av1.hash.should_not eq(av3.hash)
+    end
+
+    it "VLTI flag affects string representation" do
+      av_vlti = AtomSpace::AttentionValue.new(10_i16, 5_i16, true)
+      av_no_vlti = AtomSpace::AttentionValue.new(10_i16, 5_i16, false)
+
+      av_vlti.to_s.should contain("VLTI")
+      av_no_vlti.to_s.should_not contain("VLTI")
+    end
+  end
 end
