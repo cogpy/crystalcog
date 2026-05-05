@@ -338,14 +338,27 @@ jobs:
         
         # Wait for server to start
         echo "Waiting for CogServer to start..."
+        SERVER_STARTED=false
         for i in {1..30}; do
+          if ! kill -0 $COGSERVER_PID 2>/dev/null; then
+            echo "CogServer process (PID $COGSERVER_PID) has exited unexpectedly"
+            break
+          fi
           if curl -s http://localhost:18080/status > /dev/null 2>&1; then
             echo "CogServer is ready!"
+            SERVER_STARTED=true
             break
           fi
           echo "Waiting... ($i/30)"
           sleep 2
         done
+        
+        if [ "$SERVER_STARTED" != "true" ]; then
+          echo "ERROR: CogServer failed to start within the timeout period"
+          echo "Process status:"
+          kill -0 $COGSERVER_PID 2>/dev/null && echo "Process is still running but not responding" || echo "Process has exited"
+          exit 1
+        fi
 
     - name: Run E2E API tests
       run: |

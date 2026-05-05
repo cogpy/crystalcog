@@ -91,7 +91,8 @@ end
 # Exclude crystal-run (from `crystal run`) and .cr files (from requires)
 if (PROGRAM_NAME == __FILE__ || 
     PROGRAM_NAME.ends_with?("cogserver_main") || 
-    PROGRAM_NAME.ends_with?("cogserver")) &&
+    PROGRAM_NAME.ends_with?("cogserver") ||
+    PROGRAM_NAME.ends_with?("cogserver_bin")) &&
    !PROGRAM_NAME.includes?("crystal-run") && 
    !PROGRAM_NAME.ends_with?(".cr")
   CogServer.main
