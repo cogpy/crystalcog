@@ -1,6 +1,7 @@
 #!/bin/bash
-# Validation script for demo_profiling_tools.sh
-# This script validates that all components referenced in the demo script exist and are functional
+# Validation script for profiling tools
+# This script validates that the profiling tooling, dependencies, and related
+# Guix packaging checks are available and functional.
 
 set -e
 
@@ -38,8 +39,23 @@ print_warning() {
     WARNINGS=$((WARNINGS + 1))
 }
 
+print_warning_and_add() {
+    echo -e "${YELLOW}⚠${NC} $1"
+    WARNINGS=$((WARNINGS + $2))
+}
+
 print_info() {
     echo -e "${BLUE}ℹ${NC} $1"
+}
+
+extract_warning_count() {
+    local warnings
+    warnings=$(sed -n 's/.*Warnings:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1" | head -n1)
+    if [ -n "$warnings" ]; then
+        echo "$warnings"
+    else
+        echo 0
+    fi
 }
 
 # Validate file existence
@@ -80,7 +96,9 @@ echo ""
 echo "🚀 Running demo_profiling_tools.sh..."
 TEMP_OUTPUT=$(mktemp -t profiling_validation_output.XXXXXX)
 TEMP_ERRORS=$(mktemp -t profiling_validation_errors.XXXXXX)
-trap 'rm -f "$TEMP_OUTPUT" "$TEMP_ERRORS"' EXIT
+TEMP_DEPS=$(mktemp -t profiling_validation_dependencies.XXXXXX)
+TEMP_GUIX=$(mktemp -t profiling_validation_guix.XXXXXX)
+trap 'rm -f "$TEMP_OUTPUT" "$TEMP_ERRORS" "$TEMP_DEPS" "$TEMP_GUIX"' EXIT
 
 # Capture combined output for validation (stdout and stderr together is intentional,
 # as we want to verify the complete output including any warnings or messages).
@@ -101,6 +119,46 @@ if "$PROJECT_ROOT/scripts/demo_profiling_tools.sh" > "$TEMP_OUTPUT" 2>&1; then
     fi
 else
     print_error "demo_profiling_tools.sh failed to execute"
+fi
+
+echo ""
+
+# Validate dependency compatibility
+echo "📦 Validating dependency compatibility..."
+if [ -f "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" ]; then
+    if bash "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" > "$TEMP_DEPS" 2>&1; then
+        dep_warnings=$(extract_warning_count "$TEMP_DEPS")
+        if [ "$dep_warnings" -gt 0 ]; then
+            print_warning_and_add "Dependency compatibility check passed with $dep_warnings warning(s)" "$dep_warnings"
+        else
+            print_success "Dependency compatibility check passed"
+        fi
+    else
+        print_error "Dependency compatibility check failed"
+        sed 's/^/    /' < "$TEMP_DEPS" | head -10
+    fi
+else
+    print_error "scripts/validation/check_dependencies.sh is missing"
+fi
+
+echo ""
+
+# Validate Guix environment checks
+echo "🐧 Validating Guix environment checks..."
+if [ -f "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" ]; then
+    if bash "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" > "$TEMP_GUIX" 2>&1; then
+        guix_warnings=$(extract_warning_count "$TEMP_GUIX")
+        if [ "$guix_warnings" -gt 0 ]; then
+            print_warning_and_add "Guix package validation passed with $guix_warnings warning(s)" "$guix_warnings"
+        else
+            print_success "Guix package validation passed"
+        fi
+    else
+        print_error "Guix package validation failed"
+        sed 's/^/    /' < "$TEMP_GUIX" | head -10
+    fi
+else
+    print_error "scripts/validation/validate-guix-packages.sh is missing"
 fi
 
 echo ""
