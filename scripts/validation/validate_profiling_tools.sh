@@ -48,6 +48,16 @@ print_info() {
     echo -e "${BLUE}ℹ${NC} $1"
 }
 
+extract_warning_count() {
+    local warnings
+    warnings=$(sed -n 's/.*Warnings:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1" | head -n1)
+    if [ -n "$warnings" ]; then
+        echo "$warnings"
+    else
+        echo 0
+    fi
+}
+
 # Validate file existence
 echo "📁 Validating file existence..."
 FILES=(
@@ -117,8 +127,8 @@ echo ""
 echo "📦 Validating dependency compatibility..."
 if [ -f "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" ]; then
     if bash "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" > "$TEMP_DEPS" 2>&1; then
-        dep_warnings=$(awk '/Warnings:/ {print $2; exit}' "$TEMP_DEPS")
-        if [ -n "$dep_warnings" ] && [ "$dep_warnings" -gt 0 ]; then
+        dep_warnings=$(extract_warning_count "$TEMP_DEPS")
+        if [ "$dep_warnings" -gt 0 ]; then
             print_warning_count "Dependency compatibility check passed with $dep_warnings warning(s)" "$dep_warnings"
         else
             print_success "Dependency compatibility check passed"
@@ -137,8 +147,8 @@ echo ""
 echo "🐧 Validating Guix environment checks..."
 if [ -f "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" ]; then
     if bash "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" > "$TEMP_GUIX" 2>&1; then
-        guix_warnings=$(awk '/Warnings:/ {print $2; exit}' "$TEMP_GUIX")
-        if [ -n "$guix_warnings" ] && [ "$guix_warnings" -gt 0 ]; then
+        guix_warnings=$(extract_warning_count "$TEMP_GUIX")
+        if [ "$guix_warnings" -gt 0 ]; then
             print_warning_count "Guix package validation passed with $guix_warnings warning(s)" "$guix_warnings"
         else
             print_success "Guix package validation passed"
