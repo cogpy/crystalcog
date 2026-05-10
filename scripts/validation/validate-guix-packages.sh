@@ -68,7 +68,7 @@ echo ""
 echo "Checking Crystal project metadata..."
 
 if [ -f "shard.yml" ]; then
-    if grep -Eq "^name:[[:space:]]*crystalcog$" shard.yml; then
+    if grep -Eq "^name[[:space:]]*:[[:space:]]*crystalcog[[:space:]]*$" shard.yml; then
         print_success "shard.yml project name is crystalcog"
     else
         print_error "shard.yml project name mismatch"

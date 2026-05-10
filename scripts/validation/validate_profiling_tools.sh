@@ -39,7 +39,7 @@ print_warning() {
     WARNINGS=$((WARNINGS + 1))
 }
 
-print_warning_count() {
+print_warning_and_add() {
     echo -e "${YELLOW}⚠${NC} $1"
     WARNINGS=$((WARNINGS + $2))
 }
@@ -129,7 +129,7 @@ if [ -f "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" ]; then
     if bash "$PROJECT_ROOT/scripts/validation/check_dependencies.sh" > "$TEMP_DEPS" 2>&1; then
         dep_warnings=$(extract_warning_count "$TEMP_DEPS")
         if [ "$dep_warnings" -gt 0 ]; then
-            print_warning_count "Dependency compatibility check passed with $dep_warnings warning(s)" "$dep_warnings"
+            print_warning_and_add "Dependency compatibility check passed with $dep_warnings warning(s)" "$dep_warnings"
         else
             print_success "Dependency compatibility check passed"
         fi
@@ -149,7 +149,7 @@ if [ -f "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" ]; then
     if bash "$PROJECT_ROOT/scripts/validation/validate-guix-packages.sh" > "$TEMP_GUIX" 2>&1; then
         guix_warnings=$(extract_warning_count "$TEMP_GUIX")
         if [ "$guix_warnings" -gt 0 ]; then
-            print_warning_count "Guix package validation passed with $guix_warnings warning(s)" "$guix_warnings"
+            print_warning_and_add "Guix package validation passed with $guix_warnings warning(s)" "$guix_warnings"
         else
             print_success "Guix package validation passed"
         fi
