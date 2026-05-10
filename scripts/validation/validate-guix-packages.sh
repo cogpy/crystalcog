@@ -59,12 +59,14 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
+# gnu/packages/opencog.scm is optional — it provides C++ OpenCog package
+# definitions and is not required for the Crystal-based CrystalCog build.
+# A more detailed informational note is printed below.
 if [ -f "gnu/packages/opencog.scm" ]; then
     echo "✓ opencog.scm (compatibility) exists"
 else
-    echo "✗ opencog.scm (compatibility) missing"
-    validation_passed=false
-    ERRORS=$((ERRORS + 1))
+    echo "⚠ opencog.scm (compatibility) missing (optional)"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 if [ -f ".guix-channel" ]; then
@@ -124,10 +126,7 @@ fi
 if [ -f "gnu/packages/opencog.scm" ]; then
     print_success "gnu/packages/opencog.scm exists"
 else
-    print_warning "gnu/packages/opencog.scm missing"
-    echo "✗ src/ directory missing"
-    validation_passed=false
-    ERRORS=$((ERRORS + 1))
+    print_warning "gnu/packages/opencog.scm missing (optional for C++ OpenCog integration)"
 fi
 
 echo ""
@@ -370,9 +369,9 @@ if [ "$validation_passed" = true ] && [ "$GUIX_FILES_EXIST" = true ]; then
     echo ""
     echo "✅ Guix validation PASSED - All validations completed successfully!"
     exit 0
-elif [ "$GUIX_FILES_EXIST" = false ]; then
+elif [ "$validation_passed" = true ] && [ "$GUIX_FILES_EXIST" = false ]; then
     echo ""
-    echo "⚠️  Guix validation WARNING - Some files missing but not critical for CrystalCog"
+    echo "⚠️  Guix validation WARNING - Some Guix files missing but not critical for CrystalCog"
     echo "   CrystalCog primarily uses Crystal/shards tooling."
     exit 0  # Non-blocking warning
 else
