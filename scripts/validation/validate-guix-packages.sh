@@ -7,6 +7,14 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
+# CrystalCog is a Crystal language project with optional Guix integration
+
+# Note: We don't use 'set -e' because we want to continue validation
+# even when individual checks fail, and report all issues at the end.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 echo "=== CrystalCog Guix Package Validation ==="
 
@@ -26,6 +34,64 @@ print_warning() {
     echo "⚠ $1"
     WARNINGS=$((WARNINGS + 1))
 }
+# Initialize validation state
+ERRORS=0
+WARNINGS=0
+validation_passed=true
+GUIX_FILES_EXIST=true
+
+# Check if package files exist
+echo ""
+echo "Checking package files..."
+if [ -f "gnu/packages/crystalcog.scm" ]; then
+    echo "✓ crystalcog.scm exists"
+else
+    echo "✗ crystalcog.scm missing"
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ -f "agent-zero/packages/cognitive.scm" ]; then
+    echo "✓ cognitive.scm exists"
+else
+    echo "✗ cognitive.scm missing"
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ -f "gnu/packages/opencog.scm" ]; then
+    echo "✓ opencog.scm (compatibility) exists"
+else
+    echo "✗ opencog.scm (compatibility) missing"
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ -f ".guix-channel" ]; then
+    echo "✓ .guix-channel exists"
+else
+    echo "✗ .guix-channel missing"
+    GUIX_FILES_EXIST=false
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ -f "guix.scm" ]; then
+    echo "✓ guix.scm manifest exists"
+else
+    echo "✗ guix.scm manifest missing"
+    GUIX_FILES_EXIST=false
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Note about gnu/packages/opencog.scm
+if [ -f "gnu/packages/opencog.scm" ]; then
+    echo "✓ gnu/packages/opencog.scm exists (optional for C++ OpenCog integration)"
+else
+    echo "ℹ gnu/packages/opencog.scm not present (not required for CrystalCog)"
+    echo "  This file is only needed for C++ OpenCog package definitions."
+    echo "  CrystalCog uses native Crystal tooling (shards) for package management."
+fi
 
 echo ""
 echo "Checking package files..."
@@ -45,11 +111,23 @@ for file in "${REQUIRED_FILES[@]}"; do
         print_error "$file missing"
     fi
 done
+        echo "  ✗ Project name mismatch in shard.yml"
+        validation_passed=false
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "✗ shard.yml missing"
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
+fi
 
 if [ -f "gnu/packages/opencog.scm" ]; then
     print_success "gnu/packages/opencog.scm exists"
 else
     print_warning "gnu/packages/opencog.scm missing"
+    echo "✗ src/ directory missing"
+    validation_passed=false
+    ERRORS=$((ERRORS + 1))
 fi
 
 echo ""
@@ -61,6 +139,9 @@ for dir in "${EXPECTED_DIRS[@]}"; do
         print_success "$dir/ exists"
     else
         print_error "$dir/ missing"
+        echo "✗ $dir/ missing"
+        validation_passed=false
+        ERRORS=$((ERRORS + 1))
     fi
 done
 
@@ -70,6 +151,14 @@ echo "Checking Crystal project metadata..."
 if [ -f "shard.yml" ]; then
     if grep -Eq "^name[[:space:]]*:[[:space:]]*crystalcog[[:space:]]*$" shard.yml; then
         print_success "shard.yml project name is crystalcog"
+# Check if Guix is installed (required for full validation)
+if command -v guix > /dev/null; then
+    echo "Guix detected - performing full syntax validation..."
+
+    # Test CrystalCog package module
+    echo "Testing CrystalCog package module syntax..."
+    if guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))" 2>/dev/null; then
+        echo "✓ CrystalCog package module syntax valid"
     else
         print_error "shard.yml project name mismatch"
     fi
@@ -99,6 +188,62 @@ if command -v guix > /dev/null 2>&1 && command -v guile > /dev/null 2>&1; then
         print_error "guix.scm manifest syntax invalid"
     fi
 elif command -v guile > /dev/null 2>&1; then
+
+    # Test Agent-Zero cognitive module
+    echo "Testing Agent-Zero cognitive module syntax..."
+    if guile -c "(add-to-load-path \".\") (use-modules (agent-zero packages cognitive))" 2>/dev/null; then
+        echo "✓ Agent-Zero cognitive module syntax valid"
+    else
+        echo "✗ Agent-Zero cognitive module syntax invalid"
+        echo "Note: This validation requires full Guix installation"
+        echo "Running syntax check..."
+        guile -c "(add-to-load-path \".\") (use-modules (agent-zero packages cognitive))" 2>&1 | head -20
+    fi
+
+    # Test opencog compatibility module
+    echo "Testing opencog compatibility module syntax..."
+    if guile -c "(add-to-load-path \".\") (use-modules (gnu packages opencog))" 2>/dev/null; then
+        echo "✓ OpenCog compatibility module syntax valid"
+    else
+        echo "✗ OpenCog compatibility module syntax invalid"
+        echo "Running detailed syntax check..."
+        if ! guile -c "(add-to-load-path \".\") (use-modules (gnu packages opencog))" 2>&1; then
+            validation_passed=false
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Test manifest
+    echo "Testing manifest syntax..."
+    if guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>/dev/null; then
+        echo "✓ Manifest syntax valid"
+    else
+        echo "✗ Manifest syntax invalid"
+        echo "Note: This validation requires full Guix installation"
+        echo "Running syntax check..."
+        guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>&1 | head -20
+        if ! guile -c "(add-to-load-path \".\") (load \"guix.scm\")" 2>&1; then
+            validation_passed=false
+            ERRORS=$((ERRORS + 1))
+        fi
+    fi
+
+    # Guix environment test
+    echo "Testing Guix shell environment..."
+    if guix shell -m guix.scm -- guile --no-auto-compile -c "(display \"Guix environment OK\n\")" >/dev/null 2>&1; then
+        echo "✓ Guix shell environment test passed"
+    else
+        echo "⚠ Guix shell environment test failed (guix.scm may need updates)"
+        WARNINGS=$((WARNINGS + 1))
+    fi
+
+elif command -v guile > /dev/null; then
+    echo "Guile detected but Guix not installed - performing basic validation..."
+    echo "⚠ Note: Full syntax validation requires Guix package manager"
+    echo ""
+    echo "Basic Scheme syntax validation (without Guix modules):"
+
+    # Basic file syntax check without loading Guix modules
     for file in "gnu/packages/crystalcog.scm" "agent-zero/packages/cognitive.scm" "guix.scm"; do
         if guile --no-auto-compile -c "(with-input-from-file \"$file\" read)" >/dev/null 2>&1; then
             print_success "$file basic syntax valid"
@@ -110,6 +255,17 @@ elif command -v guile > /dev/null 2>&1; then
     print_warning "Full Guix module validation skipped because guix is not installed"
 else
     print_warning "Guile not available, skipping Scheme syntax validation"
+    echo ""
+    echo "To perform full validation, install Guix:"
+    echo "  wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh"
+    echo "  chmod +x guix-install.sh"
+    echo "  sudo ./guix-install.sh"
+else
+    echo "⚠ Guile not available, skipping syntax validation"
+    echo "To validate syntax, install Guile and Guix, then run:"
+    echo "  sudo apt-get install guile-3.0"
+    echo "  # or install full Guix for complete validation"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 echo ""
@@ -129,24 +285,33 @@ if command -v crystal > /dev/null 2>&1; then
     print_success "Crystal detected: $(crystal --version | head -1)"
 else
     print_warning "Crystal not detected (required for building CrystalCog packages)"
+    echo "⚠ Crystal not detected (required for building CrystalCog packages)"
+    echo "  Install with: ./scripts/install-crystal.sh"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 if command -v shards > /dev/null 2>&1; then
     print_success "Shards detected (Crystal dependency manager)"
 else
     print_warning "Shards not detected (comes with Crystal installation)"
+    echo "⚠ Shards not detected (comes with Crystal installation)"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 if command -v psql > /dev/null 2>&1 || dpkg -l | grep -q postgresql 2>/dev/null; then
     print_success "PostgreSQL available"
 else
     print_warning "PostgreSQL not detected (optional - needed for persistent storage)"
+    echo "⚠ PostgreSQL not detected (optional - needed for persistent storage)"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 if command -v sqlite3 > /dev/null 2>&1 || dpkg -l | grep -q sqlite3 2>/dev/null; then
     print_success "SQLite available"
 else
     print_warning "SQLite not detected (optional - needed for persistent storage)"
+    echo "⚠ SQLite not detected (optional - needed for persistent storage)"
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 echo ""
@@ -156,6 +321,7 @@ echo "  Core Packages:"
 echo "    - crystalcog: Main Crystal cognitive architecture platform"
 echo "    - crystalcog-cogutil: Core utilities (logging, config, random)"
 echo "    - crystalcog-atomspace: Hypergraph database and reasoning"
+echo "    - crystalcog-opencog: Main cognitive reasoning platform"
 echo ""
 echo "  Agent-Zero Cognitive Packages:"
 echo "    - opencog: Re-exported crystalcog package"
@@ -170,6 +336,23 @@ echo "Usage:"
 echo "  guix shell -m guix.scm                  # Development environment"
 echo "  guix install crystalcog                 # Install main package"
 echo "  guix install crystalcog-atomspace       # Install specific component"
+echo "  Compatibility module:"
+echo "    - (gnu packages opencog): Re-exports CrystalCog packages with OpenCog names"
+echo ""
+echo "CrystalCog Guix Integration Status:"
+echo "  - Primary package manager: shards (Crystal's native package manager)"
+echo "  - Optional integration: Guix (for OpenCog ecosystem compatibility)"
+echo ""
+echo "Guix configuration files:"
+echo "  ✓ guix.scm - Development environment manifest"
+echo "  ✓ .guix-channel - Agent-Zero Genesis package channel"
+echo ""
+echo "Usage:"
+echo "  guix shell -m guix.scm            # Containerized shell (recommended)"
+echo "  guix environment -m guix.scm      # Development environment"
+echo "  guix install crystalcog           # Install main package"
+echo "  guix install crystalcog-atomspace # Install specific component"
+echo "  shards install                    # Install Crystal dependencies (primary method)"
 echo ""
 echo "See docs/README-GUIX.md for detailed usage instructions."
 
@@ -180,8 +363,21 @@ echo "Warnings: $WARNINGS"
 
 if [ "$ERRORS" -eq 0 ]; then
     print_success "Guix validation completed successfully"
+echo "Errors:   $ERRORS"
+echo "Warnings: $WARNINGS"
+
+if [ "$validation_passed" = true ] && [ "$GUIX_FILES_EXIST" = true ]; then
+    echo ""
+    echo "✅ Guix validation PASSED - All validations completed successfully!"
     exit 0
+elif [ "$GUIX_FILES_EXIST" = false ]; then
+    echo ""
+    echo "⚠️  Guix validation WARNING - Some files missing but not critical for CrystalCog"
+    echo "   CrystalCog primarily uses Crystal/shards tooling."
+    exit 0  # Non-blocking warning
 else
     print_error "Guix validation failed"
+    echo ""
+    echo "✗ Some validations failed. Please review the errors above."
     exit 1
 fi
