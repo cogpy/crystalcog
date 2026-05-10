@@ -271,6 +271,8 @@ This validates:
 - All 9 profiling tool files exist
 - Executable permissions are correct
 - Script execution and output format
+- Dependency compatibility via `scripts/validation/check_dependencies.sh`
+- Guix package/environment validation via `scripts/validation/validate-guix-packages.sh`
 - Documentation completeness
 - Test suite coverage
 - Optional Crystal syntax validation (when Crystal is installed)
