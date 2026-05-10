@@ -156,10 +156,9 @@ This profiling toolset is part of the "Advanced System Integration" phase (Week 
 All validation tests passed. The script is fully functional and all referenced files exist.
 
 ### Future Enhancements (Optional)
-1. **Crystal Installation Check**: Add a check in the demo script to verify Crystal is installed
-2. **Interactive Demo**: Consider adding an interactive mode that actually runs the profiler
-3. **CI Integration**: Add this validation script to CI/CD pipeline
-4. **Documentation**: Cross-reference with main README.md
+1. **Interactive Demo**: Consider adding an interactive mode that actually runs the profiler
+2. **Expanded CI Coverage**: Add dependency and Guix validation scripts to all validation workflows
+3. **Documentation**: Cross-reference with main README.md
 
 ### Maintenance Notes
 - The validation script should be run after any updates to:
@@ -179,6 +178,16 @@ The `scripts/demo_profiling_tools.sh` script has been successfully validated:
 - Tools are properly integrated into the project
 
 The script is ready for use and meets all requirements of the CrystalCog cognitive framework.
+
+## Revalidation (2026-05-10)
+
+Revalidation was completed for the package-script update with the required checks:
+
+- ✅ Script functionality: `bash scripts/validation/validate-demo-profiling-tools.sh`
+- ✅ Dependency compatibility: `bash scripts/validation/check_dependencies.sh`
+- ✅ Guix environment/package validation: `bash scripts/validation/validate-guix-packages.sh`
+
+During this revalidation, `scripts/validation/validate-guix-packages.sh` was repaired from a shell syntax error so Guix validation now executes and reports results correctly.
 
 ## Related Documentation
 - [PERFORMANCE_PROFILING_GUIDE.md](/docs/PERFORMANCE_PROFILING_GUIDE.md) - Complete profiling usage guide
