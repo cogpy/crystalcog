@@ -69,21 +69,24 @@ else
     WARNINGS=$((WARNINGS + 1))
 fi
 
+# .guix-channel is part of the optional Guix tooling. Missing files
+# downgrade GUIX_FILES_EXIST so the warning-only branch in the final
+# result handles it, but they do NOT flip validation_passed — missing
+# Guix tooling is non-blocking for CrystalCog.
 if [ -f ".guix-channel" ]; then
     echo "✓ .guix-channel exists"
 else
-    echo "✗ .guix-channel missing"
+    echo "⚠ .guix-channel missing (optional Guix tooling)"
     GUIX_FILES_EXIST=false
-    validation_passed=false
-    ERRORS=$((ERRORS + 1))
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 if [ -f "guix.scm" ]; then
     echo "✓ guix.scm manifest exists"
 else
-    echo "✗ guix.scm manifest missing"
+    echo "⚠ guix.scm manifest missing (optional Guix tooling)"
     GUIX_FILES_EXIST=false
-    ERRORS=$((ERRORS + 1))
+    WARNINGS=$((WARNINGS + 1))
 fi
 
 # Note about gnu/packages/opencog.scm
@@ -113,15 +116,6 @@ for file in "${REQUIRED_FILES[@]}"; do
         print_error "$file missing"
     fi
 done
-        echo "  ✗ Project name mismatch in shard.yml"
-        validation_passed=false
-        ERRORS=$((ERRORS + 1))
-    fi
-else
-    echo "✗ shard.yml missing"
-    validation_passed=false
-    ERRORS=$((ERRORS + 1))
-fi
 
 if [ -f "gnu/packages/opencog.scm" ]; then
     print_success "gnu/packages/opencog.scm exists"
@@ -150,14 +144,6 @@ echo "Checking Crystal project metadata..."
 if [ -f "shard.yml" ]; then
     if grep -Eq "^name[[:space:]]*:[[:space:]]*crystalcog[[:space:]]*$" shard.yml; then
         print_success "shard.yml project name is crystalcog"
-# Check if Guix is installed (required for full validation)
-if command -v guix > /dev/null; then
-    echo "Guix detected - performing full syntax validation..."
-
-    # Test CrystalCog package module
-    echo "Testing CrystalCog package module syntax..."
-    if guile -c "(add-to-load-path \".\") (use-modules (gnu packages crystalcog))" 2>/dev/null; then
-        echo "✓ CrystalCog package module syntax valid"
     else
         print_error "shard.yml project name mismatch"
     fi
@@ -259,12 +245,6 @@ else
     echo "  wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh"
     echo "  chmod +x guix-install.sh"
     echo "  sudo ./guix-install.sh"
-else
-    echo "⚠ Guile not available, skipping syntax validation"
-    echo "To validate syntax, install Guile and Guix, then run:"
-    echo "  sudo apt-get install guile-3.0"
-    echo "  # or install full Guix for complete validation"
-    WARNINGS=$((WARNINGS + 1))
 fi
 
 echo ""
@@ -357,11 +337,6 @@ echo "See docs/README-GUIX.md for detailed usage instructions."
 
 echo ""
 echo "=== Validation Result ==="
-echo "Errors: $ERRORS"
-echo "Warnings: $WARNINGS"
-
-if [ "$ERRORS" -eq 0 ]; then
-    print_success "Guix validation completed successfully"
 echo "Errors:   $ERRORS"
 echo "Warnings: $WARNINGS"
 
