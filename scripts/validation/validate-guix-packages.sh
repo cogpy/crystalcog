@@ -28,6 +28,7 @@ print_success() {
 print_error() {
     echo "✗ $1"
     ERRORS=$((ERRORS + 1))
+    validation_passed=false
 }
 
 print_warning() {
@@ -96,31 +97,6 @@ else
     echo "ℹ gnu/packages/opencog.scm not present (not required for CrystalCog)"
     echo "  This file is only needed for C++ OpenCog package definitions."
     echo "  CrystalCog uses native Crystal tooling (shards) for package management."
-fi
-
-echo ""
-echo "Checking package files..."
-
-REQUIRED_FILES=(
-    "gnu/packages/crystalcog.scm"
-    "agent-zero/packages/cognitive.scm"
-    ".guix-channel"
-    "guix.scm"
-    "shard.yml"
-)
-
-for file in "${REQUIRED_FILES[@]}"; do
-    if [ -f "$file" ]; then
-        print_success "$file exists"
-    else
-        print_error "$file missing"
-    fi
-done
-
-if [ -f "gnu/packages/opencog.scm" ]; then
-    print_success "gnu/packages/opencog.scm exists"
-else
-    print_warning "gnu/packages/opencog.scm missing (optional for C++ OpenCog integration)"
 fi
 
 echo ""
