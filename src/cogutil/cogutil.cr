@@ -3,6 +3,48 @@
 #
 # This module provides the foundational utilities needed by all OpenCog components.
 
+# Compatibility shim for Crystal < 1.19.0 which lacks Time::Instant
+{% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+  struct Time::Instant
+    include Comparable(Time::Instant)
+
+    getter span : Time::Span
+
+    def initialize(@span : Time::Span)
+    end
+
+    def -(other : Time::Instant) : Time::Span
+      @span - other.span
+    end
+
+    def -(other : Time::Span) : Time::Instant
+      Time::Instant.new(@span - other)
+    end
+
+    def +(other : Time::Span) : Time::Instant
+      Time::Instant.new(@span + other)
+    end
+
+    def <=>(other : Time::Instant) : Int32
+      @span <=> other.span
+    end
+
+    def elapsed : Time::Span
+      Time.instant - self
+    end
+
+    def duration_since(other : Time::Instant) : Time::Span
+      self - other
+    end
+  end
+
+  module Time
+    def self.instant : Time::Instant
+      Time::Instant.new(Time.monotonic)
+    end
+  end
+{% end %}
+
 require "./logger"
 require "./config"
 require "./randgen"
