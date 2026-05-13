@@ -137,16 +137,17 @@ module CogUtil
     
     # Start HTTP dashboard server
     def start_dashboard(port : Int32 = 8080)
-      @http_server = HTTP::Server.new([
-        HTTP::ErrorHandler.new,
-        HTTP::LogHandler.new,
-        HTTP::StaticFileHandler.new("./dashboard", false)
-      ]) do |context|
+      start_http_server(port)
+    end
+
+    # Start HTTP server for monitoring API and WebSocket
+    def start_http_server(port : Int32 = 8080)
+      @http_server = HTTP::Server.new do |context|
         handle_request(context)
       end
       
       spawn do
-        puts "Performance dashboard starting on http://localhost:#{port}"
+        puts "Performance monitoring server starting on http://localhost:#{port}"
         @http_server.try(&.bind_tcp("0.0.0.0", port))
         @http_server.try(&.listen)
       end
@@ -163,6 +164,13 @@ module CogUtil
     def add_alert_rule(rule : AlertRule)
       @alert_rules << rule
       puts "Added alert rule: #{rule.name}"
+    end
+    
+    # Add custom alert rule with named parameters
+    def add_alert_rule(name : String, metric_pattern : String, threshold : Float64,
+                       comparison : String, duration : Time::Span, severity : String,
+                       enabled : Bool = true)
+      add_alert_rule(AlertRule.new(name, metric_pattern, threshold, comparison, duration, severity, enabled))
     end
     
     # Get current performance summary
@@ -187,23 +195,16 @@ module CogUtil
         
         metric_summary = {
           "current" => recent_values.last,
-          "recent_avg" => recent_values.sum / recent_values.size,
-          "recent_min" => recent_values.min,
-          "recent_max" => recent_values.max,
+          "avg" => recent_values.sum / recent_values.size,
+          "min" => recent_values.min,
+          "max" => recent_values.max,
           "hourly_avg" => hourly_values.empty? ? 0.0 : hourly_values.sum / hourly_values.size,
           "trend" => calculate_trend(recent_values),
-          "sample_count" => recent_values.size
+          "count" => recent_values.size
         }
         
         summary[name] = JSON.parse(metric_summary.to_json)
       end
-      
-      summary["_meta"] = JSON.parse({
-        "last_update" => now.to_rfc3339,
-        "active_alerts" => @active_alerts.size,
-        "total_samples" => @samples.size,
-        "monitoring_active" => @monitoring_active
-      }.to_json)
       
       summary
     end
@@ -304,12 +305,10 @@ module CogUtil
           str << "-" * 24 << "\n"
           
           summary.each do |name, data|
-            next if name == "_meta"
-            
             current = data["current"].as_f
-            avg = data["recent_avg"].as_f
-            min_val = data["recent_min"].as_f
-            max_val = data["recent_max"].as_f
+            avg = data["avg"].as_f
+            min_val = data["min"].as_f
+            max_val = data["max"].as_f
             trend = data["trend"].as_f
             
             trend_icon = trend > 0.1 ? "📈" : trend < -0.1 ? "📉" : "➡️"
@@ -479,11 +478,11 @@ module CogUtil
       case context.request.path
       when "/"
         serve_dashboard_html(context)
-      when "/api/metrics"
+      when "/metrics", "/api/metrics"
         serve_metrics_api(context)
-      when "/api/alerts"
+      when "/alerts", "/api/alerts"
         serve_alerts_api(context)
-      when "/api/summary"
+      when "/summary", "/api/summary"
         serve_summary_api(context)
       when "/ws"
         handle_websocket(context)
@@ -523,7 +522,7 @@ module CogUtil
       context.response.content_type = "application/json"
       summary = {
         "monitoring_active" => @monitoring_active,
-        "sample_count" => @samples.size,
+        "total_samples" => @samples.size,
         "alert_count" => @active_alerts.size,
         "last_update" => Time.utc.to_rfc3339
       }

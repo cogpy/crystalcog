@@ -561,7 +561,7 @@ module AgentZero
         when Bool
           JSON::Any.new(value)
         else
-          JSON::Any.new(value.to_s)
+          raise "Unexpected type in Message payload"
         end
       end
     end
