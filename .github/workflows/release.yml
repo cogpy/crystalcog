@@ -12,7 +12,7 @@ on:
         type: string
 
 env:
-  CRYSTAL_VERSION: '1.14.0'
+  CRYSTAL_VERSION: '1.20.1'
 
 jobs:
   # Build release binaries for multiple platforms
