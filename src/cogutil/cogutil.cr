@@ -38,7 +38,7 @@
     end
   end
 
-  module Time
+  struct Time
     def self.instant : Time::Instant
       Time::Instant.new(Time.monotonic)
     end
