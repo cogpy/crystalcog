@@ -50,7 +50,7 @@ describe NLP::TextProcessor do
       tokens = ["cat", "dog", "house", "blue"]
       filtered = NLP::TextProcessor.remove_stop_words(tokens)
 
-      filtered.should eq(tokens)  # No stop words to remove
+      filtered.should eq(tokens) # No stop words to remove
     end
 
     it "handles empty token array" do
@@ -121,8 +121,8 @@ describe NLP::TextProcessor do
       text = "the cat and the dog and the bird"
       stats = NLP::TextProcessor.get_text_stats(text)
 
-      stats["word_count"].should eq(7)  # Total words
-      stats["unique_words"].should eq(5)  # cat, dog, bird, and, the
+      stats["word_count"].should eq(7)   # Total words
+      stats["unique_words"].should eq(5) # cat, dog, bird, and, the
     end
   end
 
@@ -130,7 +130,7 @@ describe NLP::TextProcessor do
     it "handles plural forms" do
       NLP::TextProcessor.simple_stem("cats").should eq("cat")
       NLP::TextProcessor.simple_stem("dogs").should eq("dog")
-      NLP::TextProcessor.simple_stem("boxes").should eq("boxe")  # Basic rule
+      NLP::TextProcessor.simple_stem("boxes").should eq("boxe") # Basic rule
     end
 
     it "handles past tense" do
@@ -169,9 +169,9 @@ describe NLP::TextProcessor do
       tokens = ["cat", "dog", "cat", "bird"]
       tf = NLP::TextProcessor.calculate_term_frequency(tokens)
 
-      tf["cat"].should eq(0.5)  # 2 out of 4
+      tf["cat"].should eq(0.5)   # 2 out of 4
       tf["dog"].should eq(0.25)  # 1 out of 4
-      tf["bird"].should eq(0.25)  # 1 out of 4
+      tf["bird"].should eq(0.25) # 1 out of 4
     end
 
     it "handles single token" do
@@ -240,7 +240,7 @@ describe NLP::TextProcessor do
       end
 
       expect_raises(NLP::TextProcessingException) do
-        NLP::TextProcessor.extract_ngrams(tokens, 3)  # More than available tokens
+        NLP::TextProcessor.extract_ngrams(tokens, 3) # More than available tokens
       end
     end
   end

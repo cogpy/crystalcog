@@ -12,13 +12,13 @@ describe "Crystal vs C++ Performance Benchmarks" do
       atomspace = AtomSpace::AtomSpace.new
       num_operations = 100_000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_operations.times do |i|
         atomspace.add_concept_node("node_#{i}")
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       rate = num_operations / duration.total_seconds
 
@@ -40,7 +40,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
       nodes = 1000.times.map { |i| atomspace.add_concept_node("node_#{i}") }.to_a
 
       num_operations = 10_000
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_operations.times do |i|
         node1 = nodes[i % nodes.size]
@@ -48,7 +48,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
         atomspace.add_inheritance_link(node1, node2)
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       rate = num_operations / duration.total_seconds
 
@@ -69,14 +69,14 @@ describe "Crystal vs C++ Performance Benchmarks" do
       atoms = 1000.times.map { |i| atomspace.add_concept_node("node_#{i}") }.to_a
 
       num_operations = 100_000
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_operations.times do |i|
         atom = atoms[i % atoms.size]
         type = atom.type
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       rate = num_operations / duration.total_seconds
 
@@ -97,7 +97,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
       atoms = 1000.times.map { |i| atomspace.add_concept_node("node_#{i}") }.to_a
 
       num_operations = 50_000
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_operations.times do |i|
         atom = atoms[i % atoms.size]
@@ -106,7 +106,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
         retrieved_tv = atom.truth_value
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       rate = num_operations / duration.total_seconds
 
@@ -125,7 +125,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
     it "measures full AtomSpace creation and population" do
       num_atoms = 10_000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       atomspace = AtomSpace::AtomSpace.new
 
@@ -139,7 +139,7 @@ describe "Crystal vs C++ Performance Benchmarks" do
         atomspace.add_inheritance_link(nodes[i], nodes[i + 1])
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       total_atoms = atomspace.size
       rate = total_atoms / duration.total_seconds
@@ -170,14 +170,14 @@ describe "Crystal vs C++ Performance Benchmarks" do
       end
 
       num_queries = 1000
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_queries.times do |i|
         # Simple pattern matching - find all atoms of a specific type
         found_atoms = atomspace.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE)
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
       rate = num_queries / duration.total_seconds
 

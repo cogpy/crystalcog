@@ -54,13 +54,12 @@ module NLP
 
     # Check if a token is a word (contains only letters)
     def self.is_word?(token : String) : Bool
-      match = token.match(WORD_PATTERN)
-      match && token.size == match.string.size || false
+      !!(token.match(/^[a-zA-Z]+$/))
     end
 
     # Check if a token is a number
     def self.is_number?(token : String) : Bool
-      !!token.match(NUMBER_PATTERN)
+      !!(token.match(/^\d+(\.\d+)?$/))
     end
 
     # Check if a token is punctuation

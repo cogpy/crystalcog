@@ -36,7 +36,7 @@ module MultiAgent
         @name : String,
         @description : String,
         @required_capabilities : Array(String) = [] of String,
-        @priority : Float64 = 1.0
+        @priority : Float64 = 1.0,
       )
         @id = Random::Secure.hex(8)
         @assigned_to = nil
@@ -111,13 +111,13 @@ module MultiAgent
       def allocate_tasks : Int32
         allocated = 0
         pending = @tasks.select { |t| t.status == Task::TaskStatus::PENDING }
-                        .sort_by { |t| -t.priority }
+          .sort_by { |t| -t.priority }
 
         pending.each do |task|
           # Find best available agent: highest capability match + not busy
           candidates = @agents.values
-                               .reject(&.busy?)
-                               .select { |a| a.can_handle?(task) }
+            .reject(&.busy?)
+            .select { |a| a.can_handle?(task) }
 
           next if candidates.empty?
 

@@ -12,19 +12,18 @@ end
 
 # Performance and benchmarking tests for CrystalCog
 describe "CrystalCog Performance Tests" do
-
   describe "AtomSpace performance" do
     it "benchmarks atom creation" do
       atomspace = create_atomspace
       num_atoms = 1000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       atoms = num_atoms.times.map { |i|
         atomspace.add_concept_node("concept_#{i}")
       }.to_a
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should create atoms quickly
@@ -51,7 +50,7 @@ describe "CrystalCog Performance Tests" do
       # Benchmark retrieval
       num_retrievals = 1000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_retrievals.times do
         random_atom = atoms.sample
@@ -59,7 +58,7 @@ describe "CrystalCog Performance Tests" do
         retrieved.should eq(random_atom)
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should retrieve quickly
@@ -80,7 +79,7 @@ describe "CrystalCog Performance Tests" do
 
       num_links = 200
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       links = num_links.times.map { |i|
         node1 = nodes.sample
@@ -88,7 +87,7 @@ describe "CrystalCog Performance Tests" do
         atomspace.add_inheritance_link(node1, node2)
       }.to_a
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should create links quickly
@@ -114,7 +113,7 @@ describe "CrystalCog Performance Tests" do
 
       num_searches = 100
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_searches.times do
         # Search by type
@@ -127,7 +126,7 @@ describe "CrystalCog Performance Tests" do
         found_by_name.size.should be <= 1
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should search quickly
@@ -199,11 +198,11 @@ describe "CrystalCog Performance Tests" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       new_atoms = pln_engine.reason(5)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete quickly
@@ -254,12 +253,12 @@ describe "CrystalCog Performance Tests" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Run extended reasoning
       new_atoms = pln_engine.reason(10)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete in reasonable time even for complex scenarios
@@ -349,11 +348,11 @@ describe "CrystalCog Performance Tests" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       new_atoms = ure_engine.forward_chain(5)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete quickly
@@ -391,13 +390,13 @@ describe "CrystalCog Performance Tests" do
         atomspace.add_evaluation_link(pred, atomspace.add_list_link([c1, c2]))
       }.to_a
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       results = goals.map { |goal|
         ure_engine.backward_chain(goal)
       }
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete quickly
@@ -438,12 +437,12 @@ describe "CrystalCog Performance Tests" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Run limited forward chaining
       new_atoms = ure_engine.forward_chain(3)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Calculate efficiency metrics
@@ -501,13 +500,13 @@ describe "CrystalCog Performance Tests" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Run both reasoning engines
       pln_atoms = pln_engine.reason(5)
       ure_atoms = ure_engine.forward_chain(3)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete in reasonable time
@@ -564,13 +563,13 @@ describe "CrystalCog Performance Tests" do
 
         initial_atoms = atomspace.size
 
-        start_time = Time.monotonic
+        start_time = Time.instant
 
         # Run limited reasoning to avoid exponential explosion
         pln_atoms = pln_engine.reason(2)
         ure_atoms = ure_engine.forward_chain(2)
 
-        end_time = Time.monotonic
+        end_time = Time.instant
         duration = end_time - start_time
 
         {
@@ -608,7 +607,7 @@ describe "CrystalCog Performance Tests" do
       OpenCog.initialize
       pln_engine = PLN.create_engine(atomspace)
       ure_engine = URE.create_engine(atomspace)
-      
+
       initial_memory = GC.stats.heap_size
 
       # Create substantial knowledge base
@@ -698,14 +697,14 @@ describe "CrystalCog Performance Tests" do
       end
 
       # Benchmark PLN
-      pln_start = Time.monotonic
+      pln_start = Time.instant
       pln_atoms = pln_engine.reason(3)
-      pln_duration = Time.monotonic - pln_start
+      pln_duration = Time.instant - pln_start
 
       # Benchmark URE
-      ure_start = Time.monotonic
+      ure_start = Time.instant
       ure_atoms = ure_engine.forward_chain(3)
-      ure_duration = Time.monotonic - ure_start
+      ure_duration = Time.instant - ure_start
 
       pln_rate = if pln_duration.total_seconds > 0
                    pln_atoms.size / pln_duration.total_seconds
@@ -751,9 +750,9 @@ describe "CrystalCog Performance Tests" do
       results = iteration_counts.map { |iterations|
         atomspace_copy = atomspace # Note: This is simplified - real copy would be complex
 
-        start_time = Time.monotonic
+        start_time = Time.instant
         new_atoms = pln_engine.reason(iterations)
-        duration = Time.monotonic - start_time
+        duration = Time.instant - start_time
 
         # Look for A->D inference (should be derived)
         a_to_d = new_atoms.find { |atom|

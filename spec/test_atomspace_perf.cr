@@ -6,14 +6,14 @@ describe "AtomSpace Performance" do
   it "measures atom creation performance" do
     atomspace = AtomSpace::AtomSpace.new
 
-    start_time = Time.monotonic
+    start_time = Time.instant
 
     num_atoms = 1000
     atoms = num_atoms.times.map { |i|
       atomspace.add_concept_node("concept_#{i}")
     }.to_a
 
-    end_time = Time.monotonic
+    end_time = Time.instant
     duration = end_time - start_time
 
     # Should create atoms quickly

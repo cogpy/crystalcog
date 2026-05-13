@@ -30,7 +30,7 @@ module Robotics
         preconditions : Array(String),
         add_effects : Array(String),
         delete_effects : Array(String) = [] of String,
-        @cost : Float64 = 1.0
+        @cost : Float64 = 1.0,
       )
         @preconditions = preconditions.to_set
         @add_effects = add_effects.to_set

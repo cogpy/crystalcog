@@ -9,6 +9,7 @@
 
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
+require "./nlp"
 
 module NLP
   module LinkGrammar
@@ -32,7 +33,7 @@ module NLP
       getter disjuncts : Array(Disjunct)
       getter cost : Float64
 
-      def initialize(@sentence : String, @words : Array(String), 
+      def initialize(@sentence : String, @words : Array(String),
                      @links : Array(Link) = [] of Link,
                      @disjuncts : Array(Disjunct) = [] of Disjunct,
                      @cost : Float64 = 0.0)
@@ -48,14 +49,14 @@ module NLP
             AtomSpace::AtomType::WORD_INSTANCE_NODE,
             "#{word}_#{idx}"
           )
-          
+
           # Link to the word node
           word_node = atomspace.add_node(AtomSpace::AtomType::WORD_NODE, word)
           word_instance_link = atomspace.add_link(
             AtomSpace::AtomType::WORD_INSTANCE_LINK,
             [word_instance, word_node]
           )
-          
+
           atoms << word_instance
           atoms << word_node
           atoms << word_instance_link
@@ -74,7 +75,7 @@ module NLP
           if link.left_word < word_instances.size && link.right_word < word_instances.size
             left_word = word_instances[link.left_word]
             right_word = word_instances[link.right_word]
-            
+
             # Create link node representing the link type
             link_node = atomspace.add_node(
               AtomSpace::AtomType::LG_LINK_NODE,
@@ -143,7 +144,7 @@ module NLP
     # Represents a connector in a disjunct
     struct Connector
       getter label : String
-      getter direction : String  # "+" for right, "-" for left
+      getter direction : String # "+" for right, "-" for left
       getter multi : Bool       # true if multi-connector "@"
 
       def initialize(@label : String, @direction : String, @multi : Bool = false)
@@ -168,10 +169,10 @@ module NLP
       # Parse a sentence and return all possible linkages
       def parse(sentence : String, max_linkages : Int32 = 10) : Array(Linkage)
         CogUtil::Logger.debug("Parsing sentence: #{sentence}")
-        
+
         # Tokenize the sentence
         words = tokenize_for_parse(sentence)
-        
+
         if words.empty?
           raise ParserException.new("Empty sentence")
         end
@@ -179,11 +180,11 @@ module NLP
         # For now, return a mock parse result
         # In a full implementation, this would call the Link Grammar C library
         linkages = [] of Linkage
-        
+
         # Create a simple mock linkage
         links = generate_mock_links(words)
         disjuncts = generate_mock_disjuncts(words)
-        
+
         linkage = Linkage.new(
           sentence: sentence,
           words: words,
@@ -191,24 +192,24 @@ module NLP
           disjuncts: disjuncts,
           cost: 0.0
         )
-        
+
         linkages << linkage
-        
+
         CogUtil::Logger.debug("Generated #{linkages.size} linkage(s)")
         linkages
       end
 
       # Parse sentence and store result in AtomSpace
-      def parse_to_atomspace(sentence : String, atomspace : AtomSpace::AtomSpace, 
-                            max_linkages : Int32 = 1) : Array(AtomSpace::Atom)
+      def parse_to_atomspace(sentence : String, atomspace : AtomSpace::AtomSpace,
+                             max_linkages : Int32 = 1) : Array(AtomSpace::Atom)
         linkages = parse(sentence, max_linkages)
-        
+
         all_atoms = [] of AtomSpace::Atom
         linkages.each do |linkage|
           atoms = linkage.to_atomspace(atomspace)
           all_atoms.concat(atoms)
         end
-        
+
         all_atoms
       end
 
@@ -226,7 +227,7 @@ module NLP
 
       private def generate_mock_links(words : Array(String)) : Array(Link)
         links = [] of Link
-        
+
         # Generate simple left-to-right links
         (0...words.size - 1).each do |i|
           link = Link.new(
@@ -238,16 +239,16 @@ module NLP
           )
           links << link
         end
-        
+
         links
       end
 
       private def generate_mock_disjuncts(words : Array(String)) : Array(Disjunct)
         disjuncts = [] of Disjunct
-        
+
         words.each_with_index do |word, idx|
           connectors = [] of Connector
-          
+
           # Add basic connectors based on word position
           if idx == 0
             connectors << Connector.new("S", "+", false)
@@ -257,11 +258,11 @@ module NLP
             connectors << Connector.new("S", "-", false)
             connectors << Connector.new("S", "+", false)
           end
-          
+
           disjunct = Disjunct.new(idx, word, connectors)
           disjuncts << disjunct
         end
-        
+
         disjuncts
       end
 
@@ -269,13 +270,13 @@ module NLP
         # Simple heuristic for link types
         # In practice, this would come from the LG parser
         articles = ["a", "an", "the"]
-        
+
         if articles.includes?(word1.downcase)
-          "D"  # Determiner
+          "D" # Determiner
         elsif word1.downcase.ends_with?("ly")
-          "E"  # Adverb
+          "E" # Adverb
         else
-          "S"  # Subject-verb or generic
+          "S" # Subject-verb or generic
         end
       end
     end
@@ -290,7 +291,7 @@ module NLP
       parser.parse(sentence)
     end
 
-    def self.parse_to_atomspace(sentence : String, atomspace : AtomSpace::AtomSpace, 
+    def self.parse_to_atomspace(sentence : String, atomspace : AtomSpace::AtomSpace,
                                 language : String = "en") : Array(AtomSpace::Atom)
       parser = Parser.new(language)
       parser.parse_to_atomspace(sentence, atomspace)

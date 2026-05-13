@@ -131,6 +131,11 @@ module NLP
         stemmed = stemmed[0..-4]
       end
 
+      # Reduce doubled final consonant (e.g. "bigg" -> "big", "runn" -> "run")
+      if stemmed.size >= 3 && stemmed[-1] == stemmed[-2] && !stemmed[-1].in?('e', 'o', 'l', 's')
+        stemmed = stemmed[0..-2]
+      end
+
       stemmed
     end
 

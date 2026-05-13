@@ -27,7 +27,7 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       )
 
       cluster.start
-      sleep 0.01  # Give cluster time to start
+      sleep 0.01.seconds # Give cluster time to start
 
       stats = cluster.cluster_stats
       stats["cluster_id"].as_s.should eq("stats_test")
@@ -47,7 +47,7 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       )
 
       cluster.start
-      sleep 0.01  # Give cluster time to start
+      sleep 0.01.seconds # Give cluster time to start
 
       nodes = cluster.cluster_nodes
       nodes.size.should eq(1)
@@ -85,7 +85,7 @@ describe AtomSpace::DistributedAtomSpaceCluster do
 
     it "handles different sync strategies" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Test with LastWriteWins strategy
       cluster = AtomSpace::DistributedAtomSpaceCluster.new(
         cluster_id: "strategy_test",
@@ -137,14 +137,14 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       cluster_stats["local_node_status"].as_s.should eq("Initializing")
 
       cluster.start
-      
+
       # Should be active after starting
-      sleep 0.1  # Give time for async startup
+      sleep 0.1.seconds # Give time for async startup
       cluster_stats = cluster.cluster_stats
       cluster_stats["local_node_status"].as_s.should eq("Active")
 
       cluster.stop
-      
+
       # Should be offline after stopping
       cluster_stats = cluster.cluster_stats
       cluster_stats["local_node_status"].as_s.should eq("Offline")
@@ -169,14 +169,14 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       cluster.start
 
       # Should receive NODE_JOINED event
-      sleep 0.1
+      sleep 0.1.seconds
       events.should contain(AtomSpace::ClusterEvent::NODE_JOINED)
       node_ids.should contain(cluster.node_id)
 
       cluster.stop
 
       # Should receive NODE_LEFT event
-      sleep 0.1
+      sleep 0.1.seconds
       events.should contain(AtomSpace::ClusterEvent::NODE_LEFT)
     end
   end
@@ -194,7 +194,7 @@ describe AtomSpace::DistributedAtomSpaceCluster do
       # Add atoms to increment vector clock
       concept1 = AtomSpace::ConceptNode.new("concept1")
       concept2 = AtomSpace::ConceptNode.new("concept2")
-      
+
       cluster.add_atom(concept1)
       cluster.add_atom(concept2)
 
@@ -300,7 +300,7 @@ describe AtomSpace::DistributedStorageNode do
       )
 
       cluster.start
-      sleep 0.01  # Give cluster time to start
+      sleep 0.01.seconds # Give cluster time to start
 
       storage = AtomSpace::DistributedStorageNode.new(
         name: "local_test_storage",
@@ -335,7 +335,7 @@ describe AtomSpace::DistributedStorageNode do
       )
 
       cluster.start
-      sleep 0.01  # Give cluster time to start
+      sleep 0.01.seconds # Give cluster time to start
 
       storage = AtomSpace::DistributedStorageNode.new(
         name: "removal_storage",
@@ -564,33 +564,33 @@ describe AtomSpace::ConflictResolver do
   describe "conflict resolution strategies" do
     it "resolves conflicts using last-write-wins strategy" do
       resolver = AtomSpace::ConflictResolver.new(AtomSpace::SyncStrategy::LastWriteWins)
-      
+
       concept = AtomSpace::ConceptNode.new("test_conflict")
       sync_op = AtomSpace::SyncOperation.new("update", concept.handle.to_s, "node1")
       conflict = AtomSpace::ConflictInfo.new(sync_op, "concurrent_modification")
-      
+
       resolved = resolver.resolve(conflict, concept)
-      resolved.should eq(concept)  # Last write wins
+      resolved.should eq(concept) # Last write wins
     end
 
     it "supports truth value merging strategy" do
       resolver = AtomSpace::ConflictResolver.new(AtomSpace::SyncStrategy::MergeUsingTruthValues)
-      
+
       concept = AtomSpace::ConceptNode.new("merge_test")
       sync_op = AtomSpace::SyncOperation.new("update", concept.handle.to_s, "node1")
       conflict = AtomSpace::ConflictInfo.new(sync_op, "truth_value_conflict")
-      
+
       resolved = resolver.resolve(conflict, concept)
       resolved.should_not be_nil
     end
 
     it "supports vector clock strategy" do
       resolver = AtomSpace::ConflictResolver.new(AtomSpace::SyncStrategy::VectorClock)
-      
+
       concept = AtomSpace::ConceptNode.new("vector_test")
       sync_op = AtomSpace::SyncOperation.new("update", concept.handle.to_s, "node1")
       conflict = AtomSpace::ConflictInfo.new(sync_op, "vector_clock_conflict")
-      
+
       resolved = resolver.resolve(conflict, concept)
       resolved.should_not be_nil
     end
@@ -600,28 +600,28 @@ end
 describe AtomSpace::ClusterNodeInfo do
   it "tracks node status and heartbeat" do
     node = AtomSpace::ClusterNodeInfo.new("test_node", "localhost", 25000)
-    
+
     node.id.should eq("test_node")
     node.host.should eq("localhost")
     node.port.should eq(25000)
     node.status.should eq(AtomSpace::NodeStatus::Initializing)
-    
+
     initial_time = node.last_heartbeat
-    sleep 0.001
+    sleep 0.001.seconds
     node.update_heartbeat
     node.last_heartbeat.should be > initial_time
   end
 
   it "detects stale nodes" do
     node = AtomSpace::ClusterNodeInfo.new("stale_test", "localhost", 25001)
-    
+
     # Fresh node should not be stale
     node.is_stale?(60).should be_false
-    
+
     # Manually set old heartbeat
     old_time = Time.utc - Time::Span.new(seconds: 120)
     node.last_heartbeat = old_time
-    
+
     node.is_stale?(60).should be_true
   end
 end
@@ -629,7 +629,7 @@ end
 describe AtomSpace::SyncOperation do
   it "creates sync operations with proper metadata" do
     sync_op = AtomSpace::SyncOperation.new("add", "test_handle", "source_node", "target_node")
-    
+
     sync_op.operation_type.should eq("add")
     sync_op.atom_handle.should eq("test_handle")
     sync_op.source_node.should eq("source_node")

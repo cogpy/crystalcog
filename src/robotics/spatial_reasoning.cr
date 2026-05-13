@@ -60,9 +60,9 @@ module Robotics
 
     # 3D orientation using Euler angles (radians)
     struct Orientation
-      getter roll : Float64   # rotation around x-axis
-      getter pitch : Float64  # rotation around y-axis
-      getter yaw : Float64    # rotation around z-axis
+      getter roll : Float64  # rotation around x-axis
+      getter pitch : Float64 # rotation around y-axis
+      getter yaw : Float64   # rotation around z-axis
 
       def initialize(@roll : Float64 = 0.0, @pitch : Float64 = 0.0, @yaw : Float64 = 0.0)
       end

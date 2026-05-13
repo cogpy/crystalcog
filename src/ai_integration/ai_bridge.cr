@@ -40,7 +40,7 @@ module AIIntegration
   end
 
   # AI Inference Response
-  struct InferenceResponse
+  class InferenceResponse
     property text : String
     property session_id : String
     property tokens_generated : UInt32
@@ -153,12 +153,12 @@ module AIIntegration
       end
 
       # Simulate AI inference (in real implementation, this would call C++ AI functions)
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Generate a simple response based on the prompt
       response_text = generate_demo_response(request.prompt)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       inference_time = (end_time - start_time).total_milliseconds.to_u64
 
       InferenceResponse.new(response_text, request.session_id, success: true).tap do |response|

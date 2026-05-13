@@ -59,7 +59,7 @@ module Robotics
 
     class VisionSensor
       getter id : String
-      getter field_of_view : Float64   # radians
+      getter field_of_view : Float64 # radians
       getter range : Float64
 
       def initialize(@id : String, @field_of_view : Float64 = Math::PI / 2.0, @range : Float64 = 5.0)
@@ -79,8 +79,12 @@ module Robotics
           angle_to = Math.atan2(diff.y, diff.x)
           angle_diff = angle_to - robot_yaw
           # Normalize angle
-          while angle_diff > Math::PI; angle_diff -= 2.0 * Math::PI; end
-          while angle_diff < -Math::PI; angle_diff += 2.0 * Math::PI; end
+          while angle_diff > Math::PI
+            angle_diff -= 2.0 * Math::PI
+          end
+          while angle_diff < -Math::PI
+            angle_diff += 2.0 * Math::PI
+          end
 
           if angle_diff.abs <= @field_of_view / 2.0
             confidence = 1.0 - dist / @range
@@ -96,8 +100,8 @@ module Robotics
 
     # Command sent to actuators
     struct MotorCommand
-      getter linear_velocity : Float64   # m/s forward
-      getter angular_velocity : Float64  # rad/s turning
+      getter linear_velocity : Float64  # m/s forward
+      getter angular_velocity : Float64 # rad/s turning
 
       def initialize(@linear_velocity : Float64 = 0.0, @angular_velocity : Float64 = 0.0)
       end
@@ -110,8 +114,8 @@ module Robotics
     # Simulates a differential-drive robot base
     class DifferentialDrive
       getter pose : SpatialReasoning::Pose
-      getter wheel_base : Float64   # distance between wheels (m)
-      getter max_speed : Float64    # m/s
+      getter wheel_base : Float64 # distance between wheels (m)
+      getter max_speed : Float64  # m/s
 
       def initialize(initial_pose : SpatialReasoning::Pose, @wheel_base : Float64 = 0.5, @max_speed : Float64 = 1.0)
         @pose = initial_pose

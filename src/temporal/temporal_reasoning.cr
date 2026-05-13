@@ -18,7 +18,7 @@ module Temporal
 
   # A temporal interval [start_time, end_time]
   struct Interval
-    getter start_time : Float64   # seconds since epoch (can be relative)
+    getter start_time : Float64 # seconds since epoch (can be relative)
     getter end_time : Float64
 
     def initialize(@start_time : Float64, @end_time : Float64)
@@ -44,19 +44,19 @@ module Temporal
 
   # Allen's 13 interval relations
   enum IntervalRelation
-    BEFORE          # a ends before b starts
-    MEETS           # a ends exactly when b starts
-    OVERLAPS        # a starts before b, they overlap, a ends before b ends
-    FINISHED_BY     # b ends when a ends, b starts after a
-    CONTAINS        # a starts before and ends after b
-    STARTS          # a and b start together, a ends before b
-    EQUALS          # a and b are identical
-    STARTED_BY      # a and b start together, b ends before a
-    DURING          # b starts before and ends after a
-    FINISHES        # a and b end together, a starts after b
-    OVERLAPPED_BY   # b starts before a, they overlap
-    MET_BY          # b ends exactly when a starts
-    AFTER           # b ends before a starts
+    BEFORE        # a ends before b starts
+    MEETS         # a ends exactly when b starts
+    OVERLAPS      # a starts before b, they overlap, a ends before b ends
+    FINISHED_BY   # b ends when a ends, b starts after a
+    CONTAINS      # a starts before and ends after b
+    STARTS        # a and b start together, a ends before b
+    EQUALS        # a and b are identical
+    STARTED_BY    # a and b start together, b ends before a
+    DURING        # b starts before and ends after a
+    FINISHES      # a and b end together, a starts after b
+    OVERLAPPED_BY # b starts before a, they overlap
+    MET_BY        # b ends exactly when a starts
+    AFTER         # b ends before a starts
   end
 
   # Compute Allen relation between two intervals

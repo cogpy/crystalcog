@@ -135,7 +135,8 @@ module PatternMatching
 
         all_results[0].each do |first_result|
           if all_results[1..].all? { |other_results|
-               other_results.any? { |other_result| compatible_bindings?(first_result, other_result) } }
+               other_results.any? { |other_result| compatible_bindings?(first_result, other_result) }
+             }
             intersected << first_result
           end
         end

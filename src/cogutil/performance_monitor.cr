@@ -14,10 +14,10 @@ module CogUtil
       property metric_name : String
       property value : Float64
       property tags : Hash(String, String)
-      
+
       def initialize(@timestamp : Time, @metric_name : String, @value : Float64, @tags : Hash(String, String) = Hash(String, String).new)
       end
-      
+
       def to_json(json : JSON::Builder)
         json.object do
           json.field "timestamp", @timestamp.to_rfc3339
@@ -27,24 +27,24 @@ module CogUtil
         end
       end
     end
-    
+
     # Performance alert configuration
     struct AlertRule
       property name : String
       property metric_pattern : String
       property threshold : Float64
-      property comparison : String  # "gt", "lt", "eq"
+      property comparison : String # "gt", "lt", "eq"
       property duration : Time::Span
-      property severity : String   # "critical", "warning", "info"
+      property severity : String # "critical", "warning", "info"
       property enabled : Bool
-      
+
       def initialize(@name : String, @metric_pattern : String, @threshold : Float64,
                      @comparison : String, @duration : Time::Span, @severity : String, @enabled : Bool = true)
       end
-      
+
       def triggered?(value : Float64) : Bool
         return false unless @enabled
-        
+
         case @comparison
         when "gt"
           value > @threshold
@@ -57,26 +57,26 @@ module CogUtil
         end
       end
     end
-    
+
     # Active alert instance
     struct ActiveAlert
       property rule : AlertRule
       property triggered_at : Time
       property current_value : Float64
       property acknowledged : Bool
-      
+
       def initialize(@rule : AlertRule, @triggered_at : Time, @current_value : Float64, @acknowledged : Bool = false)
       end
-      
+
       def duration : Time::Span
         Time.utc - @triggered_at
       end
-      
+
       def critical? : Bool
         @rule.severity == "critical"
       end
     end
-    
+
     @samples : Array(MetricSample)
     @alert_rules : Array(AlertRule)
     @active_alerts : Array(ActiveAlert)
@@ -86,7 +86,7 @@ module CogUtil
     @websocket_clients : Array(HTTP::WebSocket)
     @monitoring_fiber : Fiber?
     @websocket_mutex : Mutex
-    
+
     def initialize(@sample_buffer_size : Int32 = 10000)
       @samples = Array(MetricSample).new
       @alert_rules = Array(AlertRule).new
@@ -94,47 +94,47 @@ module CogUtil
       @monitoring_active = false
       @websocket_clients = Array(HTTP::WebSocket).new
       @websocket_mutex = Mutex.new
-      
+
       setup_default_alert_rules
     end
-    
+
     # Start real-time monitoring
     def start_monitoring(interval : Time::Span = 1.second)
       return if @monitoring_active
-      
+
       @monitoring_active = true
       @monitoring_fiber = spawn do
         monitor_loop(interval)
       end
-      
+
       puts "Performance monitoring started (interval: #{interval})"
     end
-    
+
     # Stop monitoring
     def stop_monitoring
       @monitoring_active = false
       @monitoring_fiber = nil
-      
+
       puts "Performance monitoring stopped"
     end
-    
+
     # Record a performance metric
     def record_metric(name : String, value : Float64, tags : Hash(String, String) = Hash(String, String).new)
       sample = MetricSample.new(Time.utc, name, value, tags)
       @samples << sample
-      
+
       # Keep buffer size under control
       if @samples.size > @sample_buffer_size
         @samples.shift(@samples.size - @sample_buffer_size)
       end
-      
+
       # Check alert rules
       check_alerts(sample)
-      
+
       # Broadcast to websocket clients
       broadcast_metric_update(sample)
     end
-    
+
     # Start HTTP dashboard server
     def start_dashboard(port : Int32 = 8080)
       start_http_server(port)
@@ -144,31 +144,31 @@ module CogUtil
     def start_http_server(port : Int32 = 8080)
       @http_server = HTTP::Server.new([
         HTTP::ErrorHandler.new,
-        HTTP::LogHandler.new
+        HTTP::LogHandler.new,
       ]) do |context|
         handle_request(context)
       end
-      
+
       spawn do
         puts "Performance monitoring server starting on http://localhost:#{port}"
         @http_server.try(&.bind_tcp("0.0.0.0", port))
         @http_server.try(&.listen)
       end
     end
-    
+
     # Stop dashboard server
     def stop_dashboard
       @http_server.try(&.close)
       @http_server = nil
       puts "Performance dashboard stopped"
     end
-    
+
     # Add custom alert rule
     def add_alert_rule(rule : AlertRule)
       @alert_rules << rule
       puts "Added alert rule: #{rule.name}"
     end
-    
+
     # Add custom alert rule with named parameters.
     # Convenience overload that constructs an AlertRule from individual parameters.
     def add_alert_rule(name : String, metric_pattern : String, threshold : Float64,
@@ -176,54 +176,54 @@ module CogUtil
                        enabled : Bool = true)
       add_alert_rule(AlertRule.new(name, metric_pattern, threshold, comparison, duration, severity, enabled))
     end
-    
+
     # Get current performance summary
     def get_performance_summary : Hash(String, JSON::Any)
       now = Time.utc
       last_minute = now - 1.minute
       last_hour = now - 1.hour
-      
+
       recent_samples = @samples.select { |s| s.timestamp > last_minute }
       hourly_samples = @samples.select { |s| s.timestamp > last_hour }
-      
+
       summary = Hash(String, JSON::Any).new
-      
+
       # Calculate metrics by name
       metric_names = @samples.map(&.metric_name).uniq
-      
+
       metric_names.each do |name|
         recent_values = recent_samples.select { |s| s.metric_name == name }.map(&.value)
         hourly_values = hourly_samples.select { |s| s.metric_name == name }.map(&.value)
-        
+
         next if recent_values.empty?
-        
+
         metric_summary = {
-          "current" => recent_values.last,
-          "avg" => recent_values.sum / recent_values.size,
-          "min" => recent_values.min,
-          "max" => recent_values.max,
+          "current"    => recent_values.last,
+          "avg"        => recent_values.sum / recent_values.size,
+          "min"        => recent_values.min,
+          "max"        => recent_values.max,
           "hourly_avg" => hourly_values.empty? ? 0.0 : hourly_values.sum / hourly_values.size,
-          "trend" => calculate_trend(recent_values),
-          "count" => recent_values.size
+          "trend"      => calculate_trend(recent_values),
+          "count"      => recent_values.size,
         }
-        
+
         summary[name] = JSON.parse(metric_summary.to_json)
       end
-      
+
       summary
     end
-    
+
     # Get recent metrics for a specific name
     def get_metric_history(name : String, duration : Time::Span = 1.hour) : Array(MetricSample)
       cutoff = Time.utc - duration
       @samples.select { |s| s.metric_name == name && s.timestamp > cutoff }
     end
-    
+
     # Get active alerts
     def get_active_alerts : Array(ActiveAlert)
       @active_alerts.dup
     end
-    
+
     # Acknowledge an alert
     def acknowledge_alert(rule_name : String)
       @active_alerts.each do |alert|
@@ -233,7 +233,7 @@ module CogUtil
         end
       end
     end
-    
+
     # Export monitoring data
     def export_monitoring_data(format : String = "json") : String
       case format
@@ -243,13 +243,13 @@ module CogUtil
             json.field "export_timestamp", Time.utc.to_rfc3339
             json.field "sample_count", @samples.size
             json.field "active_alerts", @active_alerts.size
-            
+
             json.field "samples" do
               json.array do
                 @samples.each { |sample| sample.to_json(json) }
               end
             end
-            
+
             json.field "alert_rules" do
               json.array do
                 @alert_rules.each do |rule|
@@ -272,7 +272,7 @@ module CogUtil
         raise ArgumentError.new("Unsupported format: #{format}")
       end
     end
-    
+
     # Generate performance monitoring report
     def generate_monitoring_report : String
       now = Time.utc
@@ -284,12 +284,12 @@ module CogUtil
         str << "Sample Count: #{@samples.size}\n"
         str << "Alert Rules: #{@alert_rules.size}\n"
         str << "Active Alerts: #{@active_alerts.size}\n\n"
-        
+
         # Alert status
         if @active_alerts.any?
           str << "🚨 ACTIVE ALERTS:\n"
           str << "-" * 16 << "\n"
-          
+
           @active_alerts.each do |alert|
             status = alert.acknowledged ? "ACKNOWLEDGED" : "ACTIVE"
             str << "#{alert.rule.severity.upcase}: #{alert.rule.name} [#{status}]\n"
@@ -301,22 +301,22 @@ module CogUtil
         else
           str << "✅ No active alerts\n\n"
         end
-        
+
         # Performance summary
         summary = get_performance_summary
         if summary.any?
           str << "📊 PERFORMANCE METRICS:\n"
           str << "-" * 24 << "\n"
-          
+
           summary.each do |name, data|
             current = data["current"].as_f
             avg = data["avg"].as_f
             min_val = data["min"].as_f
             max_val = data["max"].as_f
             trend = data["trend"].as_f
-            
+
             trend_icon = trend > 0.1 ? "📈" : trend < -0.1 ? "📉" : "➡️"
-            
+
             str << "#{trend_icon} #{name}:\n"
             str << "  Current: #{current.round(4)}\n"
             str << "  Average: #{avg.round(4)}\n"
@@ -324,23 +324,23 @@ module CogUtil
             str << "  Trend: #{trend > 0 ? "+" : ""}#{trend.round(4)}\n\n"
           end
         end
-        
+
         # System health indicators
         str << "🔋 SYSTEM HEALTH:\n"
         str << "-" * 16 << "\n"
-        
+
         # Calculate health metrics
         error_rate = calculate_error_rate
         response_time = calculate_avg_response_time
         memory_usage = calculate_memory_trend
-        
+
         health_score = calculate_health_score(error_rate, response_time, memory_usage)
-        
+
         str << "Overall Health Score: #{health_score}/100\n"
         str << "Error Rate: #{error_rate.round(2)}%\n"
         str << "Avg Response Time: #{response_time.round(4)}s\n"
         str << "Memory Trend: #{memory_usage > 0 ? "↗️" : "↘️"} #{memory_usage.round(2)}%\n\n"
-        
+
         str << "Recommendations:\n"
         if health_score < 70
           str << "⚠️ System health below optimal threshold\n"
@@ -358,7 +358,7 @@ module CogUtil
         end
       end
     end
-    
+
     private def setup_default_alert_rules
       # High response time alert
       @alert_rules << AlertRule.new(
@@ -369,50 +369,50 @@ module CogUtil
         duration: 30.seconds,
         severity: "warning"
       )
-      
+
       # Memory usage alert
       @alert_rules << AlertRule.new(
         name: "high_memory_usage",
         metric_pattern: "memory_usage",
-        threshold: 500_000_000.0,  # 500MB
+        threshold: 500_000_000.0, # 500MB
         comparison: "gt",
         duration: 1.minute,
         severity: "critical"
       )
-      
+
       # Error rate alert
       @alert_rules << AlertRule.new(
         name: "high_error_rate",
         metric_pattern: "error_rate",
-        threshold: 5.0,  # 5%
+        threshold: 5.0, # 5%
         comparison: "gt",
         duration: 2.minutes,
         severity: "critical"
       )
-      
+
       # CPU usage alert
       @alert_rules << AlertRule.new(
         name: "high_cpu_usage",
         metric_pattern: "cpu_usage",
-        threshold: 80.0,  # 80%
+        threshold: 80.0, # 80%
         comparison: "gt",
         duration: 5.minutes,
         severity: "warning"
       )
     end
-    
+
     private def monitor_loop(interval : Time::Span)
       while @monitoring_active
         begin
           # Collect system metrics
           collect_system_metrics
-          
+
           # Update performance metrics from active profiler session
           update_profiler_metrics
-          
+
           # Check for stale alerts
           cleanup_stale_alerts
-          
+
           sleep interval
         rescue ex
           puts "Monitoring error: #{ex.message}"
@@ -420,18 +420,18 @@ module CogUtil
         end
       end
     end
-    
+
     private def collect_system_metrics
       # Collect basic system metrics
       gc_stats = GC.stats
-      
+
       record_metric("memory_usage", gc_stats.total_bytes.to_f64)
       # record_metric("gc_collections", gc_stats.collections.to_f64)  # Not available in Crystal's GC::Stats
-      
+
       # Record timestamp for heartbeat
       record_metric("system_heartbeat", Time.utc.to_unix_f)
     end
-    
+
     private def update_profiler_metrics
       # If there's an active profiler session, extract current metrics
       if session = PerformanceProfiler.current_session
@@ -442,26 +442,26 @@ module CogUtil
         end
       end
     end
-    
+
     private def check_alerts(sample : MetricSample)
       @alert_rules.each do |rule|
         next unless rule.enabled
         next unless sample.metric_name.matches?(Regex.new(rule.metric_pattern))
-        
+
         if rule.triggered?(sample.value)
           # Check if alert already exists
           existing_alert = @active_alerts.find { |a| a.rule.name == rule.name }
-          
+
           if existing_alert
             existing_alert.current_value = sample.value
           else
             # Create new alert
             alert = ActiveAlert.new(rule, sample.timestamp, sample.value)
             @active_alerts << alert
-            
+
             puts "🚨 ALERT TRIGGERED: #{rule.name} (#{rule.severity})"
             puts "   Value: #{sample.value}, Threshold: #{rule.threshold}"
-            
+
             # Broadcast alert to websocket clients
             broadcast_alert(alert)
           end
@@ -471,13 +471,13 @@ module CogUtil
         end
       end
     end
-    
+
     private def cleanup_stale_alerts
       # Remove acknowledged alerts older than 1 hour
       cutoff = Time.utc - 1.hour
       @active_alerts.reject! { |a| a.acknowledged && a.triggered_at < cutoff }
     end
-    
+
     private def handle_request(context : HTTP::Server::Context)
       case context.request.path
       when "/"
@@ -495,77 +495,77 @@ module CogUtil
         context.response.print "Not found"
       end
     end
-    
+
     private def serve_dashboard_html(context : HTTP::Server::Context)
       html = generate_dashboard_html
       context.response.content_type = "text/html"
       context.response.print html
     end
-    
+
     private def serve_metrics_api(context : HTTP::Server::Context)
       context.response.content_type = "application/json"
       context.response.print get_performance_summary.to_json
     end
-    
+
     private def serve_alerts_api(context : HTTP::Server::Context)
       context.response.content_type = "application/json"
       alerts_json = @active_alerts.map do |alert|
         {
-          "name" => alert.rule.name,
-          "severity" => alert.rule.severity,
-          "triggered_at" => alert.triggered_at.to_rfc3339,
+          "name"          => alert.rule.name,
+          "severity"      => alert.rule.severity,
+          "triggered_at"  => alert.triggered_at.to_rfc3339,
           "current_value" => alert.current_value,
-          "threshold" => alert.rule.threshold,
-          "acknowledged" => alert.acknowledged
+          "threshold"     => alert.rule.threshold,
+          "acknowledged"  => alert.acknowledged,
         }
       end
       context.response.print alerts_json.to_json
     end
-    
+
     private def serve_summary_api(context : HTTP::Server::Context)
       context.response.content_type = "application/json"
       summary = {
         "monitoring_active" => @monitoring_active,
-        "total_samples" => @samples.size,
-        "alert_count" => @active_alerts.size,
-        "last_update" => Time.utc.to_rfc3339
+        "total_samples"     => @samples.size,
+        "alert_count"       => @active_alerts.size,
+        "last_update"       => Time.utc.to_rfc3339,
       }
       context.response.print summary.to_json
     end
-    
+
     private def handle_websocket(context : HTTP::Server::Context)
       # Upgrade HTTP connection to WebSocket using response.upgrade
       context.response.upgrade do |io|
         # Create WebSocket protocol handler
         ws_protocol = HTTP::WebSocket::Protocol.new(io, masked: false)
         ws = HTTP::WebSocket.new(ws_protocol)
-        
+
         # Add client to active connections
         @websocket_mutex.synchronize do
           @websocket_clients << ws
         end
-        
+
         puts "WebSocket client connected (total: #{@websocket_clients.size})"
-        
+
         # Send initial state
         initial_state = {
           "type" => "initial_state",
           "data" => {
             "monitoring_active" => @monitoring_active,
-            "sample_count" => @samples.size,
-            "active_alerts" => @active_alerts.size,
-            "alert_rules" => @alert_rules.size
-          }
+            "sample_count"      => @samples.size,
+            "active_alerts"     => @active_alerts.size,
+            "alert_rules"       => @alert_rules.size,
+          },
         }
-        
+
         begin
           ws.send(initial_state.to_json)
-          
+
           # Handle incoming messages
           ws.on_message do |message|
             handle_websocket_message(ws, message)
           end
-          
+
           # Handle client disconnect
           ws.on_close do
             @websocket_mutex.synchronize do
@@ -573,7 +573,7 @@ module CogUtil
             end
             puts "WebSocket client disconnected (remaining: #{@websocket_clients.size})"
           end
-          
+
           # Run the WebSocket
           ws.run
         rescue ex
@@ -584,12 +584,12 @@ module CogUtil
         end
       end
     end
-    
+
     private def handle_websocket_message(ws : HTTP::WebSocket, message : String)
       begin
         data = JSON.parse(message)
         command = data["command"]?.try(&.as_s)
-        
+
         case command
         when "get_summary"
           summary = get_performance_summary
@@ -597,12 +597,12 @@ module CogUtil
         when "get_alerts"
           alerts = @active_alerts.map do |alert|
             {
-              "name" => alert.rule.name,
-              "severity" => alert.rule.severity,
-              "value" => alert.current_value,
-              "threshold" => alert.rule.threshold,
+              "name"         => alert.rule.name,
+              "severity"     => alert.rule.severity,
+              "value"        => alert.current_value,
+              "threshold"    => alert.rule.threshold,
               "triggered_at" => alert.triggered_at.to_rfc3339,
-              "acknowledged" => alert.acknowledged
+              "acknowledged" => alert.acknowledged,
             }
           end
           ws.send({"type" => "alerts", "data" => alerts}.to_json)
@@ -618,41 +618,41 @@ module CogUtil
         ws.send({"type" => "error", "message" => ex.message}.to_json)
       end
     end
-    
+
     private def broadcast_metric_update(sample : MetricSample)
       message = {
         "type" => "metric_update",
         "data" => {
           "timestamp" => sample.timestamp.to_rfc3339,
-          "metric" => sample.metric_name,
-          "value" => sample.value,
-          "tags" => sample.tags
-        }
+          "metric"    => sample.metric_name,
+          "value"     => sample.value,
+          "tags"      => sample.tags,
+        },
       }
-      
+
       broadcast_to_websockets(message.to_json)
     end
-    
+
     private def broadcast_alert(alert : ActiveAlert)
       message = {
         "type" => "alert",
         "data" => {
-          "name" => alert.rule.name,
-          "severity" => alert.rule.severity,
-          "value" => alert.current_value,
-          "threshold" => alert.rule.threshold,
-          "triggered_at" => alert.triggered_at.to_rfc3339
-        }
+          "name"         => alert.rule.name,
+          "severity"     => alert.rule.severity,
+          "value"        => alert.current_value,
+          "threshold"    => alert.rule.threshold,
+          "triggered_at" => alert.triggered_at.to_rfc3339,
+        },
       }
-      
+
       broadcast_to_websockets(message.to_json)
     end
-    
+
     private def broadcast_to_websockets(message : String)
       # Broadcast message to all connected WebSocket clients
       @websocket_mutex.synchronize do
         disconnected = [] of HTTP::WebSocket
-        
+
         @websocket_clients.each do |client|
           begin
             client.send(message)
@@ -662,84 +662,84 @@ module CogUtil
             puts "Failed to send to WebSocket client: #{ex.message}"
           end
         end
-        
+
         # Remove disconnected clients
         disconnected.each do |client|
           @websocket_clients.delete(client)
         end
       end
     end
-    
+
     private def calculate_trend(values : Array(Float64)) : Float64
       return 0.0 if values.size < 2
-      
+
       # Simple linear trend calculation
       n = values.size
       x_sum = (0...n).sum.to_f64
       y_sum = values.sum
       xy_sum = (0...n).zip(values).sum { |x, y| x * y }
       x2_sum = (0...n).sum { |x| x * x }.to_f64
-      
+
       denominator = n * x2_sum - x_sum * x_sum
       return 0.0 if denominator == 0.0
-      
+
       (n * xy_sum - x_sum * y_sum) / denominator
     end
-    
+
     private def calculate_error_rate : Float64
       error_samples = @samples.select { |s| s.metric_name.includes?("error") }
       return 0.0 if error_samples.empty?
-      
+
       recent_errors = error_samples.select { |s| s.timestamp > Time.utc - 1.hour }
       return 0.0 if recent_errors.empty?
-      
+
       recent_errors.sum(&.value) / recent_errors.size
     end
-    
+
     private def calculate_avg_response_time : Float64
       response_samples = @samples.select { |s| s.metric_name.includes?("response_time") || s.metric_name.includes?("function_time") }
       return 0.0 if response_samples.empty?
-      
+
       recent_times = response_samples.select { |s| s.timestamp > Time.utc - 1.hour }
       return 0.0 if recent_times.empty?
-      
+
       recent_times.sum(&.value) / recent_times.size
     end
-    
+
     private def calculate_memory_trend : Float64
       memory_samples = @samples.select { |s| s.metric_name.includes?("memory") }
       return 0.0 if memory_samples.empty?
-      
+
       recent_memory = memory_samples.select { |s| s.timestamp > Time.utc - 1.hour }
       return 0.0 if recent_memory.size < 2
-      
+
       values = recent_memory.map(&.value)
       calculate_trend(values)
     end
-    
+
     private def calculate_health_score(error_rate : Float64, response_time : Float64, memory_trend : Float64) : Int32
       score = 100
-      
+
       # Deduct for high error rate
       score -= (error_rate * 2).to_i
-      
+
       # Deduct for high response time
       if response_time > 1.0
         score -= ((response_time - 1.0) * 20).to_i
       end
-      
+
       # Deduct for increasing memory trend
       if memory_trend > 0.1
         score -= (memory_trend * 100).to_i
       end
-      
+
       # Deduct for active critical alerts
       critical_alerts = @active_alerts.count(&.critical?)
       score -= critical_alerts * 10
-      
+
       [score, 0].max
     end
-    
+
     private def format_duration(duration : Time::Span) : String
       if duration.total_days >= 1
         "#{duration.total_days.to_i}d #{duration.hours}h #{duration.minutes}m"
@@ -751,7 +751,7 @@ module CogUtil
         "#{duration.seconds}s"
       end
     end
-    
+
     private def export_csv : String
       String.build do |str|
         str << "timestamp,metric_name,value,tags\n"
@@ -761,7 +761,7 @@ module CogUtil
         end
       end
     end
-    
+
     private def generate_dashboard_html : String
       <<-HTML
       <!DOCTYPE html>

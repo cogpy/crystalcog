@@ -193,9 +193,9 @@ module CogUtil
   module Timer
     # Benchmark block execution time
     def self.benchmark(description : String = "Operation", &block)
-      start_time = Time.monotonic
+      start_time = Time.instant
       result = yield
-      end_time = Time.monotonic
+      end_time = Time.instant
       elapsed = end_time - start_time
 
       Logger.info("#{description} took #{elapsed.total_milliseconds.round(3)}ms")

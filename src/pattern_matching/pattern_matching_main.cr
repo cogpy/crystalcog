@@ -282,7 +282,7 @@ module PatternMatching
   end
 
   # Module-level convenience methods for pattern matching
-  
+
   # Create a pattern matcher for the given atomspace
   def self.create_matcher(atomspace : AtomSpace::AtomSpace) : PatternMatcher
     PatternMatcher.new(atomspace)

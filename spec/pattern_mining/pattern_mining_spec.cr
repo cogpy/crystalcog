@@ -212,9 +212,9 @@ describe PatternMining do
 
       miner = PatternMining::PatternMiner.new(atomspace, min_support: 1, max_patterns: 1000, timeout_seconds: 1)
 
-      start_time = Time.monotonic
+      start_time = Time.instant
       result = miner.mine_patterns
-      elapsed = Time.monotonic - start_time
+      elapsed = Time.instant - start_time
 
       # Should complete within reasonable time (allowing some overhead)
       elapsed.total_seconds.should be < 5.0

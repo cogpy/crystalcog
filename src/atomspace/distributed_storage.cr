@@ -10,10 +10,10 @@ require "base64"
 module AtomSpace
   # Data partitioning strategy
   enum PartitionStrategy
-    RoundRobin      # Distribute atoms in round-robin fashion
-    HashBased       # Use atom handle hash for consistent partitioning
-    TypeBased       # Partition based on atom type
-    LoadBalanced    # Dynamic partitioning based on node load
+    RoundRobin   # Distribute atoms in round-robin fashion
+    HashBased    # Use atom handle hash for consistent partitioning
+    TypeBased    # Partition based on atom type
+    LoadBalanced # Dynamic partitioning based on node load
   end
 
   # Replication strategy
@@ -101,11 +101,11 @@ module AtomSpace
         total = @hits + @misses
         hit_rate = total > 0 ? (@hits.to_f64 / total.to_f64) * 100.0 : 0.0
         {
-          "size" => @cache.size.to_i32,
-          "max_size" => @max_size.to_i32,
-          "hits" => @hits.to_u64,
-          "misses" => @misses.to_u64,
-          "hit_rate_percent" => hit_rate
+          "size"             => @cache.size.to_i32,
+          "max_size"         => @max_size.to_i32,
+          "hits"             => @hits.to_u64,
+          "misses"           => @misses.to_u64,
+          "hit_rate_percent" => hit_rate,
         }
       end
     end
@@ -237,12 +237,12 @@ module AtomSpace
         total = @hits + @misses
         hit_rate = total > 0 ? (@hits.to_f64 / total.to_f64) * 100.0 : 0.0
         {
-          "size" => @cache.size.to_i32,
-          "max_size" => @max_size.to_i32,
-          "hits" => @hits.to_u64,
-          "misses" => @misses.to_u64,
+          "size"             => @cache.size.to_i32,
+          "max_size"         => @max_size.to_i32,
+          "hits"             => @hits.to_u64,
+          "misses"           => @misses.to_u64,
           "hit_rate_percent" => hit_rate,
-          "ttl_seconds" => @ttl.total_seconds.to_u64
+          "ttl_seconds"      => @ttl.total_seconds.to_u64,
         }
       end
     end
@@ -282,8 +282,8 @@ module AtomSpace
     property enable_partition_cache : Bool
 
     @local_storage : StorageNode
-    @partition_map : Hash(String, String)  # atom_handle -> responsible_node_id
-    @replica_map : Hash(String, Array(String))  # atom_handle -> replica_node_ids
+    @partition_map : Hash(String, String)      # atom_handle -> responsible_node_id
+    @replica_map : Hash(String, Array(String)) # atom_handle -> replica_node_ids
     @lru_cache : LRUCache
     @partition_info_cache : PartitionInfoCache
 
@@ -402,20 +402,20 @@ module AtomSpace
 
         # Compress if enabled and data is large enough
         message = if @enable_compression && NetworkCompression.should_compress?(json_data)
-          {
-            "type" => "store_atom",
-            "compressed" => true,
-            "atom_data" => Base64.strict_encode(NetworkCompression.compress(json_data)),
-            "source_node" => @cluster.node_id
-          }
-        else
-          {
-            "type" => "store_atom",
-            "compressed" => false,
-            "atom_data" => atom_data,
-            "source_node" => @cluster.node_id
-          }
-        end
+                    {
+                      "type"        => "store_atom",
+                      "compressed"  => true,
+                      "atom_data"   => Base64.strict_encode(NetworkCompression.compress(json_data)),
+                      "source_node" => @cluster.node_id,
+                    }
+                  else
+                    {
+                      "type"        => "store_atom",
+                      "compressed"  => false,
+                      "atom_data"   => atom_data,
+                      "source_node" => @cluster.node_id,
+                    }
+                  end
 
         send_message_to_node(node_info, message)
       rescue ex
@@ -525,7 +525,7 @@ module AtomSpace
 
     def store_atomspace(atomspace : AtomSpace) : Bool
       success = true
-      
+
       atomspace.get_all_atoms.each do |atom|
         success = false unless store_atom(atom)
       end
@@ -543,7 +543,7 @@ module AtomSpace
       cluster_count = 0
       @cluster.cluster_nodes.each do |node_info|
         next if node_info.id == @cluster.node_id
-        
+
         node_atoms = fetch_all_atoms_from_node(node_info.id)
         node_atoms.each do |atom|
           unless atomspace.contains?(atom)
@@ -585,18 +585,18 @@ module AtomSpace
       # Add cache statistics if enabled
       if @enable_cache
         cache_stats = @lru_cache.stats
-        stats["cache_size"] = cache_stats["size"].as(UInt64).to_i64
-        stats["cache_hits"] = cache_stats["hits"].as(UInt64).to_i64
-        stats["cache_misses"] = cache_stats["misses"].as(UInt64).to_i64
+        stats["cache_size"] = cache_stats["size"].to_s.to_i64
+        stats["cache_hits"] = cache_stats["hits"].to_s.to_i64
+        stats["cache_misses"] = cache_stats["misses"].to_s.to_i64
       end
 
       # Add partition cache statistics if enabled
       stats["partition_cache_enabled"] = @enable_partition_cache ? "true" : "false"
       if @enable_partition_cache
         pcache_stats = @partition_info_cache.stats
-        stats["partition_cache_size"] = pcache_stats["size"].as(UInt64).to_i64
-        stats["partition_cache_hits"] = pcache_stats["hits"].as(UInt64).to_i64
-        stats["partition_cache_misses"] = pcache_stats["misses"].as(UInt64).to_i64
+        stats["partition_cache_size"] = pcache_stats["size"].to_s.to_i64
+        stats["partition_cache_hits"] = pcache_stats["hits"].to_s.to_i64
+        stats["partition_cache_misses"] = pcache_stats["misses"].to_s.to_i64
       end
 
       stats
@@ -631,10 +631,10 @@ module AtomSpace
     # Rebalance data across cluster nodes
     def rebalance_cluster : Bool
       log_info("Starting cluster rebalancing")
-      
+
       # Get current load distribution
       node_loads = calculate_node_loads
-      
+
       # Identify over-loaded and under-loaded nodes
       avg_load = node_loads.values.sum / node_loads.size
       overloaded = node_loads.select { |_, load| load > avg_load * 1.2 }
@@ -642,7 +642,7 @@ module AtomSpace
 
       # Move partitions from overloaded to underloaded nodes
       migrations = plan_migrations(overloaded, underloaded)
-      
+
       success = true
       migrations.each do |migration|
         unless execute_migration(migration)
@@ -664,18 +664,18 @@ module AtomSpace
       metrics = Hash(String, JSON::Any).new
       metrics["total_atoms"] = JSON::Any.new(total_atoms.to_i64)
       metrics["average_load"] = JSON::Any.new(total_atoms.to_f / @cluster.cluster_nodes.size)
-      
+
       node_metrics = {} of String => JSON::Any
       node_loads.each do |node_id, load|
         node_data = {
-          "atom_count" => JSON::Any.new(load.to_i64),
-          "load_percentage" => JSON::Any.new((load.to_f / total_atoms * 100).round(2))
+          "atom_count"      => JSON::Any.new(load.to_i64),
+          "load_percentage" => JSON::Any.new((load.to_f / total_atoms * 100).round(2)),
         }
         node_metrics[node_id] = JSON::Any.new(node_data)
       end
-      
+
       metrics["node_distribution"] = JSON::Any.new(node_metrics)
-      
+
       # Calculate load balance score (closer to 1.0 is better)
       if total_atoms > 0
         ideal_load = total_atoms.to_f / @cluster.cluster_nodes.size
@@ -721,12 +721,12 @@ module AtomSpace
       # Simple consistent hashing implementation
       node_list = @cluster.cluster_nodes.map(&.id).sort
       hash_value = key.hash.abs.to_u64
-      
+
       node_list.each do |node_id|
         node_hash = node_id.hash.abs.to_u64
         return node_id if hash_value <= node_hash
       end
-      
+
       node_list.first
     end
 
@@ -762,9 +762,9 @@ module AtomSpace
 
       begin
         message = {
-          "type" => "replicate_atom",
-          "atom_data" => serialize_atom_for_replication(atom),
-          "source_node" => @cluster.node_id
+          "type"        => "replicate_atom",
+          "atom_data"   => serialize_atom_for_replication(atom),
+          "source_node" => @cluster.node_id,
         }
 
         send_message_to_node(node_info, message)
@@ -780,9 +780,9 @@ module AtomSpace
 
       begin
         message = {
-          "type" => "fetch_atom",
-          "atom_handle" => handle.to_s,
-          "requesting_node" => @cluster.node_id
+          "type"            => "fetch_atom",
+          "atom_handle"     => handle.to_s,
+          "requesting_node" => @cluster.node_id,
         }
 
         response = send_message_to_node_with_response(node_info, message)
@@ -806,9 +806,9 @@ module AtomSpace
 
       begin
         message = {
-          "type" => "remove_atom",
+          "type"        => "remove_atom",
           "atom_handle" => atom.handle.to_s,
-          "source_node" => @cluster.node_id
+          "source_node" => @cluster.node_id,
         }
 
         send_message_to_node(node_info, message)
@@ -824,8 +824,8 @@ module AtomSpace
 
       begin
         message = {
-          "type" => "fetch_all_atoms",
-          "requesting_node" => @cluster.node_id
+          "type"            => "fetch_all_atoms",
+          "requesting_node" => @cluster.node_id,
         }
 
         response = send_message_to_node_with_response(node_info, message)
@@ -861,10 +861,10 @@ module AtomSpace
       begin
         socket = TCPSocket.new(node_info.host, node_info.port)
         socket.puts(message.to_json)
-        
+
         response_data = socket.gets
         socket.close
-        
+
         return JSON.parse(response_data) if response_data
       rescue ex
         log_error("Failed to send message with response to node #{node_info.id}: #{ex.message}")
@@ -913,7 +913,7 @@ module AtomSpace
 
     private def calculate_node_loads : Hash(String, Int32)
       loads = Hash(String, Int32).new
-      
+
       # Initialize all nodes with zero load
       @cluster.cluster_nodes.each do |node_info|
         loads[node_info.id] = 0
@@ -929,18 +929,18 @@ module AtomSpace
 
     private def plan_migrations(overloaded : Hash(String, Int32), underloaded : Hash(String, Int32)) : Array(MigrationPlan)
       migrations = [] of MigrationPlan
-      
+
       overloaded.each do |source_node, load|
         target_nodes = underloaded.keys
         next if target_nodes.empty?
-        
+
         # Calculate how many atoms to move
         avg_load = (@partition_map.size / @cluster.cluster_nodes.size).to_i
         atoms_to_move = load - avg_load
-        
+
         # Select atoms to migrate (simplified - would use better heuristics)
         atoms_to_migrate = @partition_map.select { |_, node| node == source_node }.keys.first(atoms_to_move)
-        
+
         atoms_to_migrate.each_with_index do |atom_handle, index|
           target_node = target_nodes[index % target_nodes.size]
           migrations << MigrationPlan.new(atom_handle, source_node, target_node)
@@ -954,11 +954,11 @@ module AtomSpace
       # Move atom from source to target node
       # This would involve coordination between nodes
       log_debug("Executing migration: #{migration.atom_handle} from #{migration.source_node} to #{migration.target_node}")
-      
+
       # Update partition map
       @partition_map[migration.atom_handle] = migration.target_node
-      
-      true  # Simplified - real implementation would handle actual data movement
+
+      true # Simplified - real implementation would handle actual data movement
     end
 
     private def handle_cluster_event(event : ClusterEvent, node_id : String)

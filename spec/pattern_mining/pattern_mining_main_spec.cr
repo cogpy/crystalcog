@@ -26,7 +26,7 @@ describe "Pattern Mining Main" do
       # Add some atoms to the atomspace
       atomspace.add_concept_node("test1")
       atomspace.add_concept_node("test2")
-      
+
       # The mine method should exist and be callable
       result = PatternMining.mine(atomspace, min_support: 1, max_patterns: 10, timeout_seconds: 5)
       result.should be_a(PatternMining::MiningResult)
@@ -37,7 +37,7 @@ describe "Pattern Mining Main" do
       atomspace = AtomSpace::AtomSpace.new
       atomspace.add_concept_node("test1")
       atomspace.add_concept_node("test2")
-      
+
       result = PatternMining.mine(atomspace, min_support: 1, max_patterns: 10, timeout_seconds: 5)
       # The result should have frequency analysis methods
       frequent = result.frequent_patterns(1)

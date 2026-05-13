@@ -55,7 +55,7 @@ describe "CogServer Main" do
     it "provides server statistics" do
       server = CogServer::Server.new
       stats = server.stats
-      
+
       stats.should be_a(Hash(String, Int32 | String | Bool | UInt64))
       stats["running"].should be_a(Bool)
       stats["host"].should be_a(String)

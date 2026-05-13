@@ -39,7 +39,7 @@ module AtomSpace
                                       replication_strategy : ReplicationStrategy = ReplicationStrategy::PrimaryBackup,
                                       replication_factor : Int32 = 2) : DistributedStorageNode
     DistributedStorageNode.new(name, cluster, local_storage_backend, storage_path,
-                              partition_strategy, replication_strategy, replication_factor)
+      partition_strategy, replication_strategy, replication_factor)
   end
 
   # Shutdown and cleanup

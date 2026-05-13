@@ -122,10 +122,10 @@ describe "AI Integration - Milestone 5" do
 
       results = integration.cognitive_ai_reasoning("What is artificial intelligence?", 3)
 
-      results.should_not have_key("error")
-      results.should have_key("ai_analysis")
-      results.should have_key("synthesis")
-      results.should have_key("status")
+      results.has_key?("error").should be_false
+      results.has_key?("ai_analysis").should be_true
+      results.has_key?("synthesis").should be_true
+      results.has_key?("status").should be_true
 
       results["status"].should eq("Complete cognitive-AI reasoning cycle")
       results["ai_analysis"].should_not be_empty
@@ -160,7 +160,7 @@ describe "AI Integration - Milestone 5" do
 
       # Don't setup workbench
       results = integration.cognitive_ai_reasoning("Test query")
-      results.should have_key("error")
+      results.has_key?("error").should be_true
       results["error"].should eq("AI integration not active")
     end
 

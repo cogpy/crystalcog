@@ -89,11 +89,11 @@ end
 # Run if this file is executed directly or compiled as cogserver binary
 # Check if this is being run as the main program, not when required as a library
 # Exclude crystal-run (from `crystal run`) and .cr files (from requires)
-if (PROGRAM_NAME == __FILE__ || 
-    PROGRAM_NAME.ends_with?("cogserver_main") || 
-    PROGRAM_NAME.ends_with?("cogserver") ||
-    PROGRAM_NAME.ends_with?("cogserver_bin")) &&
-   !PROGRAM_NAME.includes?("crystal-run") && 
+if (PROGRAM_NAME == __FILE__ ||
+   PROGRAM_NAME.ends_with?("cogserver_main") ||
+   PROGRAM_NAME.ends_with?("cogserver") ||
+   PROGRAM_NAME.ends_with?("cogserver_bin")) &&
+   !PROGRAM_NAME.includes?("crystal-run") &&
    !PROGRAM_NAME.ends_with?(".cr")
   CogServer.main
 end

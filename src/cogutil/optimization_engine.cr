@@ -16,23 +16,23 @@ module CogUtil
       property implementation_difficulty : String
       property code_examples : Array(String)
       property related_functions : Array(String)
-      
+
       def initialize(@category : String, @priority : Int32, @function_name : String,
                      @issue_description : String, @optimization_strategy : String,
                      @expected_improvement : Float64, @implementation_difficulty : String,
                      @code_examples : Array(String) = Array(String).new,
                      @related_functions : Array(String) = Array(String).new)
       end
-      
+
       def critical? : Bool
         @priority >= 90
       end
-      
+
       def high_priority? : Bool
         @priority >= 70
       end
     end
-    
+
     # Performance pattern analysis result
     struct PerformancePattern
       property pattern_type : String
@@ -40,33 +40,33 @@ module CogUtil
       property affected_functions : Array(String)
       property pattern_description : String
       property optimization_potential : Float64
-      
+
       def initialize(@pattern_type : String, @severity : Float64,
                      @affected_functions : Array(String), @pattern_description : String,
                      @optimization_potential : Float64)
       end
     end
-    
+
     @profiler_session : PerformanceProfiler::Session?
     @regression_detector : PerformanceRegression
     @optimization_rules : Hash(String, Proc(PerformanceProfiler::Metrics, Recommendation?))
-    
+
     def initialize(regression_detector : PerformanceRegression? = nil)
       @regression_detector = regression_detector || PerformanceRegression.new
       @optimization_rules = Hash(String, Proc(PerformanceProfiler::Metrics, Recommendation?)).new
       initialize_optimization_rules
     end
-    
+
     # Set the profiler session for optimization analysis
     def profiler_session=(session : PerformanceProfiler::Session?)
       @profiler_session = session
     end
-    
+
     # Analyze performance data and generate optimization recommendations
     def analyze_and_recommend(session : PerformanceProfiler::Session) : Array(Recommendation)
       @profiler_session = session
       recommendations = Array(Recommendation).new
-      
+
       # Apply optimization rules to each function
       session.all_metrics.each do |function_name, metrics|
         @optimization_rules.each do |rule_name, rule|
@@ -76,15 +76,15 @@ module CogUtil
           end
         end
       end
-      
+
       # Analyze global patterns
       pattern_recommendations = analyze_global_patterns(session)
       recommendations.concat(pattern_recommendations)
-      
+
       # Sort by priority and expected improvement
       recommendations.sort_by { |r| [-r.priority, -r.expected_improvement] }
     end
-    
+
     # Generate comprehensive optimization report
     def generate_optimization_report(recommendations : Array(Recommendation)) : String
       String.build do |str|
@@ -92,49 +92,49 @@ module CogUtil
         str << "=" * 50 << "\n"
         str << "Generated: #{Time.utc}\n"
         str << "Total Recommendations: #{recommendations.size}\n\n"
-        
+
         if recommendations.empty?
           str << "✅ No optimization opportunities detected!\n"
           str << "Your code appears to be well-optimized.\n"
           return str.to_s
         end
-        
+
         # Group by priority
         critical = recommendations.select(&.critical?)
         high_priority = recommendations.select(&.high_priority?).reject(&.critical?)
         normal_priority = recommendations.reject(&.high_priority?)
-        
+
         if critical.any?
           str << "🚨 CRITICAL OPTIMIZATIONS (Immediate Action Required):\n"
           str << "=" * 55 << "\n"
           critical.each { |rec| str << format_recommendation(rec) }
           str << "\n"
         end
-        
+
         if high_priority.any?
           str << "🔥 HIGH PRIORITY OPTIMIZATIONS:\n"
           str << "=" * 35 << "\n"
           high_priority.each { |rec| str << format_recommendation(rec) }
           str << "\n"
         end
-        
+
         if normal_priority.any?
           str << "💡 ADDITIONAL OPTIMIZATION OPPORTUNITIES:\n"
           str << "=" * 45 << "\n"
           normal_priority.each { |rec| str << format_recommendation(rec) }
           str << "\n"
         end
-        
+
         # Summary and quick wins
         str << generate_optimization_summary(recommendations)
       end
     end
-    
+
     # Analyze code patterns across all functions
     def analyze_global_patterns(session : PerformanceProfiler::Session) : Array(Recommendation)
       patterns = detect_performance_patterns(session)
       recommendations = Array(Recommendation).new
-      
+
       patterns.each do |pattern|
         case pattern.pattern_type
         when "hot_path_inefficiency"
@@ -149,15 +149,15 @@ module CogUtil
           recommendations << create_computation_optimization_recommendation(pattern)
         end
       end
-      
+
       recommendations.compact
     end
-    
+
     # Estimate optimization impact based on function metrics
     def estimate_optimization_impact(function_name : String, optimization_type : String) : Float64
       return 0.0 unless session = @profiler_session
       return 0.0 unless metrics = session.get_metrics(function_name)
-      
+
       case optimization_type
       when "algorithm_improvement"
         # Estimate based on call frequency and current time
@@ -178,30 +178,30 @@ module CogUtil
         0.1
       end
     end
-    
+
     # Get optimization roadmap prioritized by impact
     def get_optimization_roadmap(recommendations : Array(Recommendation)) : Hash(String, Array(Recommendation))
       roadmap = Hash(String, Array(Recommendation)).new
-      
+
       # Phase 1: Quick wins (high impact, low difficulty)
       quick_wins = recommendations.select do |r|
         r.expected_improvement > 0.3 && r.implementation_difficulty == "low"
       end
       roadmap["Phase 1: Quick Wins"] = quick_wins
-      
+
       # Phase 2: High impact optimizations
       high_impact = recommendations.select do |r|
         r.expected_improvement > 0.4 && r.implementation_difficulty != "low" && !quick_wins.includes?(r)
       end
       roadmap["Phase 2: High Impact"] = high_impact
-      
+
       # Phase 3: Systematic improvements
       systematic = recommendations.reject { |r| quick_wins.includes?(r) || high_impact.includes?(r) }
       roadmap["Phase 3: Systematic Improvements"] = systematic
-      
+
       roadmap
     end
-    
+
     private def initialize_optimization_rules
       # High execution time optimization
       @optimization_rules["high_execution_time"] = ->(metrics : PerformanceProfiler::Metrics) {
@@ -218,12 +218,12 @@ module CogUtil
               "# Consider algorithmic improvements",
               "# Profile hot code paths with --profile",
               "# Use Channel(T) for parallel processing",
-              "# Cache expensive computations"
+              "# Cache expensive computations",
             ]
           )
         end
       }
-      
+
       # High memory usage optimization
       @optimization_rules["high_memory_usage"] = ->(metrics : PerformanceProfiler::Metrics) {
         memory_mb = metrics.memory_peak.to_f64 / (1024 * 1024)
@@ -240,17 +240,17 @@ module CogUtil
               "# Use object pooling for frequent allocations",
               "# Consider streaming for large data sets",
               "# Use Slice(T) instead of Array(T) when possible",
-              "# Implement lazy loading for large objects"
+              "# Implement lazy loading for large objects",
             ]
           )
         end
       }
-      
+
       # High call frequency optimization
       @optimization_rules["high_call_frequency"] = ->(metrics : PerformanceProfiler::Metrics) {
         if metrics.call_count > 10000
           avg_time = metrics.wall_time / metrics.call_count
-          if avg_time > 0.001  # More than 1ms per call
+          if avg_time > 0.001 # More than 1ms per call
             Recommendation.new(
               category: "Caching",
               priority: 75,
@@ -264,13 +264,13 @@ module CogUtil
                 "@cache = Hash(InputType, ResultType).new",
                 "def cached_method(input)",
                 "  @cache[input] ||= expensive_computation(input)",
-                "end"
+                "end",
               ]
             )
           end
         end
       }
-      
+
       # Error-prone function optimization
       @optimization_rules["error_prone"] = ->(metrics : PerformanceProfiler::Metrics) {
         if metrics.errors > 0 && metrics.call_count > 0
@@ -288,16 +288,16 @@ module CogUtil
                 "# Add comprehensive input validation",
                 "# Use Result(T, E) for error handling",
                 "# Implement circuit breaker pattern",
-                "# Add defensive programming checks"
+                "# Add defensive programming checks",
               ]
             )
           end
         end
       }
-      
+
       # GC pressure optimization
       @optimization_rules["gc_pressure"] = ->(metrics : PerformanceProfiler::Metrics) {
-        if metrics.gc_time > metrics.wall_time * 0.1  # GC takes more than 10% of time
+        if metrics.gc_time > metrics.wall_time * 0.1 # GC takes more than 10% of time
           Recommendation.new(
             category: "Memory",
             priority: 70,
@@ -310,21 +310,21 @@ module CogUtil
               "# Use object pooling",
               "# Reuse buffers and arrays",
               "# Prefer value types over reference types",
-              "# Use StaticArray for fixed-size collections"
+              "# Use StaticArray for fixed-size collections",
             ]
           )
         end
       }
     end
-    
+
     private def detect_performance_patterns(session : PerformanceProfiler::Session) : Array(PerformancePattern)
       patterns = Array(PerformancePattern).new
       all_metrics = session.all_metrics
-      
+
       # Detect hot path inefficiency
       total_time = all_metrics.values.sum(&.wall_time)
       hot_functions = all_metrics.select { |name, metrics| metrics.wall_time > total_time * 0.1 }
-      
+
       if hot_functions.any?
         patterns << PerformancePattern.new(
           pattern_type: "hot_path_inefficiency",
@@ -334,12 +334,12 @@ module CogUtil
           optimization_potential: 0.6
         )
       end
-      
+
       # Detect memory thrashing
-      high_memory_functions = all_metrics.select { |name, metrics| 
-        metrics.memory_peak > 50_000_000  # > 50MB
+      high_memory_functions = all_metrics.select { |name, metrics|
+        metrics.memory_peak > 50_000_000 # > 50MB
       }
-      
+
       if high_memory_functions.size > 2
         patterns << PerformancePattern.new(
           pattern_type: "memory_thrashing",
@@ -349,7 +349,7 @@ module CogUtil
           optimization_potential: 0.5
         )
       end
-      
+
       # Detect excessive allocation pattern
       frequent_callers = all_metrics.select { |name, metrics| metrics.call_count > 1000 }
       if frequent_callers.size > 5
@@ -361,10 +361,10 @@ module CogUtil
           optimization_potential: 0.4
         )
       end
-      
+
       patterns
     end
-    
+
     private def create_hot_path_recommendation(pattern : PerformancePattern) : Recommendation
       Recommendation.new(
         category: "Architecture",
@@ -378,12 +378,12 @@ module CogUtil
           "# Profile hot paths with sampling profiler",
           "# Consider breaking up monolithic functions",
           "# Use async/await for I/O bound operations",
-          "# Implement lazy evaluation where possible"
+          "# Implement lazy evaluation where possible",
         ],
         related_functions: pattern.affected_functions
       )
     end
-    
+
     private def create_memory_optimization_recommendation(pattern : PerformancePattern) : Recommendation
       Recommendation.new(
         category: "Memory",
@@ -395,14 +395,14 @@ module CogUtil
         implementation_difficulty: "medium",
         code_examples: [
           "# Implement global memory pools",
-          "# Use object recycling patterns", 
+          "# Use object recycling patterns",
           "# Consider streaming for large datasets",
-          "# Use weak references where appropriate"
+          "# Use weak references where appropriate",
         ],
         related_functions: pattern.affected_functions
       )
     end
-    
+
     private def create_allocation_reduction_recommendation(pattern : PerformancePattern) : Recommendation
       Recommendation.new(
         category: "Memory",
@@ -416,12 +416,12 @@ module CogUtil
           "# Cache and reuse expensive objects",
           "# Use buffer pools for temporary allocations",
           "# Prefer stack allocation with StaticArray",
-          "# Implement copy-on-write semantics"
+          "# Implement copy-on-write semantics",
         ],
         related_functions: pattern.affected_functions
       )
     end
-    
+
     private def create_cache_optimization_recommendation(pattern : PerformancePattern) : Recommendation
       Recommendation.new(
         category: "Caching",
@@ -435,12 +435,12 @@ module CogUtil
           "# Implement LRU cache for frequently accessed data",
           "# Use memoization for pure functions",
           "# Consider bloom filters for existence checks",
-          "# Implement cache warming strategies"
+          "# Implement cache warming strategies",
         ],
         related_functions: pattern.affected_functions
       )
     end
-    
+
     private def create_computation_optimization_recommendation(pattern : PerformancePattern) : Recommendation
       Recommendation.new(
         category: "Algorithm",
@@ -454,25 +454,25 @@ module CogUtil
           "# Analyze algorithm complexity (Big O)",
           "# Use more efficient data structures",
           "# Implement early termination conditions",
-          "# Consider approximation algorithms for acceptable trade-offs"
+          "# Consider approximation algorithms for acceptable trade-offs",
         ],
         related_functions: pattern.affected_functions
       )
     end
-    
+
     private def estimate_time_improvement(metrics : PerformanceProfiler::Metrics) : Float64
       # Estimate improvement based on current performance characteristics
       if metrics.wall_time > 2.0
-        0.6  # High potential for improvement
+        0.6 # High potential for improvement
       elsif metrics.wall_time > 0.5
-        0.4  # Medium potential
+        0.4 # Medium potential
       elsif metrics.call_count > 10000
-        0.3  # Frequent calls, good caching potential
+        0.3 # Frequent calls, good caching potential
       else
-        0.2  # Lower potential
+        0.2 # Lower potential
       end
     end
-    
+
     private def format_recommendation(rec : Recommendation) : String
       String.build do |str|
         str << "#{rec.category.upcase}: #{rec.function_name}\n"
@@ -480,37 +480,37 @@ module CogUtil
         str << "Difficulty: #{rec.implementation_difficulty.capitalize}\n"
         str << "\nIssue: #{rec.issue_description}\n"
         str << "Strategy: #{rec.optimization_strategy}\n"
-        
+
         if rec.code_examples.any?
           str << "\nCode Examples:\n"
           rec.code_examples.each { |example| str << "#{example}\n" }
         end
-        
+
         if rec.related_functions.any?
           str << "\nRelated Functions: #{rec.related_functions.join(", ")}\n"
         end
-        
+
         str << "\n" + "-" * 60 + "\n\n"
       end
     end
-    
+
     private def generate_optimization_summary(recommendations : Array(Recommendation)) : String
       String.build do |str|
         str << "OPTIMIZATION SUMMARY:\n"
         str << "=" * 25 << "\n"
-        
+
         # Calculate potential improvements
         total_improvement = recommendations.sum(&.expected_improvement)
         categories = recommendations.group_by(&.category)
-        
+
         str << "Potential Total Improvement: #{(total_improvement * 100).round(1)}%\n"
         str << "Optimization Categories:\n"
-        
+
         categories.each do |category, recs|
           avg_improvement = recs.sum(&.expected_improvement) / recs.size
           str << "  #{category}: #{recs.size} recommendations (avg #{(avg_improvement * 100).round(1)}% improvement)\n"
         end
-        
+
         str << "\nQuick Wins (Low effort, high impact):\n"
         quick_wins = recommendations.select { |r| r.implementation_difficulty == "low" && r.expected_improvement > 0.3 }
         if quick_wins.any?
@@ -518,7 +518,7 @@ module CogUtil
         else
           str << "  No quick wins identified\n"
         end
-        
+
         str << "\nNext Steps:\n"
         str << "1. Address critical issues first (priority >= 90)\n"
         str << "2. Implement quick wins for immediate impact\n"
