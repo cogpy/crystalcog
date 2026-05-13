@@ -142,7 +142,10 @@ module CogUtil
 
     # Start HTTP server for monitoring API and WebSocket
     def start_http_server(port : Int32 = 8080)
-      @http_server = HTTP::Server.new do |context|
+      @http_server = HTTP::Server.new([
+        HTTP::ErrorHandler.new,
+        HTTP::LogHandler.new
+      ]) do |context|
         handle_request(context)
       end
       
@@ -166,7 +169,8 @@ module CogUtil
       puts "Added alert rule: #{rule.name}"
     end
     
-    # Add custom alert rule with named parameters
+    # Add custom alert rule with named parameters.
+    # Convenience overload that constructs an AlertRule from individual parameters.
     def add_alert_rule(name : String, metric_pattern : String, threshold : Float64,
                        comparison : String, duration : Time::Span, severity : String,
                        enabled : Bool = true)
