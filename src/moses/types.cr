@@ -19,7 +19,7 @@ module Moses
   def self.compare_candidates(a : Candidate, b : Candidate) : Int32
     score_a = score_or_worst(a)
     score_b = score_or_worst(b)
-    score_a <=> score_b
+    (score_a <=> score_b) || 0
   end
 
   # Complexity type for measuring program complexity
