@@ -243,6 +243,8 @@ module AtomSpace
       outgoing.size
     end
 
+    # Cycle detection for clone — safe with cooperative concurrency (no yield
+    # points in pure computation). For -Dpreview_mt, would need fiber-local storage.
     @@clone_visited = Set(UInt64).new
 
     def clone : Atom
@@ -258,35 +260,37 @@ module AtomSpace
       end
     end
 
-    # Visited set to detect cycles in to_s (not thread-safe; for multi-threaded
-    # use, pass visited set as a parameter instead)
-    @@to_s_visited = Set(UInt64).new
-
     def to_s(io : IO) : Nil
-      if @@to_s_visited.includes?(@handle)
+      to_s_impl(io, Set(UInt64).new)
+    end
+
+    protected def to_s_impl(io : IO, visited : Set(UInt64)) : Nil
+      if visited.includes?(@handle)
         io << "(#{type} ...)"
         return
       end
-      @@to_s_visited.add(@handle)
-      begin
-        io << "(#{type}"
-        outgoing.each do |atom|
-          io << " "
+      visited.add(@handle)
+      io << "(#{type}"
+      outgoing.each do |atom|
+        io << " "
+        if atom.is_a?(Link)
+          atom.to_s_impl(io, visited)
+        else
           atom.to_s(io)
         end
-        io << ")"
-      ensure
-        @@to_s_visited.delete(@handle)
       end
+      io << ")"
     end
 
-    @@eq_visited = Set(UInt64).new
+    # Cycle detection for content_equals? — uses Tuple to avoid hash collisions.
+    # Safe with cooperative concurrency (no yield points in pure computation).
+    @@eq_visited = Set(Tuple(UInt64, UInt64)).new
 
     def content_equals?(other : Atom) : Bool
       return false unless other.is_a?(Link)
       return false unless outgoing.size == other.outgoing.size
 
-      pair_key = @handle &* 31 &+ other.handle
+      pair_key = {self.handle, other.handle}
       if @@eq_visited.includes?(pair_key)
         return true
       end
