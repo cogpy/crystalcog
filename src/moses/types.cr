@@ -417,8 +417,9 @@ module Moses
       @parsed_program = nil
     end
 
-    def initialize(@parsed_program : Program, @generation : Int32 = 0, @evaluations : Int32 = 0)
-      @program = @parsed_program.expression
+    def initialize(parsed_program : Program, @generation : Int32 = 0, @evaluations : Int32 = 0)
+      @parsed_program = parsed_program
+      @program = parsed_program.expression
       @score = nil
     end
 
