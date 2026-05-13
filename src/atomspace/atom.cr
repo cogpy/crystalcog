@@ -243,12 +243,23 @@ module AtomSpace
       outgoing.size
     end
 
+    @@clone_visited = Set(UInt64).new
+
     def clone : Atom
-      cloned_outgoing = outgoing.map(&.clone)
-      Link.new(type, cloned_outgoing, truth_value.clone)
+      if @@clone_visited.includes?(@handle)
+        return Link.new(type, [] of Atom, truth_value.clone)
+      end
+      @@clone_visited.add(@handle)
+      begin
+        cloned_outgoing = outgoing.map(&.clone)
+        Link.new(type, cloned_outgoing, truth_value.clone)
+      ensure
+        @@clone_visited.delete(@handle)
+      end
     end
 
-    # Thread-local visited set to detect cycles in to_s
+    # Visited set to detect cycles in to_s (not thread-safe; for multi-threaded
+    # use, pass visited set as a parameter instead)
     @@to_s_visited = Set(UInt64).new
 
     def to_s(io : IO) : Nil
@@ -269,14 +280,25 @@ module AtomSpace
       end
     end
 
+    @@eq_visited = Set(UInt64).new
+
     def content_equals?(other : Atom) : Bool
       return false unless other.is_a?(Link)
       return false unless outgoing.size == other.outgoing.size
 
-      outgoing.zip(other.outgoing) do |a, b|
-        return false unless a == b
+      pair_key = @handle &* 31 &+ other.handle
+      if @@eq_visited.includes?(pair_key)
+        return true
       end
-      true
+      @@eq_visited.add(pair_key)
+      begin
+        outgoing.zip(other.outgoing) do |a, b|
+          return false unless a == b
+        end
+        true
+      ensure
+        @@eq_visited.delete(pair_key)
+      end
     end
 
     # Get atom at specific position

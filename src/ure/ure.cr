@@ -166,6 +166,7 @@ module URE
     end
 
     def run : Array(AtomSpace::Atom)
+      @seen_results.clear
       new_atoms = [] of AtomSpace::Atom
       iterations = 0
 
@@ -499,13 +500,17 @@ module URE
       premises
     end
 
-    private def extract_nodes(atom : AtomSpace::Atom) : Array(AtomSpace::Atom)
+    private def extract_nodes(atom : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(AtomSpace::Atom)
+      visited ||= Set(UInt64).new
       nodes = [] of AtomSpace::Atom
+
+      return nodes if visited.includes?(atom.handle)
+      visited.add(atom.handle)
 
       if atom.is_a?(AtomSpace::Node)
         nodes << atom
       elsif atom.is_a?(AtomSpace::Link)
-        atom.outgoing.each { |child| nodes.concat(extract_nodes(child)) }
+        atom.outgoing.each { |child| nodes.concat(extract_nodes(child, visited)) }
       end
 
       nodes
@@ -562,13 +567,17 @@ module URE
       results.uniq
     end
 
-    private def extract_variables(pattern : AtomSpace::Atom) : Array(String)
+    private def extract_variables(pattern : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(String)
+      visited ||= Set(UInt64).new
       variables = [] of String
+
+      return variables if visited.includes?(pattern.handle)
+      visited.add(pattern.handle)
 
       if pattern.is_a?(AtomSpace::Node) && pattern.name.starts_with?("$")
         variables << pattern.name
       elsif pattern.is_a?(AtomSpace::Link)
-        pattern.outgoing.each { |child| variables.concat(extract_variables(child)) }
+        pattern.outgoing.each { |child| variables.concat(extract_variables(child, visited)) }
       end
 
       variables.uniq
@@ -602,7 +611,8 @@ module URE
     end
 
     # Advanced unification with proper variable handling
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom) : Bool
+    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
+      return false if depth > 100
       return true if atom1 == atom2
 
       # Handle variable unification
@@ -620,7 +630,7 @@ module URE
         return false unless atom1.outgoing.size == atom2.outgoing.size
 
         atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b)
+          return false unless atoms_unify?(a, b, depth + 1)
         end
 
         return true
@@ -763,11 +773,16 @@ module URE
       base_complexity + type_complexity
     end
 
-    private def calculate_structure_depth(atom : AtomSpace::Atom, current_depth = 0) : Int32
+    private def calculate_structure_depth(atom : AtomSpace::Atom, current_depth = 0, visited : Set(UInt64)? = nil) : Int32
       return current_depth if atom.is_a?(AtomSpace::Node)
+      return current_depth if current_depth > 100
+
+      visited ||= Set(UInt64).new
+      return current_depth if visited.includes?(atom.handle)
+      visited.add(atom.handle)
 
       if atom.is_a?(AtomSpace::Link)
-        max_child_depth = atom.outgoing.map { |child| calculate_structure_depth(child, current_depth + 1) }.max? || current_depth
+        max_child_depth = atom.outgoing.map { |child| calculate_structure_depth(child, current_depth + 1, visited) }.max? || current_depth
         return max_child_depth
       end
 
@@ -911,19 +926,24 @@ module URE
       !(atom_nodes & goal_nodes).empty?
     end
 
-    private def extract_nodes(atom : AtomSpace::Atom) : Array(AtomSpace::Atom)
+    private def extract_nodes(atom : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(AtomSpace::Atom)
+      visited ||= Set(UInt64).new
       nodes = [] of AtomSpace::Atom
+
+      return nodes if visited.includes?(atom.handle)
+      visited.add(atom.handle)
 
       if atom.is_a?(AtomSpace::Node)
         nodes << atom
       elsif atom.is_a?(AtomSpace::Link)
-        atom.outgoing.each { |child| nodes.concat(extract_nodes(child)) }
+        atom.outgoing.each { |child| nodes.concat(extract_nodes(child, visited)) }
       end
 
       nodes
     end
 
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom) : Bool
+    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
+      return false if depth > 100
       return true if atom1 == atom2
 
       # Handle variable unification
@@ -941,7 +961,7 @@ module URE
         return false unless atom1.outgoing.size == atom2.outgoing.size
 
         atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b)
+          return false unless atoms_unify?(a, b, depth + 1)
         end
 
         return true
