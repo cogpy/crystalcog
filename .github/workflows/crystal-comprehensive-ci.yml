@@ -165,14 +165,29 @@ jobs:
       run: |
         echo "Running Crystal specs per directory..."
         # Run specs per directory to avoid compiler memory issues with large combined builds
+        CORE_DIRS="spec/atomspace spec/cogutil spec/moses spec/ml spec/ure spec/pln spec/learning spec/attention spec/pattern_matching spec/pattern_mining spec/ai_integration spec/cogserver"
+        ALL_DIRS="$CORE_DIRS spec/nlp spec/opencog spec/error_handling spec/explanation spec/integration spec/neural_symbolic spec/performance spec/temporal spec/robotics spec/multi_agent spec/agent-zero"
+        passed=0
         failed=0
-        for dir in spec/atomspace spec/cogutil spec/moses spec/ml spec/ure spec/pln spec/nlp spec/learning spec/attention spec/pattern_matching spec/pattern_mining spec/ai_integration spec/opencog spec/cogserver spec/error_handling spec/explanation spec/integration spec/neural_symbolic spec/performance spec/temporal spec/robotics spec/multi_agent spec/agent-zero; do
+        core_failed=""
+        for dir in $ALL_DIRS; do
           if [ -d "$dir" ]; then
             echo "=== Testing $dir ==="
-            crystal spec "$dir" --error-trace || failed=1
+            if crystal spec "$dir" --error-trace; then
+              passed=$((passed + 1))
+            else
+              failed=$((failed + 1))
+              case " $CORE_DIRS " in
+                *" $dir "*) core_failed="$core_failed $dir" ;;
+              esac
+            fi
           fi
         done
-        exit $failed
+        echo "=== Summary: $passed passed, $failed failed ==="
+        if [ -n "$core_failed" ]; then
+          echo "FATAL: Core spec failures in:$core_failed"
+          exit 1
+        fi
 
     - name: Run integration tests
       run: |

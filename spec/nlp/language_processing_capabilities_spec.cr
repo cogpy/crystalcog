@@ -523,8 +523,8 @@ describe "Language Processing Capabilities" do
       complexity_atoms = pln_engine.reason(5)
 
       puts "Linguistic complexity analysis:"
-      puts "  Simple text: #{simple_stats["word_count"]} words, #{simple_stats["avg_word_length"]} avg length"
-      puts "  Complex text: #{complex_stats["word_count"]} words, #{complex_stats["avg_word_length"]} avg length"
+      puts "  Simple text: #{simple_stats["word_count"]} words, #{simple_stats["average_word_length"]} avg length"
+      puts "  Complex text: #{complex_stats["word_count"]} words, #{complex_stats["average_word_length"]} avg length"
       puts "  Generated #{complexity_atoms.size} complexity inferences"
 
       # Should understand that more words generally means more complexity

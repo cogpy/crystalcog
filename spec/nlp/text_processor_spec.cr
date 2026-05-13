@@ -121,7 +121,7 @@ describe NLP::TextProcessor do
       text = "the cat and the dog and the bird"
       stats = NLP::TextProcessor.get_text_stats(text)
 
-      stats["word_count"].should eq(7)   # Total words
+      stats["word_count"].should eq(8)   # Total words
       stats["unique_words"].should eq(5) # cat, dog, bird, and, the
     end
   end
@@ -140,7 +140,7 @@ describe NLP::TextProcessor do
 
     it "handles gerunds" do
       NLP::TextProcessor.simple_stem("walking").should eq("walk")
-      NLP::TextProcessor.simple_stem("running").should eq("runn")
+      NLP::TextProcessor.simple_stem("running").should eq("run")
     end
 
     it "handles comparative forms" do
@@ -158,7 +158,7 @@ describe NLP::TextProcessor do
       stemmed = NLP::TextProcessor.stem_tokens(tokens)
 
       stemmed.should contain("cat")
-      stemmed.should contain("runn")
+      stemmed.should contain("run")
       stemmed.should contain("jump")
       stemmed.should contain("big")
     end
