@@ -132,7 +132,8 @@ module NLP
       end
 
       # Reduce doubled final consonant (e.g. "bigg" -> "big", "runn" -> "run")
-      # Only apply if a suffix was actually stripped to avoid truncating valid stems like "add"
+      # Reduce doubled final consonant (e.g. "bigg" -> "big", "runn" -> "run")
+      # Only apply if the stem was actually modified by a previous rule (suffix was stripped)
       if stemmed != word && stemmed.size >= 3 && stemmed[-1] == stemmed[-2] && !stemmed[-1].in?('e', 'o', 'l', 's')
         stemmed = stemmed[0..-2]
       end
