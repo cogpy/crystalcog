@@ -159,6 +159,10 @@ module URE
       @rules << rule
     end
 
+    def clear_seen_results
+      @seen_results.clear
+    end
+
     def add_default_rules
       add_rule(ConjunctionRule.new)
       add_rule(ModusPonensRule.new)
@@ -884,6 +888,7 @@ module URE
     end
 
     private def execute_adaptive_bidirectional(goal : AtomSpace::Atom, max_time : Float64) : Array(AtomSpace::Atom)
+      @forward_chainer.clear_seen_results
       start_time = Time.instant
       forward_results = [] of AtomSpace::Atom
       backward_results = [] of AtomSpace::Atom
