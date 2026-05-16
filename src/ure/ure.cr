@@ -65,7 +65,7 @@ module URE
 
     def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
       return nil unless premises.size == 2
-      
+
       link1, link2 = premises[0], premises[1]
       return nil unless link1.is_a?(AtomSpace::Link) && link2.is_a?(AtomSpace::Link)
       return nil unless link1.outgoing.size == 2 && link2.outgoing.size == 2
@@ -75,14 +75,14 @@ module URE
         # A inherits from B, B inherits from C => A inherits from C
         a, b = link1.outgoing[0], link1.outgoing[1]
         c = link2.outgoing[1]
-        
+
         # Calculate new truth value using transitivity formula
         tv1, tv2 = link1.truth_value, link2.truth_value
         new_strength = tv1.strength * tv2.strength
-        new_confidence = tv1.confidence * tv2.confidence * 0.9  # Slight confidence reduction
-        
+        new_confidence = tv1.confidence * tv2.confidence * 0.9 # Slight confidence reduction
+
         tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
-        
+
         # Create new inheritance link
         atomspace.add_inheritance_link(a, c, tv)
       else
@@ -95,6 +95,7 @@ module URE
       premises.map(&.truth_value.confidence).sum / premises.size
     end
   end
+
   class ModusPonensRule < Rule
     def name : String
       "ModusPonensRule"
@@ -146,13 +147,20 @@ module URE
   class ForwardChainer
     @rules : Array(Rule)
     @max_iterations : Int32
+    @seen_results : Set(String)
+    MAX_APPLICATIONS_PER_RULE = 500
 
     def initialize(@atomspace : AtomSpace::AtomSpace, @max_iterations = 100)
       @rules = [] of Rule
+      @seen_results = Set(String).new
     end
 
     def add_rule(rule : Rule)
       @rules << rule
+    end
+
+    def clear_seen_results
+      @seen_results.clear
     end
 
     def add_default_rules
@@ -162,6 +170,7 @@ module URE
     end
 
     def run : Array(AtomSpace::Atom)
+      @seen_results.clear
       new_atoms = [] of AtomSpace::Atom
       iterations = 0
 
@@ -187,12 +196,17 @@ module URE
 
         rule_applications.each do |premises|
           fitness = rule.fitness(premises)
-          next if fitness < 0.1 # Skip low-fitness applications
+          next if fitness < 0.1
 
           result = rule.apply(premises, @atomspace)
-          if result && !@atomspace.contains?(result)
-            step_atoms << result
-            CogUtil::Logger.debug("URE: Applied #{rule.name}, fitness: #{fitness}")
+          if result
+            key = "#{result.type}:#{result.to_s}"
+            next if @seen_results.includes?(key)
+            @seen_results.add(key)
+            if !@atomspace.contains?(result)
+              step_atoms << result
+              CogUtil::Logger.debug("URE: Applied #{rule.name}, fitness: #{fitness}")
+            end
           end
         end
       end
@@ -204,19 +218,25 @@ module URE
       applications = [] of Array(AtomSpace::Atom)
       premise_types = rule.premises
 
-      # Simple case: rules with specific premise requirements
       case premise_types.size
       when 1
         atoms = @atomspace.get_atoms_by_type(premise_types[0])
-        atoms.each { |atom| applications << [atom] }
+        atoms.each do |atom|
+          applications << [atom]
+          break if applications.size >= MAX_APPLICATIONS_PER_RULE
+        end
       when 2
         atoms1 = @atomspace.get_atoms_by_type(premise_types[0])
         atoms2 = @atomspace.get_atoms_by_type(premise_types[1])
 
         atoms1.each do |a1|
           atoms2.each do |a2|
-            applications << [a1, a2] if a1 != a2
+            if a1 != a2
+              applications << [a1, a2]
+              break if applications.size >= MAX_APPLICATIONS_PER_RULE
+            end
           end
+          break if applications.size >= MAX_APPLICATIONS_PER_RULE
         end
       end
 
@@ -254,13 +274,13 @@ module URE
       # Calculate fitness based on truth value and complexity
       tv = @target.truth_value
       base_fitness = tv.strength * tv.confidence
-      
+
       # Penalize complex expressions
       complexity_penalty = Math.exp(-@depth * 0.1)
-      
+
       # Reward if target already exists in atomspace
       existence_bonus = atomspace.contains?(@target) ? 0.2 : 0.0
-      
+
       @fitness = base_fitness * complexity_penalty + existence_bonus
     end
   end
@@ -296,13 +316,13 @@ module URE
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]
       @current_iteration = 0
-      
+
       while !termination_criteria_met?
         expand_inference_tree
         fulfill_best_nodes
         @current_iteration += 1
       end
-      
+
       collect_results
     end
 
@@ -315,7 +335,7 @@ module URE
     # Variable fulfillment query - find groundings for variables
     def variable_fulfillment_query(pattern : AtomSpace::Atom) : Array(Hash(String, AtomSpace::Atom))
       groundings = [] of Hash(String, AtomSpace::Atom)
-      
+
       # Extract variables from pattern
       variables = extract_variables(pattern)
       return groundings if variables.empty?
@@ -337,11 +357,11 @@ module URE
       # Aggregate truth values from inference paths
       strengths = chain_results.map(&.truth_value.strength)
       confidences = chain_results.map(&.truth_value.confidence)
-      
+
       # Use revision formula for combining truth values
       combined_strength = strengths.sum / strengths.size
       combined_confidence = confidences.sum / confidences.size * 0.9 # Conservative confidence
-      
+
       AtomSpace::SimpleTruthValue.new(combined_strength, combined_confidence)
     end
 
@@ -365,7 +385,7 @@ module URE
     private def select_best_expandable_node(nodes : Array(BITNode)) : BITNode
       # Calculate fitness for each node
       nodes.each { |node| node.calculate_fitness(@atomspace) }
-      
+
       # Select node with highest fitness
       nodes.max_by(&.fitness)
     end
@@ -374,7 +394,7 @@ module URE
       return if node.depth >= @max_depth
 
       applicable_rules = find_applicable_rules(node.target)
-      
+
       if applicable_rules.empty?
         node.exhausted = true
         return
@@ -383,19 +403,19 @@ module URE
       applicable_rules.each do |rule|
         # Create premise nodes for this rule
         premise_nodes = create_premise_nodes(rule, node.target, node.depth + 1)
-        
+
         unless premise_nodes.empty?
           # Create a new inference branch
           branch_node = BITNode.new(node.target, node.depth)
           branch_node.rule = rule
-          
+
           premise_nodes.each { |premise| branch_node.add_premise(premise) }
           @inference_tree.concat(premise_nodes)
-          
+
           node.add_premise(branch_node)
         end
       end
-      
+
       # Mark as exhausted if no valid expansions were created
       node.exhausted = true if node.premises.empty?
     end
@@ -414,57 +434,57 @@ module URE
 
     private def create_premise_nodes(rule : Rule, target : AtomSpace::Atom, depth : Int32) : Array(BITNode)
       premise_nodes = [] of BITNode
-      
+
       rule.premises.each do |premise_type|
         # Find or create atoms that could serve as premises
         potential_premises = find_potential_premises(rule, target, premise_type)
-        
+
         potential_premises.each do |premise|
           premise_node = BITNode.new(premise, depth)
           premise_nodes << premise_node
         end
       end
-      
+
       premise_nodes
     end
 
     private def find_potential_premises(rule : Rule, target : AtomSpace::Atom, premise_type : AtomSpace::AtomType) : Array(AtomSpace::Atom)
       # Look for existing atoms of the required type
       existing = @atomspace.get_atoms_by_type(premise_type)
-      
+
       # Filter based on relevance to target
       relevant = existing.select { |atom| is_relevant_premise(atom, target, rule) }
-      
+
       # If no existing relevant premises, create virtual premises for backward search
       if relevant.empty? && can_create_virtual_premise(rule, target, premise_type)
         relevant = create_virtual_premises(rule, target, premise_type)
       end
-      
+
       relevant
     end
 
     private def is_relevant_premise(premise : AtomSpace::Atom, target : AtomSpace::Atom, rule : Rule) : Bool
       # Simple relevance check - could be much more sophisticated
       return true if premise.type == target.type
-      
+
       # Check if they share common nodes
       premise_nodes = extract_nodes(premise)
       target_nodes = extract_nodes(target)
-      
+
       !(premise_nodes & target_nodes).empty?
     end
 
     private def can_create_virtual_premise(rule : Rule, target : AtomSpace::Atom, premise_type : AtomSpace::AtomType) : Bool
       # Determine if we can create a virtual premise for backward search
-      premise_type == AtomSpace::AtomType::INHERITANCE_LINK || 
-      premise_type == AtomSpace::AtomType::IMPLICATION_LINK ||
-      premise_type == AtomSpace::AtomType::EVALUATION_LINK
+      premise_type == AtomSpace::AtomType::INHERITANCE_LINK ||
+        premise_type == AtomSpace::AtomType::IMPLICATION_LINK ||
+        premise_type == AtomSpace::AtomType::EVALUATION_LINK
     end
 
     private def create_virtual_premises(rule : Rule, target : AtomSpace::Atom, premise_type : AtomSpace::AtomType) : Array(AtomSpace::Atom)
       # Create virtual premises based on target structure
       premises = [] of AtomSpace::Atom
-      
+
       case premise_type
       when AtomSpace::AtomType::INHERITANCE_LINK
         if target.is_a?(AtomSpace::Link) && target.outgoing.size >= 2
@@ -480,19 +500,23 @@ module URE
           premises << @atomspace.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [condition, target])
         end
       end
-      
+
       premises
     end
 
-    private def extract_nodes(atom : AtomSpace::Atom) : Array(AtomSpace::Atom)
+    private def extract_nodes(atom : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(AtomSpace::Atom)
+      visited ||= Set(UInt64).new
       nodes = [] of AtomSpace::Atom
-      
+
+      return nodes if visited.includes?(atom.handle)
+      visited.add(atom.handle)
+
       if atom.is_a?(AtomSpace::Node)
         nodes << atom
       elsif atom.is_a?(AtomSpace::Link)
-        atom.outgoing.each { |child| nodes.concat(extract_nodes(child)) }
+        atom.outgoing.each { |child| nodes.concat(extract_nodes(child, visited)) }
       end
-      
+
       nodes
     end
 
@@ -501,13 +525,13 @@ module URE
       fulfillable_nodes = @inference_tree.select do |node|
         node.is_leaf? && @atomspace.contains?(node.target)
       end
-      
+
       fulfillable_nodes.each { |node| fulfill_node(node) }
     end
 
     private def fulfill_node(node : BITNode)
       return if node.target.nil? || @atomspace.contains?(node.target)
-      
+
       # Add the target to atomspace with inferred truth value
       tv = calculate_inferred_truth_value(node)
       node.target.truth_value = tv
@@ -520,14 +544,14 @@ module URE
       if node.rule && !node.premises.empty?
         # Use rule-specific truth value calculation
         premise_atoms = node.premises.map(&.target)
-        
+
         # Apply rule to get inferred strength and confidence
         strengths = premise_atoms.map(&.truth_value.strength)
         confidences = premise_atoms.map(&.truth_value.confidence)
-        
-        inferred_strength = strengths.min  # Conservative estimate
-        inferred_confidence = confidences.sum / confidences.size * 0.8  # Reduced confidence
-        
+
+        inferred_strength = strengths.min                              # Conservative estimate
+        inferred_confidence = confidences.sum / confidences.size * 0.8 # Reduced confidence
+
         AtomSpace::SimpleTruthValue.new(inferred_strength, inferred_confidence)
       else
         node.target.truth_value
@@ -535,80 +559,87 @@ module URE
     end
 
     private def collect_results : Array(AtomSpace::Atom)
-      # Collect all successfully inferred atoms
       results = [] of AtomSpace::Atom
-      
+
       @inference_tree.each do |node|
         results.concat(node.results)
+        if @atomspace.contains?(node.target)
+          results << node.target
+        end
       end
-      
+
       results.uniq
     end
 
-    private def extract_variables(pattern : AtomSpace::Atom) : Array(String)
+    private def extract_variables(pattern : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(String)
+      visited ||= Set(UInt64).new
       variables = [] of String
-      
+
+      return variables if visited.includes?(pattern.handle)
+      visited.add(pattern.handle)
+
       if pattern.is_a?(AtomSpace::Node) && pattern.name.starts_with?("$")
         variables << pattern.name
       elsif pattern.is_a?(AtomSpace::Link)
-        pattern.outgoing.each { |child| variables.concat(extract_variables(child)) }
+        pattern.outgoing.each { |child| variables.concat(extract_variables(child, visited)) }
       end
-      
+
       variables.uniq
     end
 
     private def unify_with_variables(pattern : AtomSpace::Atom, candidate : AtomSpace::Atom, variables : Array(String)) : Hash(String, AtomSpace::Atom)?
       # Simplified unification - in practice would be much more sophisticated
       return nil unless pattern.type == candidate.type
-      
+
       binding = {} of String => AtomSpace::Atom
-      
+
       if pattern.is_a?(AtomSpace::Node) && variables.includes?(pattern.name)
         binding[pattern.name] = candidate
         return binding
       end
-      
+
       if pattern.is_a?(AtomSpace::Link) && candidate.is_a?(AtomSpace::Link)
         return nil unless pattern.outgoing.size == candidate.outgoing.size
-        
+
         pattern.outgoing.zip(candidate.outgoing) do |p, c|
           sub_binding = unify_with_variables(p, c, variables)
           return nil unless sub_binding
           binding.merge!(sub_binding)
         end
-        
+
         return binding
       end
-      
+
       # Exact match for non-variable nodes
       pattern == candidate ? binding : nil
     end
 
     # Advanced unification with proper variable handling
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom) : Bool
+    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
+      return false if depth > 100
       return true if atom1 == atom2
-      
+
       # Handle variable unification
       if atom1.is_a?(AtomSpace::Node) && atom1.name.starts_with?("$")
-        return true  # Variable matches anything
+        return true # Variable matches anything
       end
-      
+
       if atom2.is_a?(AtomSpace::Node) && atom2.name.starts_with?("$")
-        return true  # Variable matches anything
+        return true # Variable matches anything
       end
-      
+
       # Structure unification for links
       if atom1.is_a?(AtomSpace::Link) && atom2.is_a?(AtomSpace::Link)
         return false unless atom1.type == atom2.type
         return false unless atom1.outgoing.size == atom2.outgoing.size
-        
+
         atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b)
+          return false unless atoms_unify?(a, b, depth + 1)
         end
-        
+
         return true
       end
-      
+
       false
     end
   end
@@ -628,21 +659,21 @@ module URE
     property reasoning_time : Float64
     property goal_achieved : Bool
     property confidence_improvement : Float64
-    
+
     def initialize
       @atoms_generated = 0
       @reasoning_time = 0.0
       @goal_achieved = false
       @confidence_improvement = 0.0
     end
-    
+
     def efficiency_score : Float64
       return 0.0 if @reasoning_time <= 0.0
-      
+
       base_score = @atoms_generated.to_f / @reasoning_time
       goal_bonus = @goal_achieved ? 1.5 : 1.0
       confidence_bonus = 1.0 + @confidence_improvement
-      
+
       base_score * goal_bonus * confidence_bonus
     end
   end
@@ -661,12 +692,12 @@ module URE
       @strategy_history = Hash(InferenceStrategy, Array(InferenceMetrics)).new
       @current_strategy = InferenceStrategy::ADAPTIVE_BIDIRECTIONAL
       @adaptive_threshold = 0.7
-      
+
       # Initialize strategy history
       InferenceStrategy.each do |strategy|
         @strategy_history[strategy] = [] of InferenceMetrics
       end
-      
+
       # Add default rules
       @forward_chainer.add_default_rules
       @backward_chainer.add_default_rules
@@ -679,19 +710,19 @@ module URE
 
     # Adaptive mixed inference with strategy selection
     def adaptive_chain(goal : AtomSpace::Atom, max_time : Float64 = 30.0) : Array(AtomSpace::Atom)
-      start_time = Time.monotonic
+      start_time = Time.instant
       initial_confidence = goal.truth_value.confidence
-      
+
       # Select optimal strategy based on historical performance
       selected_strategy = select_optimal_strategy(goal)
-      
+
       # Execute inference with selected strategy
       results = execute_strategy(selected_strategy, goal, max_time)
-      
+
       # Record performance metrics
-      elapsed_time = (Time.monotonic - start_time).total_seconds
+      elapsed_time = (Time.instant - start_time).total_seconds
       record_performance(selected_strategy, results, elapsed_time, goal, initial_confidence)
-      
+
       results
     end
 
@@ -716,13 +747,13 @@ module URE
     private def select_optimal_strategy(goal : AtomSpace::Atom) : InferenceStrategy
       # Analyze goal characteristics
       goal_complexity = analyze_goal_complexity(goal)
-      atomspace_density = @atomspace.size.to_f / 1000.0  # Normalized density metric
-      
+      atomspace_density = @atomspace.size.to_f / 1000.0 # Normalized density metric
+
       # If we have enough historical data, use performance-based selection
       if has_sufficient_history?
         return select_by_performance
       end
-      
+
       # Heuristic-based selection for new goals
       select_by_heuristics(goal_complexity, atomspace_density)
     end
@@ -731,29 +762,34 @@ module URE
       # Calculate complexity based on structure depth and variable count
       structure_depth = calculate_structure_depth(goal)
       variable_count = count_variables(goal)
-      
+
       base_complexity = structure_depth * 0.3 + variable_count * 0.2
-      
+
       # Consider goal type complexity
       type_complexity = case goal.type
-                       when AtomSpace::AtomType::INHERITANCE_LINK then 0.1
-                       when AtomSpace::AtomType::IMPLICATION_LINK then 0.3
-                       when AtomSpace::AtomType::AND_LINK then 0.4
-                       when AtomSpace::AtomType::OR_LINK then 0.5
-                       else 0.2
-                       end
-      
+                        when AtomSpace::AtomType::INHERITANCE_LINK then 0.1
+                        when AtomSpace::AtomType::IMPLICATION_LINK then 0.3
+                        when AtomSpace::AtomType::AND_LINK         then 0.4
+                        when AtomSpace::AtomType::OR_LINK          then 0.5
+                        else                                            0.2
+                        end
+
       base_complexity + type_complexity
     end
 
-    private def calculate_structure_depth(atom : AtomSpace::Atom, current_depth = 0) : Int32
+    private def calculate_structure_depth(atom : AtomSpace::Atom, current_depth = 0, visited : Set(UInt64)? = nil) : Int32
       return current_depth if atom.is_a?(AtomSpace::Node)
-      
+      return current_depth if current_depth > 100
+
+      visited ||= Set(UInt64).new
+      return current_depth if visited.includes?(atom.handle)
+      visited.add(atom.handle)
+
       if atom.is_a?(AtomSpace::Link)
-        max_child_depth = atom.outgoing.map { |child| calculate_structure_depth(child, current_depth + 1) }.max? || current_depth
+        max_child_depth = atom.outgoing.map { |child| calculate_structure_depth(child, current_depth + 1, visited) }.max? || current_depth
         return max_child_depth
       end
-      
+
       current_depth
     end
 
@@ -763,7 +799,7 @@ module URE
       elsif atom.is_a?(AtomSpace::Link)
         return atom.outgoing.sum { |child| count_variables(child) }
       end
-      
+
       0
     end
 
@@ -774,19 +810,19 @@ module URE
     private def select_by_performance : InferenceStrategy
       best_strategy = InferenceStrategy::ADAPTIVE_BIDIRECTIONAL
       best_score = 0.0
-      
+
       @strategy_history.each do |strategy, metrics|
         next if metrics.empty?
-        
+
         # Calculate average efficiency score
         avg_score = metrics.sum(&.efficiency_score) / metrics.size
-        
+
         if avg_score > best_score
           best_score = avg_score
           best_strategy = strategy
         end
       end
-      
+
       best_strategy
     end
 
@@ -814,140 +850,146 @@ module URE
     end
 
     private def execute_mixed_forward_first(goal : AtomSpace::Atom, max_time : Float64) : Array(AtomSpace::Atom)
-      start_time = Time.monotonic
-      
+      start_time = Time.instant
+
       # Forward phase (60% of time budget)
       forward_time_budget = max_time * 0.6
       forward_results = @forward_chainer.run
-      
-      elapsed = (Time.monotonic - start_time).total_seconds
+
+      elapsed = (Time.instant - start_time).total_seconds
       remaining_time = max_time - elapsed
-      
+
       # Backward phase with remaining time
       if remaining_time > 0.1
         backward_results = @backward_chainer.do_chain(goal)
         return (forward_results + backward_results).uniq
       end
-      
+
       forward_results
     end
 
     private def execute_mixed_backward_first(goal : AtomSpace::Atom, max_time : Float64) : Array(AtomSpace::Atom)
-      start_time = Time.monotonic
-      
+      start_time = Time.instant
+
       # Backward phase (60% of time budget)
       backward_results = @backward_chainer.do_chain(goal)
-      
-      elapsed = (Time.monotonic - start_time).total_seconds
+
+      elapsed = (Time.instant - start_time).total_seconds
       remaining_time = max_time - elapsed
-      
+
       # Forward phase with remaining time
       if remaining_time > 0.1 && backward_results.empty?
         forward_results = @forward_chainer.run
         relevant_forward = forward_results.select { |atom| atoms_relate_to_goal?(atom, goal) }
         return (backward_results + relevant_forward).uniq
       end
-      
+
       backward_results
     end
 
     private def execute_adaptive_bidirectional(goal : AtomSpace::Atom, max_time : Float64) : Array(AtomSpace::Atom)
-      start_time = Time.monotonic
+      @forward_chainer.clear_seen_results
+      start_time = Time.instant
       forward_results = [] of AtomSpace::Atom
       backward_results = [] of AtomSpace::Atom
-      
+
       # Interleave forward and backward steps
-      time_per_phase = max_time / 6.0  # 3 forward + 3 backward phases
-      
+      time_per_phase = max_time / 6.0 # 3 forward + 3 backward phases
+
       3.times do |phase|
-        break if (Time.monotonic - start_time).total_seconds >= max_time
-        
+        break if (Time.instant - start_time).total_seconds >= max_time
+
         # Forward step
-        phase_start = Time.monotonic
+        phase_start = Time.instant
         step_results = @forward_chainer.step_forward
         forward_results.concat(step_results)
-        
+
         # Backward step
-        elapsed_phase = (Time.monotonic - phase_start).total_seconds
+        elapsed_phase = (Time.instant - phase_start).total_seconds
         if elapsed_phase < time_per_phase
           step_backward_results = @backward_chainer.do_chain(goal)
           backward_results.concat(step_backward_results)
-          
+
           # Early termination if goal achieved
           break if backward_results.any? { |atom| atoms_unify?(atom, goal) }
         end
-        
-        break if (Time.monotonic - start_time).total_seconds >= max_time
+
+        break if (Time.instant - start_time).total_seconds >= max_time
       end
-      
+
       (forward_results + backward_results).uniq
     end
 
     private def atoms_relate_to_goal?(atom : AtomSpace::Atom, goal : AtomSpace::Atom) : Bool
       # Check if atom is related to the goal (shares common elements)
       return true if atoms_unify?(atom, goal)
-      
+
       atom_nodes = extract_nodes(atom)
       goal_nodes = extract_nodes(goal)
-      
+
       # Check for shared nodes
       !(atom_nodes & goal_nodes).empty?
     end
 
-    private def extract_nodes(atom : AtomSpace::Atom) : Array(AtomSpace::Atom)
+    private def extract_nodes(atom : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(AtomSpace::Atom)
+      visited ||= Set(UInt64).new
       nodes = [] of AtomSpace::Atom
-      
+
+      return nodes if visited.includes?(atom.handle)
+      visited.add(atom.handle)
+
       if atom.is_a?(AtomSpace::Node)
         nodes << atom
       elsif atom.is_a?(AtomSpace::Link)
-        atom.outgoing.each { |child| nodes.concat(extract_nodes(child)) }
+        atom.outgoing.each { |child| nodes.concat(extract_nodes(child, visited)) }
       end
-      
+
       nodes
     end
 
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom) : Bool
+    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
+      return false if depth > 100
       return true if atom1 == atom2
-      
+
       # Handle variable unification
       if atom1.is_a?(AtomSpace::Node) && atom1.name.starts_with?("$")
         return true
       end
-      
+
       if atom2.is_a?(AtomSpace::Node) && atom2.name.starts_with?("$")
         return true
       end
-      
+
       # Structure unification for links
       if atom1.is_a?(AtomSpace::Link) && atom2.is_a?(AtomSpace::Link)
         return false unless atom1.type == atom2.type
         return false unless atom1.outgoing.size == atom2.outgoing.size
-        
+
         atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b)
+          return false unless atoms_unify?(a, b, depth + 1)
         end
-        
+
         return true
       end
-      
+
       false
     end
 
-    private def record_performance(strategy : InferenceStrategy, results : Array(AtomSpace::Atom), 
-                                 elapsed_time : Float64, goal : AtomSpace::Atom, initial_confidence : Float64)
+    private def record_performance(strategy : InferenceStrategy, results : Array(AtomSpace::Atom),
+                                   elapsed_time : Float64, goal : AtomSpace::Atom, initial_confidence : Float64)
       metrics = InferenceMetrics.new
       metrics.atoms_generated = results.size
       metrics.reasoning_time = elapsed_time
       metrics.goal_achieved = results.any? { |atom| atoms_unify?(atom, goal) }
       metrics.confidence_improvement = goal.truth_value.confidence - initial_confidence
-      
+
       @strategy_history[strategy] << metrics
-      
+
       # Keep history size manageable (last 10 runs per strategy)
       if @strategy_history[strategy].size > 10
         @strategy_history[strategy] = @strategy_history[strategy].last(10)
       end
-      
+
       CogUtil::Logger.debug("URE: Strategy #{strategy} completed in #{elapsed_time}s, generated #{results.size} atoms, goal achieved: #{metrics.goal_achieved}")
     end
   end

@@ -282,7 +282,7 @@ module AtomSpace
     end
 
     def add_variable_node(*names : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      variable_nodes = names.to_a.map { |name| 
+      variable_nodes = names.to_a.map { |name|
         node = VariableNode.new(name, tv)
         add_atom(node)
       }

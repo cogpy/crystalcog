@@ -42,7 +42,7 @@ module MultiAgent
         @performative : Performative,
         @content : String,
         @conversation_id : String = "",
-        @in_reply_to : String? = nil
+        @in_reply_to : String? = nil,
       )
         @id = Random::Secure.hex(8)
         @timestamp = Time.utc

@@ -208,9 +208,9 @@ describe "Error Handling and Edge Cases" do
       atomspace.add_inheritance_link(c, a)
 
       # Should complete without infinite loop
-      start_time = Time.monotonic
+      start_time = Time.instant
       new_atoms = @pln_engine.reason(10)
-      end_time = Time.monotonic
+      end_time = Time.instant
 
       # Should complete in reasonable time
       (end_time - start_time).should be < 5.seconds

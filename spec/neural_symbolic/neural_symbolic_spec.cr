@@ -61,8 +61,8 @@ describe NeuralSymbolic do
 
     it "finds nearest neighbors" do
       store = NeuralSymbolic::EmbeddingStore.new
-      store.add(NeuralSymbolic::Embedding.new("cat",  [1.0, 0.0]))
-      store.add(NeuralSymbolic::Embedding.new("dog",  [0.9, 0.1]))
+      store.add(NeuralSymbolic::Embedding.new("cat", [1.0, 0.0]))
+      store.add(NeuralSymbolic::Embedding.new("dog", [0.9, 0.1]))
       store.add(NeuralSymbolic::Embedding.new("fish", [0.0, 1.0]))
       query = NeuralSymbolic::Embedding.new("q", [1.0, 0.0])
       nearest = store.nearest(query, 2)

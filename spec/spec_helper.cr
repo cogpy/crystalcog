@@ -206,13 +206,13 @@ describe "CrystalCog Integration Tests" do
     atomspace = AtomSpace::AtomSpace.new
 
     # Time atom creation
-    start_time = Time.monotonic
+    start_time = Time.instant
 
     100.times do |i|
       atomspace.add_concept_node("perf_test_#{i}")
     end
 
-    end_time = Time.monotonic
+    end_time = Time.instant
     duration = end_time - start_time
 
     # Should create atoms quickly (less than 1 second for 100 atoms)

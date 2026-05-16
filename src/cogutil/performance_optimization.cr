@@ -7,9 +7,9 @@ module CogUtil
   # Reduces GC pressure and improves cache locality
   class AtomMemoryPool
     # Pool configuration
-    POOL_SIZE = 10000
-    BLOCK_SIZE = 128  # bytes per block
-    TOTAL_SIZE = 1280000  # POOL_SIZE * BLOCK_SIZE
+    POOL_SIZE  =   10000
+    BLOCK_SIZE =     128 # bytes per block
+    TOTAL_SIZE = 1280000 # POOL_SIZE * BLOCK_SIZE
 
     @blocks : StaticArray(UInt8, TOTAL_SIZE)
     @free_blocks : Array(Int32)
@@ -130,12 +130,12 @@ module CogUtil
     def health_check : Hash(String, Bool | Float64 | Int32)
       stats = self.stats
       {
-        "healthy" => stats.utilization_percentage < 90.0,
+        "healthy"             => stats.utilization_percentage < 90.0,
         "utilization_percent" => stats.utilization_percentage,
-        "hit_rate_percent" => stats.hit_rate,
-        "peak_usage" => stats.peak_usage,
-        "current_usage" => stats.current_usage,
-        "fragmentation_low" => @free_blocks.size + @allocated_blocks.size == POOL_SIZE
+        "hit_rate_percent"    => stats.hit_rate,
+        "peak_usage"          => stats.peak_usage,
+        "current_usage"       => stats.current_usage,
+        "fragmentation_low"   => @free_blocks.size + @allocated_blocks.size == POOL_SIZE,
       }
     end
 
@@ -148,7 +148,7 @@ module CogUtil
   class CognitiveCache(K, V)
     # Cache configuration optimized for cognitive workloads
     DEFAULT_CAPACITY = 8192
-    LOAD_FACTOR = 0.75
+    LOAD_FACTOR      = 0.75
 
     @buckets : Array(Array(Entry(K, V)))
     @capacity : Int32
@@ -353,7 +353,7 @@ module CogUtil
       # Process 4 elements at a time (SIMD-friendly)
       i = 0
       while i + 3 < size
-        result += a[i] * b[i] + a[i+1] * b[i+1] + a[i+2] * b[i+2] + a[i+3] * b[i+3]
+        result += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3]
         i += 4
       end
 
@@ -377,9 +377,9 @@ module CogUtil
       i = 0
       while i + 3 < size
         result << tensor[i] * weights[i]
-        result << tensor[i+1] * weights[i+1]
-        result << tensor[i+2] * weights[i+2]
-        result << tensor[i+3] * weights[i+3]
+        result << tensor[i + 1] * weights[i + 1]
+        result << tensor[i + 2] * weights[i + 2]
+        result << tensor[i + 3] * weights[i + 3]
         i += 4
       end
 

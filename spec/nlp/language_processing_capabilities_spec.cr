@@ -20,10 +20,10 @@ describe "Language Processing Capabilities" do
   describe "Natural Language Understanding and Reasoning" do
     it "processes sentences and reasons about semantic relationships" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Create linguistic knowledge base
       NLP.create_linguistic_kb(atomspace)
-      
+
       # Process natural language sentences about animals
       sentences = [
         "Dogs are animals.",
@@ -85,7 +85,7 @@ describe "Language Processing Capabilities" do
 
     it "understands and reasons about spatial relationships" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Process sentences about spatial relationships
       spatial_sentences = [
         "The cat is on the mat.",
@@ -159,7 +159,7 @@ describe "Language Processing Capabilities" do
 
     it "processes comparative language and reasons about properties" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Process comparative sentences
       comparative_sentences = [
         "Lions are bigger than cats.",
@@ -241,7 +241,7 @@ describe "Language Processing Capabilities" do
 
     it "processes temporal language and reasons about time sequences" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Process temporal sentences
       temporal_sentences = [
         "John woke up in the morning.",
@@ -321,7 +321,7 @@ describe "Language Processing Capabilities" do
 
     it "integrates keyword extraction with semantic reasoning" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Process a complex text and extract keywords
       complex_text = "The research shows that artificial intelligence systems can learn to recognize patterns in natural language. Machine learning algorithms analyze linguistic data to identify semantic relationships between words and concepts."
 
@@ -379,7 +379,7 @@ describe "Language Processing Capabilities" do
   describe "Advanced Language Processing Integration" do
     it "demonstrates complete language understanding pipeline" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Complete pipeline: Text -> Tokenization -> Semantic Analysis -> Reasoning -> Conclusions
 
       story_text = "Alice is a student. Students study hard. Hard workers succeed. Alice studies mathematics."
@@ -471,7 +471,7 @@ describe "Language Processing Capabilities" do
 
     it "demonstrates linguistic complexity analysis with reasoning" do
       atomspace = AtomSpace::AtomSpace.new
-      
+
       # Analyze linguistic complexity and reason about it
 
       simple_text = "The cat sits."
@@ -523,8 +523,8 @@ describe "Language Processing Capabilities" do
       complexity_atoms = pln_engine.reason(5)
 
       puts "Linguistic complexity analysis:"
-      puts "  Simple text: #{simple_stats["word_count"]} words, #{simple_stats["avg_word_length"]} avg length"
-      puts "  Complex text: #{complex_stats["word_count"]} words, #{complex_stats["avg_word_length"]} avg length"
+      puts "  Simple text: #{simple_stats["word_count"]} words, #{simple_stats["average_word_length"]} avg length"
+      puts "  Complex text: #{complex_stats["word_count"]} words, #{complex_stats["average_word_length"]} avg length"
       puts "  Generated #{complexity_atoms.size} complexity inferences"
 
       # Should understand that more words generally means more complexity

@@ -273,7 +273,7 @@ module PatternMatching
     # Enhanced find all matches for a given pattern with backtracking
     def match(pattern : Pattern) : Array(MatchResult)
       results = Array(MatchResult).new
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Initialize state stack
       @state_stack.clear
@@ -288,7 +288,7 @@ module PatternMatching
 
     # Enhanced recursive pattern exploration with proper backtracking
     private def explore_pattern(pattern : Pattern, template : AtomSpace::Atom,
-                                results : Array(MatchResult), start_time : Time::Span)
+                                results : Array(MatchResult), start_time : Time::Instant)
       return if check_timeout(start_time)
       return if results.size >= @max_results
 
@@ -311,7 +311,7 @@ module PatternMatching
 
     # Enhanced variable binding exploration with backtracking
     private def explore_variable_bindings(pattern : Pattern, variable : AtomSpace::Atom,
-                                          results : Array(MatchResult), start_time : Time::Span)
+                                          results : Array(MatchResult), start_time : Time::Instant)
       return if check_timeout(start_time)
 
       current_state = @state_stack.last
@@ -352,7 +352,7 @@ module PatternMatching
 
     # Enhanced link structure exploration with tree comparison
     private def explore_link_structures(pattern : Pattern, template : AtomSpace::Atom,
-                                        results : Array(MatchResult), start_time : Time::Span)
+                                        results : Array(MatchResult), start_time : Time::Instant)
       return if check_timeout(start_time)
 
       current_state = @state_stack.last
@@ -387,7 +387,7 @@ module PatternMatching
 
     # Enhanced tree comparison algorithm from OpenCog specification
     private def tree_compare(pattern : Pattern, template : AtomSpace::Atom,
-                             candidate : AtomSpace::Atom, start_time : Time::Span) : Bool
+                             candidate : AtomSpace::Atom, start_time : Time::Instant) : Bool
       return false if check_timeout(start_time)
 
       # Base case: both are atoms
@@ -425,9 +425,9 @@ module PatternMatching
     end
 
     # Check for timeout conditions
-    private def check_timeout(start_time : Time::Span) : Bool
+    private def check_timeout(start_time : Time::Instant) : Bool
       if timeout = @timeout_seconds
-        elapsed = (Time.monotonic - start_time).total_seconds
+        elapsed = (Time.instant - start_time).total_seconds
         if elapsed > timeout
           raise MatchingTimeoutException.new("Pattern matching timed out after #{elapsed} seconds")
         end

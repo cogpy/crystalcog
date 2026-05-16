@@ -129,8 +129,8 @@ module AgentZero
 
       {
         "total_registered" => total_agents,
-        "active_agents" => active_agents,
-        "uptime_seconds" => uptime_seconds.to_i32
+        "active_agents"    => active_agents,
+        "uptime_seconds"   => uptime_seconds.to_i32,
       }
     end
 
@@ -172,7 +172,6 @@ module AgentZero
         else
           send_error_response(client, "Unknown command: #{command}")
         end
-
       rescue ex
         send_error_response(client, "Request processing error: #{ex.message}")
       ensure
@@ -195,9 +194,9 @@ module AgentZero
       @registered_agents[registration.agent_id] = registration
 
       response = {
-        "status" => "success",
-        "message" => "Agent registered successfully",
-        "agent_id" => registration.agent_id
+        "status"   => "success",
+        "message"  => "Agent registered successfully",
+        "agent_id" => registration.agent_id,
       }
 
       client.puts(response.to_json)
@@ -206,18 +205,18 @@ module AgentZero
     private def handle_discover_request(request : JSON::Any, client : TCPSocket)
       active_agents = list_agents.map do |reg|
         {
-          "id" => reg.agent_id,
-          "name" => reg.name,
-          "host" => reg.host,
-          "port" => reg.port,
+          "id"           => reg.agent_id,
+          "name"         => reg.name,
+          "host"         => reg.host,
+          "port"         => reg.port,
           "capabilities" => reg.capabilities,
-          "trust_level" => reg.trust_level
+          "trust_level"  => reg.trust_level,
         }
       end
 
       response = {
         "status" => "success",
-        "agents" => active_agents
+        "agents" => active_agents,
       }
 
       client.puts(response.to_json)
@@ -230,13 +229,13 @@ module AgentZero
         registration.update_heartbeat
 
         response = {
-          "status" => "success",
-          "message" => "Heartbeat updated"
+          "status"  => "success",
+          "message" => "Heartbeat updated",
         }
       else
         response = {
-          "status" => "error",
-          "message" => "Agent not registered"
+          "status"  => "error",
+          "message" => "Agent not registered",
         }
       end
 
@@ -248,13 +247,13 @@ module AgentZero
 
       if unregister_agent(agent_id)
         response = {
-          "status" => "success",
-          "message" => "Agent unregistered successfully"
+          "status"  => "success",
+          "message" => "Agent unregistered successfully",
         }
       else
         response = {
-          "status" => "error",
-          "message" => "Agent not found"
+          "status"  => "error",
+          "message" => "Agent not found",
         }
       end
 
@@ -263,8 +262,8 @@ module AgentZero
 
     private def send_error_response(client : TCPSocket, message : String)
       response = {
-        "status" => "error",
-        "message" => message
+        "status"  => "error",
+        "message" => message,
       }
       client.puts(response.to_json)
     end
@@ -414,7 +413,7 @@ module AgentZero
       # Simple heuristic: select agents with relevant capabilities
       @participants.select do |agent|
         agent.capabilities.any? { |cap| knowledge.content.includes?(cap) } ||
-        agent.trust_level > 0.7
+          agent.trust_level > 0.7
       end
     end
 
@@ -448,8 +447,8 @@ module AgentZero
     private def broadcast_consensus_proposal(item : ConsensusItem)
       proposal_message = Message.new("consensus_proposal", "consensus_manager", {
         "consensus_id" => item.id,
-        "proposal" => item.proposal.to_s,
-        "timeout_at" => item.timeout_at.to_rfc3339
+        "proposal"     => item.proposal.to_s,
+        "timeout_at"   => item.timeout_at.to_rfc3339,
       })
 
       @participants.each do |participant|
@@ -521,7 +520,7 @@ module AgentZero
       @active_tasks[task.id] = execution
 
       execution.status = TaskStatus::Running
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Execute task on selected agents
       begin
@@ -543,7 +542,7 @@ module AgentZero
         CogUtil::Logger.error("Task execution failed: #{ex.message}")
       end
 
-      execution_time = (Time.monotonic - start_time).total_milliseconds
+      execution_time = (Time.instant - start_time).total_milliseconds
 
       # Create result
       result = TaskExecutionResult.new(
@@ -566,7 +565,7 @@ module AgentZero
       # Filter agents by required capabilities
       capable_agents = available_agents.select do |agent|
         task.required_capabilities.empty? ||
-        task.required_capabilities.any? { |cap| agent.capabilities.includes?(cap) }
+          task.required_capabilities.any? { |cap| agent.capabilities.includes?(cap) }
       end
 
       # Sort by trust level and select up to max_agents

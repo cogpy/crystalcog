@@ -412,13 +412,13 @@ describe "OpenCog Full Integration" do
 
       initial_size = atomspace.size
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Run both reasoning engines
       pln_atoms = pln_engine.reason(3)
       ure_atoms = ure_engine.forward_chain(2)
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete in reasonable time

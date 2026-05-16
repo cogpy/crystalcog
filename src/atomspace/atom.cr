@@ -27,19 +27,19 @@ module AtomSpace
     STORAGE_NODE            = 110
 
     # NLP-specific node types
-    WORD_NODE               = 111
-    WORD_CLASS_NODE         = 112
-    DOCUMENT_NODE           = 113
-    SENTENCE_NODE           = 114
-    PHRASE_NODE             = 115
-    PARSE_NODE              = 116
-    WORD_INSTANCE_NODE      = 117
-    LG_DICT_NODE            = 118
-    LG_CONN_NODE            = 119
-    LG_CONN_MULTI_NODE      = 120
-    LG_CONN_DIR_NODE        = 121
-    LG_LINK_NODE            = 122
-    LG_LINK_INSTANCE_NODE   = 123
+    WORD_NODE             = 111
+    WORD_CLASS_NODE       = 112
+    DOCUMENT_NODE         = 113
+    SENTENCE_NODE         = 114
+    PHRASE_NODE           = 115
+    PARSE_NODE            = 116
+    WORD_INSTANCE_NODE    = 117
+    LG_DICT_NODE          = 118
+    LG_CONN_NODE          = 119
+    LG_CONN_MULTI_NODE    = 120
+    LG_CONN_DIR_NODE      = 121
+    LG_LINK_NODE          = 122
+    LG_LINK_INSTANCE_NODE = 123
 
     # Link types
     LIST_LINK        = 201
@@ -56,25 +56,25 @@ module AtomSpace
     EXECUTION_LINK   = 212
 
     # NLP-specific link types
-    ORDERED_LINK            = 213
-    REFERENCE_LINK          = 214
-    SENTENCE_LINK           = 215
-    PARSE_LINK              = 216
-    WORD_INSTANCE_LINK      = 217
-    SEQUENCE_LINK           = 218
-    WORD_SEQUENCE_LINK      = 219
-    SENTENCE_SEQUENCE_LINK  = 220
-    DOCUMENT_SEQUENCE_LINK  = 221
-    LG_CONNECTOR            = 222
-    LG_SEQ                  = 223
-    LG_AND                  = 224
-    LG_OR                   = 225
-    LG_WORD_CSET            = 226
-    LG_DISJUNCT             = 227
-    LG_LINK_INSTANCE_LINK   = 228
-    LG_PARSE_LINK           = 229
-    LG_PARSE_MINIMAL        = 230
-    LG_PARSE_DISJUNCTS      = 231
+    ORDERED_LINK           = 213
+    REFERENCE_LINK         = 214
+    SENTENCE_LINK          = 215
+    PARSE_LINK             = 216
+    WORD_INSTANCE_LINK     = 217
+    SEQUENCE_LINK          = 218
+    WORD_SEQUENCE_LINK     = 219
+    SENTENCE_SEQUENCE_LINK = 220
+    DOCUMENT_SEQUENCE_LINK = 221
+    LG_CONNECTOR           = 222
+    LG_SEQ                 = 223
+    LG_AND                 = 224
+    LG_OR                  = 225
+    LG_WORD_CSET           = 226
+    LG_DISJUNCT            = 227
+    LG_LINK_INSTANCE_LINK  = 228
+    LG_PARSE_LINK          = 229
+    LG_PARSE_MINIMAL       = 230
+    LG_PARSE_DISJUNCTS     = 231
 
     def node? : Bool
       value >= 100 && value < 200
@@ -243,28 +243,66 @@ module AtomSpace
       outgoing.size
     end
 
+    # Cycle detection for clone — safe with cooperative concurrency (no yield
+    # points in pure computation). For -Dpreview_mt, would need fiber-local storage.
+    @@clone_visited = Set(UInt64).new
+
     def clone : Atom
-      cloned_outgoing = outgoing.map(&.clone)
-      Link.new(type, cloned_outgoing, truth_value.clone)
+      if @@clone_visited.includes?(@handle)
+        return Link.new(type, [] of Atom, truth_value.clone)
+      end
+      @@clone_visited.add(@handle)
+      begin
+        cloned_outgoing = outgoing.map(&.clone)
+        Link.new(type, cloned_outgoing, truth_value.clone)
+      ensure
+        @@clone_visited.delete(@handle)
+      end
     end
 
     def to_s(io : IO) : Nil
+      to_s_impl(io, Set(UInt64).new)
+    end
+
+    protected def to_s_impl(io : IO, visited : Set(UInt64)) : Nil
+      if visited.includes?(@handle)
+        io << "(#{type} ...)"
+        return
+      end
+      visited.add(@handle)
       io << "(#{type}"
       outgoing.each do |atom|
         io << " "
-        atom.to_s(io)
+        if atom.is_a?(Link)
+          atom.to_s_impl(io, visited)
+        else
+          atom.to_s(io)
+        end
       end
       io << ")"
     end
+
+    # Cycle detection for content_equals? — uses Tuple to avoid hash collisions.
+    # Safe with cooperative concurrency (no yield points in pure computation).
+    @@eq_visited = Set(Tuple(UInt64, UInt64)).new
 
     def content_equals?(other : Atom) : Bool
       return false unless other.is_a?(Link)
       return false unless outgoing.size == other.outgoing.size
 
-      outgoing.zip(other.outgoing) do |a, b|
-        return false unless a == b
+      pair_key = {self.handle, other.handle}
+      if @@eq_visited.includes?(pair_key)
+        return true
       end
-      true
+      @@eq_visited.add(pair_key)
+      begin
+        outgoing.zip(other.outgoing) do |a, b|
+          return false unless a == b
+        end
+        true
+      ensure
+        @@eq_visited.delete(pair_key)
+      end
     end
 
     # Get atom at specific position

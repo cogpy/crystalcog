@@ -9,13 +9,13 @@ describe "CrystalCog Performance Tests" do
       atomspace = AtomSpace::AtomSpace.new
       num_atoms = 1000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       atoms = num_atoms.times.map { |i|
         atomspace.add_concept_node("concept_#{i}")
       }.to_a
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should create atoms quickly
@@ -45,7 +45,7 @@ describe "CrystalCog Performance Tests" do
       # Benchmark retrieval
       num_retrievals = 1000
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       num_retrievals.times do
         random_atom = atoms.sample
@@ -53,7 +53,7 @@ describe "CrystalCog Performance Tests" do
         retrieved.should eq(random_atom)
       end
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should retrieve quickly

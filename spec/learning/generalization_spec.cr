@@ -223,12 +223,12 @@ describe Learning::Generalization do
 
       clusters = [
         [
-          {"color" => "red", "size" => "small"},
-          {"color" => "red", "size" => "medium"},
+          {"color" => "red", "size" => "small"} of String => String | Float64 | Bool,
+          {"color" => "red", "size" => "medium"} of String => String | Float64 | Bool,
         ],
         [
-          {"color" => "blue", "size" => "large"},
-          {"color" => "blue", "size" => "huge"},
+          {"color" => "blue", "size" => "large"} of String => String | Float64 | Bool,
+          {"color" => "blue", "size" => "huge"} of String => String | Float64 | Bool,
         ],
       ]
 
@@ -243,7 +243,7 @@ describe Learning::Generalization do
 
     it "returns empty concepts for empty clusters" do
       generalizer = Learning::Generalization::ClusterGeneralizer.new
-      concepts = generalizer.generalize_clusters([] of Array(Hash(String, String)))
+      concepts = generalizer.generalize_clusters([] of Array(Hash(String, String | Float64 | Bool)))
       concepts.should be_empty
     end
   end

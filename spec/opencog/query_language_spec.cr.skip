@@ -383,11 +383,11 @@ describe OpenCog::QueryLanguage do
         atomspace.add_inheritance_link(concept, @animal)
       end
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       results = @query_interface.query("SELECT $x WHERE { $x ISA Animal }")
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete in reasonable time
@@ -407,11 +407,11 @@ describe OpenCog::QueryLanguage do
         atomspace.add_evaluation_link(property, list_link)
       end
 
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       results = @query_interface.query("SELECT $x, $y WHERE { $x $y Animal }")
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration = end_time - start_time
 
       # Should complete in reasonable time

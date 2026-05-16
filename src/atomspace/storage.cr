@@ -21,12 +21,12 @@ module AtomSpace
     @size : Int32
     @connection_string : String
     @mutex : Mutex
-    
+
     def initialize(@connection_string : String, @size : Int32 = 10)
       @pool = Array(DB::Database).new
       @available = Channel(DB::Database).new(@size)
       @mutex = Mutex.new
-      
+
       # Initialize pool with connections
       @size.times do
         conn = DB.open(@connection_string)
@@ -34,17 +34,17 @@ module AtomSpace
         @available.send(conn)
       end
     end
-    
+
     # Acquire a connection from the pool (blocks if none available)
     def acquire : DB::Database
       @available.receive
     end
-    
+
     # Release a connection back to the pool
     def release(conn : DB::Database)
       @available.send(conn)
     end
-    
+
     # Execute a block with a connection from the pool
     def with_connection(&block : DB::Database -> T) : T forall T
       conn = acquire
@@ -54,7 +54,7 @@ module AtomSpace
         release(conn)
       end
     end
-    
+
     # Close all connections in the pool
     def close
       @mutex.synchronize do
@@ -62,13 +62,13 @@ module AtomSpace
         @pool.clear
       end
     end
-    
+
     # Get pool statistics
     def stats : Hash(String, Int32)
       {
-        "size" => @size,
+        "size"      => @size,
         "available" => @available.size,
-        "in_use" => @size - @available.size
+        "in_use"    => @size - @available.size,
       }
     end
   end
@@ -196,10 +196,10 @@ module AtomSpace
         File.touch(@file_path) unless File.exists?(@file_path)
 
         @connected = true
-        
+
         # Build index from existing file
         rebuild_index
-        
+
         log_info("Opened file storage: #{@file_path}")
         true
       rescue ex
@@ -227,10 +227,10 @@ module AtomSpace
         File.open(@file_path, "a") do |file|
           file.puts(atom_to_scheme(atom))
         end
-        
+
         # Update index
         @atom_index[atom.handle] = atom
-        
+
         log_debug("Stored atom: #{atom}")
         true
       rescue ex
@@ -252,7 +252,7 @@ module AtomSpace
       begin
         # Remove from index
         @atom_index.delete(atom.handle)
-        
+
         # Rewrite file with remaining atoms
         File.open(@file_path, "w") do |file|
           @atom_index.each_value { |a| file.puts(atom_to_scheme(a)) }
@@ -272,7 +272,7 @@ module AtomSpace
       begin
         # Clear and rebuild index
         @atom_index.clear
-        
+
         File.open(@file_path, "w") do |file|
           atomspace.get_all_atoms.each do |atom|
             file.puts(atom_to_scheme(atom))
@@ -405,22 +405,22 @@ module AtomSpace
 
       atoms
     end
-    
+
     # Rebuild the in-memory index from file
     private def rebuild_index
       @atom_index.clear
       return unless File.exists?(@file_path)
-      
+
       File.each_line(@file_path) do |line|
         line = line.strip
         next if line.empty? || line.starts_with?(';')
-        
+
         atom = scheme_to_atom(line)
         if atom
           @atom_index[atom.handle] = atom
         end
       end
-      
+
       log_debug("Rebuilt index with #{@atom_index.size} atoms")
     end
   end
@@ -456,7 +456,7 @@ module AtomSpace
           # Single connection mode
           @db = DB.open("sqlite3:#{@db_path}")
         end
-        
+
         create_tables
 
         @connected = true
@@ -950,7 +950,7 @@ module AtomSpace
           # Single connection mode
           @db = DB.open("postgres://#{@connection_string}")
         end
-        
+
         create_tables
         @connected = true
         log_info("Opened PostgreSQL storage: #{@connection_string}")
@@ -989,17 +989,17 @@ module AtomSpace
 
       begin
         db = @db.not_nil!
-        
+
         # Store the atom
         tv = atom.truth_value
         db.exec(
-          "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence) 
-           VALUES ($1, $2, $3, $4, $5) 
-           ON CONFLICT (handle) DO UPDATE SET 
-           type = EXCLUDED.type, name = EXCLUDED.name, 
-           truth_strength = EXCLUDED.truth_strength, 
+          "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (handle) DO UPDATE SET
+           type = EXCLUDED.type, name = EXCLUDED.name,
+           truth_strength = EXCLUDED.truth_strength,
            truth_confidence = EXCLUDED.truth_confidence",
-          atom.handle.to_s, atom.type.to_s, 
+          atom.handle.to_s, atom.type.to_s,
           atom.is_a?(Node) ? atom.name : "",
           tv.strength, tv.confidence
         )
@@ -1008,7 +1008,7 @@ module AtomSpace
         if atom.is_a?(Link)
           # Remove existing outgoing relationships
           db.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
-          
+
           # Add new outgoing relationships
           atom.outgoing.each_with_index do |target, index|
             db.exec(
@@ -1031,7 +1031,7 @@ module AtomSpace
 
       begin
         db = @db.not_nil!
-        
+
         # Fetch atom basic info
         db.query(
           "SELECT type, name, truth_strength, truth_confidence FROM atoms WHERE handle = $1",
@@ -1152,13 +1152,13 @@ module AtomSpace
     private def store_atom_in_connection(atom : Atom, conn : DB::Connection) : Bool
       tv = atom.truth_value
       conn.exec(
-        "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence) 
-         VALUES ($1, $2, $3, $4, $5) 
-         ON CONFLICT (handle) DO UPDATE SET 
-         type = EXCLUDED.type, name = EXCLUDED.name, 
-         truth_strength = EXCLUDED.truth_strength, 
+        "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (handle) DO UPDATE SET
+         type = EXCLUDED.type, name = EXCLUDED.name,
+         truth_strength = EXCLUDED.truth_strength,
          truth_confidence = EXCLUDED.truth_confidence",
-        atom.handle.to_s, atom.type.to_s, 
+        atom.handle.to_s, atom.type.to_s,
         atom.is_a?(Node) ? atom.name : "",
         tv.strength, tv.confidence
       )
@@ -1167,7 +1167,7 @@ module AtomSpace
       if atom.is_a?(Link)
         # Remove existing outgoing relationships
         conn.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
-        
+
         # Add new outgoing relationships
         atom.outgoing.each_with_index do |target, index|
           conn.exec(
@@ -1321,23 +1321,23 @@ module AtomSpace
 
       begin
         db = @db.not_nil!
-        
+
         # Serialize atom to JSON
         atom_data = {
-          "handle" => atom.handle.to_s,
-          "type" => atom.type.to_s,
-          "name" => atom.is_a?(Node) ? atom.name : "",
-          "truth_strength" => atom.truth_value.strength,
+          "handle"           => atom.handle.to_s,
+          "type"             => atom.type.to_s,
+          "name"             => atom.is_a?(Node) ? atom.name : "",
+          "truth_strength"   => atom.truth_value.strength,
           "truth_confidence" => atom.truth_value.confidence,
-          "outgoing" => atom.is_a?(Link) ? atom.outgoing.map(&.handle.to_s) : [] of String
+          "outgoing"         => atom.is_a?(Link) ? atom.outgoing.map(&.handle.to_s) : [] of String,
         }
-        
+
         # Store with handle as key
         db.put("atom:#{atom.handle}", atom_data.to_json)
-        
+
         # Create type index
         db.put("type:#{atom.type}:#{atom.handle}", "1")
-        
+
         # Create name index for nodes
         if atom.is_a?(Node) && !atom.name.empty?
           db.put("name:#{atom.name}:#{atom.handle}", "1")
@@ -1356,17 +1356,17 @@ module AtomSpace
 
       begin
         db = @db.not_nil!
-        
+
         # Fetch atom data
         json_data = db.get("atom:#{handle}")
         return nil unless json_data
-        
+
         data = JSON.parse(json_data)
         type = AtomType.parse(data["type"].as_s)
         strength = data["truth_strength"].as_f
         confidence = data["truth_confidence"].as_f
         tv = SimpleTruthValue.new(strength, confidence)
-        
+
         if type.node?
           name = data["name"].as_s
           return Node.new(type, name, tv)
@@ -1374,7 +1374,7 @@ module AtomSpace
           # Reconstruct outgoing atoms for links
           outgoing_handles = data["outgoing"].as_a.map { |h| Handle.new(h.as_s) }
           outgoing = [] of Atom
-          outgoing_handles.each do |h| 
+          outgoing_handles.each do |h|
             atom = fetch_atom(h)
             outgoing << atom if atom
           end
@@ -1394,10 +1394,10 @@ module AtomSpace
 
         # Remove main atom entry
         db.delete("atom:#{atom.handle}")
-        
+
         # Remove type index
         db.delete("type:#{atom.type}:#{atom.handle}")
-        
+
         # Remove name index for nodes
         if atom.is_a?(Node) && !atom.name.empty?
           db.delete("name:#{atom.name}:#{atom.handle}")
@@ -1445,25 +1445,25 @@ module AtomSpace
         # First pass: Load all nodes (no recursion risk)
         node_handles = [] of Handle
         link_data = {} of Handle => JSON::Any
-        
+
         db.each_key do |key|
           if key.starts_with?("atom:")
-            handle_str = key[5..]  # Remove "atom:" prefix
+            handle_str = key[5..] # Remove "atom:" prefix
             handle = Handle.new(handle_str)
-            
+
             json_data = db.get(key)
             next unless json_data
-            
+
             data = JSON.parse(json_data)
             type = AtomType.parse(data["type"].as_s)
-            
+
             if type.node?
               # Load nodes immediately and create handle mapping
               strength = data["truth_strength"].as_f
               confidence = data["truth_confidence"].as_f
               tv = SimpleTruthValue.new(strength, confidence)
               name = data["name"].as_s
-              
+
               node = Node.new(type, name, tv)
               new_atom = atomspace.add_atom(node)
               handle_mapping[handle] = new_atom
@@ -1474,24 +1474,24 @@ module AtomSpace
             end
           end
         end
-        
+
         # Second pass: Load all links using handle mapping
         link_data.each do |original_handle, data|
           type = AtomType.parse(data["type"].as_s)
           strength = data["truth_strength"].as_f
           confidence = data["truth_confidence"].as_f
           tv = SimpleTruthValue.new(strength, confidence)
-          
+
           # Build outgoing array using handle mapping
           outgoing_handles = data["outgoing"].as_a.map { |h| Handle.new(h.as_s) }
           outgoing = [] of Atom
-          
+
           outgoing_handles.each do |old_handle|
             # Use handle mapping to find the new atom
             mapped_atom = handle_mapping[old_handle]?
             outgoing << mapped_atom if mapped_atom
           end
-          
+
           link = Link.new(type, outgoing, tv)
           new_link = atomspace.add_atom(link)
           handle_mapping[original_handle] = new_link
@@ -1518,18 +1518,18 @@ module AtomSpace
           atom_count = 0_i64
           type_count = 0_i64
           name_count = 0_i64
-          
+
           db = @db.not_nil!
           db.each_key do |key|
             if key.starts_with?("atom:")
               atom_count += 1
             elsif key.starts_with?("type:")
-              type_count += 1  
+              type_count += 1
             elsif key.starts_with?("name:")
               name_count += 1
             end
           end
-          
+
           stats["atom_count"] = atom_count
           stats["type_index_count"] = type_count
           stats["name_index_count"] = name_count
@@ -1547,7 +1547,7 @@ module AtomSpace
 
       begin
         db = @db.not_nil!
-        
+
         # Use type index to find atoms efficiently
         db.each_key do |key|
           if key.starts_with?("type:#{type}:")

@@ -129,12 +129,12 @@ module CogUtil
       sleep(0.01) # Allow GC to complete
 
       initial_memory = get_system_memory_info
-      start_time = Time.monotonic
+      start_time = Time.instant
 
       # Execute the operation
       result = yield
 
-      end_time = Time.monotonic
+      end_time = Time.instant
       duration_ms = (end_time - start_time).total_milliseconds
 
       # Force garbage collection after operation

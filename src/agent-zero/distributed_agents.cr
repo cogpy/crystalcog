@@ -111,9 +111,9 @@ module AgentZero
 
       # Send goodbye messages to peers
       broadcast_message(Message.new("agent_goodbye", @id, {
-        "agent_id" => @id,
-        "name" => @name,
-        "timestamp" => Time.utc.to_rfc3339
+        "agent_id"  => @id,
+        "name"      => @name,
+        "timestamp" => Time.utc.to_rfc3339,
       }))
 
       @server.try(&.close)
@@ -127,13 +127,13 @@ module AgentZero
 
         # Send introduction message
         intro_message = Message.new("agent_introduction", @id, {
-          "agent_id" => @id,
-          "name" => @name,
-          "host" => @host,
-          "port" => @port,
+          "agent_id"     => @id,
+          "name"         => @name,
+          "host"         => @host,
+          "port"         => @port,
           "capabilities" => @capabilities,
-          "trust_level" => @trust_level,
-          "timestamp" => Time.utc.to_rfc3339
+          "trust_level"  => @trust_level,
+          "timestamp"    => Time.utc.to_rfc3339,
         })
 
         socket.puts(intro_message.to_json)
@@ -205,10 +205,10 @@ module AgentZero
       reasoning_id = UUID.random.to_s
       request_message = Message.new("collaborative_reasoning_request", @id, {
         "reasoning_id" => reasoning_id,
-        "query" => query,
-        "requester" => @name,
-        "timeout" => timeout_seconds,
-        "timestamp" => Time.utc.to_rfc3339
+        "query"        => query,
+        "requester"    => @name,
+        "timeout"      => timeout_seconds,
+        "timestamp"    => Time.utc.to_rfc3339,
       })
 
       # Store expected responses
@@ -234,9 +234,9 @@ module AgentZero
       broadcast_message(request_message)
 
       # Wait for responses with timeout
-      start_time = Time.monotonic
+      start_time = Time.instant
       while received_results.size < expected_responses.size &&
-            (Time.monotonic - start_time).total_seconds < timeout_seconds
+            (Time.instant - start_time).total_seconds < timeout_seconds
         sleep 0.1.seconds
       end
 
@@ -255,11 +255,11 @@ module AgentZero
     def share_knowledge(knowledge_item : KnowledgeItem) : Int32
       share_message = Message.new("knowledge_share", @id, {
         "knowledge_id" => knowledge_item.id,
-        "type" => knowledge_item.type,
-        "content" => knowledge_item.content,
-        "confidence" => knowledge_item.confidence,
-        "source" => @name,
-        "timestamp" => Time.utc.to_rfc3339
+        "type"         => knowledge_item.type,
+        "content"      => knowledge_item.content,
+        "confidence"   => knowledge_item.confidence,
+        "source"       => @name,
+        "timestamp"    => Time.utc.to_rfc3339,
       })
 
       broadcast_message(share_message)
@@ -270,27 +270,27 @@ module AgentZero
       peer_status = @peers.map do |id, peer|
         {
           id => JSON::Any.new({
-            "name" => JSON::Any.new(peer.name),
-            "host" => JSON::Any.new(peer.host),
-            "port" => JSON::Any.new(peer.port.to_i64),
-            "status" => JSON::Any.new(peer.status.to_s),
+            "name"         => JSON::Any.new(peer.name),
+            "host"         => JSON::Any.new(peer.host),
+            "port"         => JSON::Any.new(peer.port.to_i64),
+            "status"       => JSON::Any.new(peer.status.to_s),
             "capabilities" => JSON::Any.new(peer.capabilities.map { |c| JSON::Any.new(c) }),
-            "trust_level" => JSON::Any.new(peer.trust_level),
-            "last_seen" => JSON::Any.new(peer.last_seen.to_rfc3339),
-            "is_stale" => JSON::Any.new(peer.is_stale?)
-          })
+            "trust_level"  => JSON::Any.new(peer.trust_level),
+            "last_seen"    => JSON::Any.new(peer.last_seen.to_rfc3339),
+            "is_stale"     => JSON::Any.new(peer.is_stale?),
+          }),
         }
       end.reduce({} of String => JSON::Any) { |acc, item| acc.merge!(item) }
 
       {
-        "agent_id" => JSON::Any.new(@id),
-        "agent_name" => JSON::Any.new(@name),
-        "status" => JSON::Any.new(@status.to_s),
-        "peer_count" => JSON::Any.new(@peers.size.to_i64),
-        "peers" => JSON::Any.new(peer_status),
-        "capabilities" => JSON::Any.new(@capabilities.map { |c| JSON::Any.new(c) }),
-        "trust_level" => JSON::Any.new(@trust_level),
-        "uptime_seconds" => JSON::Any.new(uptime_seconds.to_i64)
+        "agent_id"       => JSON::Any.new(@id),
+        "agent_name"     => JSON::Any.new(@name),
+        "status"         => JSON::Any.new(@status.to_s),
+        "peer_count"     => JSON::Any.new(@peers.size.to_i64),
+        "peers"          => JSON::Any.new(peer_status),
+        "capabilities"   => JSON::Any.new(@capabilities.map { |c| JSON::Any.new(c) }),
+        "trust_level"    => JSON::Any.new(@trust_level),
+        "uptime_seconds" => JSON::Any.new(uptime_seconds.to_i64),
       }
     end
 
@@ -346,14 +346,14 @@ module AgentZero
       # Agent introduction handler
       @message_handlers["agent_introduction"] = ->(message : Message) {
         response_payload = {
-          "status" => "accepted",
-          "agent_id" => @id,
-          "name" => @name,
-          "host" => @host,
-          "port" => @port,
+          "status"       => "accepted",
+          "agent_id"     => @id,
+          "name"         => @name,
+          "host"         => @host,
+          "port"         => @port,
           "capabilities" => @capabilities,
-          "trust_level" => @trust_level,
-          "timestamp" => Time.utc.to_rfc3339
+          "trust_level"  => @trust_level,
+          "timestamp"    => Time.utc.to_rfc3339,
         }
 
         response = Message.new("agent_introduction_response", @id, response_payload)
@@ -377,20 +377,20 @@ module AgentZero
         query = message.payload["query"].as_s
         reasoning_id = message.payload["reasoning_id"].as_s
 
-        start_time = Time.monotonic
+        start_time = Time.instant
 
         # Perform local reasoning using cognitive kernel
         result = perform_local_reasoning(query)
 
-        reasoning_time = (Time.monotonic - start_time).total_milliseconds
+        reasoning_time = (Time.instant - start_time).total_milliseconds
 
         response = Message.new("collaborative_reasoning_response", @id, {
-          "reasoning_id" => reasoning_id,
-          "response" => result.content,
-          "confidence" => result.confidence,
+          "reasoning_id"      => reasoning_id,
+          "response"          => result.content,
+          "confidence"        => result.confidence,
           "reasoning_time_ms" => reasoning_time,
-          "agent_name" => @name,
-          "timestamp" => Time.utc.to_rfc3339
+          "agent_name"        => @name,
+          "timestamp"         => Time.utc.to_rfc3339,
         })
 
         send_message_to_peer(message.sender_id, response)
@@ -448,13 +448,13 @@ module AgentZero
       while @running
         # Send heartbeat to all known peers
         heartbeat_message = Message.new("discovery_heartbeat", @id, {
-          "agent_id" => @id,
-          "name" => @name,
-          "host" => @host,
-          "port" => @port,
-          "status" => @status.to_s,
+          "agent_id"     => @id,
+          "name"         => @name,
+          "host"         => @host,
+          "port"         => @port,
+          "status"       => @status.to_s,
           "capabilities" => @capabilities,
-          "timestamp" => Time.utc.to_rfc3339
+          "timestamp"    => Time.utc.to_rfc3339,
         })
 
         broadcast_message(heartbeat_message)

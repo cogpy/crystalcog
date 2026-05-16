@@ -270,7 +270,7 @@ module PatternMining
 
     # Mine patterns from the atomspace using the main algorithm
     def mine_patterns : MiningResult
-      start_time = Time.monotonic
+      start_time = Time.instant
       patterns_explored = 0
 
       CogUtil::Logger.info("Starting pattern mining with min_support=#{@min_support}")
@@ -325,7 +325,7 @@ module PatternMining
         end
       end
 
-      mining_time = Time.monotonic - start_time
+      mining_time = Time.instant - start_time
       CogUtil::Logger.info("Pattern mining completed: #{@discovered_patterns.size} patterns found, #{patterns_explored} explored")
 
       MiningResult.new(@discovered_patterns, patterns_explored, mining_time)
@@ -354,9 +354,9 @@ module PatternMining
     end
 
     # Check if mining has timed out
-    private def check_timeout(start_time : Time::Span) : Bool
+    private def check_timeout(start_time : Time::Instant) : Bool
       if timeout = @timeout_seconds
-        elapsed = (Time.monotonic - start_time).total_seconds
+        elapsed = (Time.instant - start_time).total_seconds
         if elapsed > timeout
           CogUtil::Logger.warn("Pattern mining timed out after #{elapsed.round(2)} seconds")
           return true

@@ -19,13 +19,13 @@ module Explanation
 
   # The type of reasoning step used to derive a conclusion
   enum StepType
-    DEDUCTION        # A → B, A ⊢ B
-    INDUCTION        # observations → general rule
-    ABDUCTION        # B, A→B ⊢ A (best explanation)
-    ANALOGY          # A:B :: C:? 
-    LOOKUP           # Direct knowledge retrieval
-    INFERENCE        # Generic logical inference
-    OBSERVATION      # Direct sensory evidence
+    DEDUCTION   # A → B, A ⊢ B
+    INDUCTION   # observations → general rule
+    ABDUCTION   # B, A→B ⊢ A (best explanation)
+    ANALOGY     # A:B :: C:?
+    LOOKUP      # Direct knowledge retrieval
+    INFERENCE   # Generic logical inference
+    OBSERVATION # Direct sensory evidence
   end
 
   # A single step in a reasoning chain
@@ -41,7 +41,7 @@ module Explanation
       @premise : String,
       @conclusion : String,
       @confidence : Float64 = 1.0,
-      @rule_applied : String = ""
+      @rule_applied : String = "",
     )
     end
 
@@ -209,7 +209,7 @@ module Explanation
         )
         trace.add_step(step)
         build_trace(premise.name, trace, depth - 1)
-        break  # One supporting path is enough for basic explanation
+        break # One supporting path is enough for basic explanation
       end
     end
   end

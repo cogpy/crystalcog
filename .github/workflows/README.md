@@ -164,7 +164,7 @@ You can pass additional CMake arguments through the reusable workflow:
 - Manual workflow dispatch
 
 **Features**:
-- **Environment Setup**: Installs Crystal 1.10.1 and required dependencies
+- **Environment Setup**: Installs Crystal 1.20.1 and required dependencies
 - **Dependency Management**: Runs `shards install` with error capture
 - **Multi-target Build**: Compiles crystalcog, cogutil, atomspace, and opencog components
 - **Test Execution**: Runs Crystal specs and basic functionality tests
@@ -230,7 +230,7 @@ You can pass additional CMake arguments through the reusable workflow:
 The Crystal version is configured in the workflow file:
 ```yaml
 env:
-  CRYSTAL_VERSION: 1.10.1
+  CRYSTAL_VERSION: 1.20.1
 ```
 
 ### Roadmap Issues Workflow

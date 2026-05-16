@@ -59,7 +59,7 @@ module Robotics
     class OccupancyGrid
       getter width : Int32
       getter height : Int32
-      getter resolution : Float64  # meters per cell
+      getter resolution : Float64 # meters per cell
 
       @grid : Array(Array(Bool))
 
@@ -147,7 +147,7 @@ module Robotics
           end
         end
 
-        nil  # No path found
+        nil # No path found
       end
 
       private def heuristic(x1 : Int32, y1 : Int32, x2 : Int32, y2 : Int32) : Float64
@@ -158,18 +158,18 @@ module Robotics
       private def neighbors(x : Int32, y : Int32) : Array(Tuple(Int32, Int32))
         dirs = [
           {-1, -1}, {0, -1}, {1, -1},
-          {-1, 0},            {1, 0},
-          {-1, 1},  {0, 1},  {1, 1}
+          {-1, 0}, {1, 0},
+          {-1, 1}, {0, 1}, {1, 1},
         ]
         dirs.map { |dx, dy| {x + dx, y + dy} }
-            .select { |nx, ny| @grid.valid?(nx, ny) }
+          .select { |nx, ny| @grid.valid?(nx, ny) }
       end
 
       private def reconstruct_path(
         parent : Hash(Tuple(Int32, Int32), Tuple(Int32, Int32)),
         goal_node : Tuple(Int32, Int32),
         start_pos : SpatialReasoning::Position,
-        goal_pos : SpatialReasoning::Position
+        goal_pos : SpatialReasoning::Position,
       ) : Path
         nodes = [] of Tuple(Int32, Int32)
         current = goal_node

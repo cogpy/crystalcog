@@ -75,7 +75,7 @@ describe CogServer do
       atomspace = AtomSpace::AtomSpace.new
       session = CogServer::Session.new("test789", atomspace, :http)
 
-      sleep 0.01 # Small delay to ensure duration > 0
+      sleep 0.01.seconds # Small delay to ensure duration > 0
       session.duration.should be > Time::Span.zero
     end
   end

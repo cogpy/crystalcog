@@ -67,7 +67,7 @@ module NLP
       word1 : String,
       word2 : String,
       relation_type : String,
-      confidence : Float64 = 0.8
+      confidence : Float64 = 0.8,
     ) : AtomSpace::Atom
       # Create or get word atoms
       word1_atom = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, "word:#{word1}")
@@ -150,7 +150,7 @@ module NLP
       concept_words = atomspace.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE)
         .select { |atom| atom.name.starts_with?("word:") }
       word_nodes = atomspace.get_atoms_by_type(AtomSpace::AtomType::WORD_NODE)
-      
+
       concept_words + word_nodes
     end
 
@@ -172,7 +172,7 @@ module NLP
     # Get semantic relations of a specific type
     def self.get_semantic_relations(
       atomspace : AtomSpace::AtomSpace,
-      relation_type : String
+      relation_type : String,
     ) : Array(AtomSpace::Atom)
       relation_predicate = atomspace.get_atoms_by_type(AtomSpace::AtomType::PREDICATE_NODE)
         .find { |atom| atom.name == relation_type }

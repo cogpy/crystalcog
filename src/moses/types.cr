@@ -23,6 +23,9 @@ module Moses
   # Relies on score_or_worst to normalize NaN; the `|| 0` guards the nilable
   # return type of Float64#<=> (which is Int32?).
   def self.compare_candidates(a : Candidate, b : Candidate) : Int32
+    score_a = score_or_worst(a)
+    score_b = score_or_worst(b)
+    (score_a <=> score_b) || 0
     (score_or_worst(a) <=> score_or_worst(b)) || 0
   end
 
@@ -409,7 +412,7 @@ module Moses
 
   # Program candidate representation
   # Now uses structured Program representation while maintaining compatibility
-  struct Candidate
+  class Candidate
     property program : String          # String representation for compatibility
     property parsed_program : Program? # Structured representation
     property score : CompositeScore?

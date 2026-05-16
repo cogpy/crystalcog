@@ -76,7 +76,7 @@ module AtomSpace
     property id : String
     property source_node : String
     property target_node : String
-    property operation_type : String  # "add", "update", "remove"
+    property operation_type : String # "add", "update", "remove"
     property atom_handle : String
     property atom_data : Hash(String, JSON::Any)?
     property timestamp : Time
@@ -96,7 +96,7 @@ module AtomSpace
     property min_interval : Time::Span
     property max_interval : Time::Span
     property current_interval : Time::Span
-    property stability_threshold : Int32  # Number of stable cycles before increasing interval
+    property stability_threshold : Int32 # Number of stable cycles before increasing interval
     property stable_cycles : Int32
     property last_cluster_change : Time
     property enabled : Bool
@@ -106,7 +106,7 @@ module AtomSpace
       @min_interval : Time::Span = 5.seconds,
       @max_interval : Time::Span = 120.seconds,
       @stability_threshold : Int32 = 5,
-      @enabled : Bool = true
+      @enabled : Bool = true,
     )
       @current_interval = @base_interval
       @stable_cycles = 0
@@ -155,14 +155,14 @@ module AtomSpace
 
     def stats : Hash(String, String | Int32 | Float64)
       {
-        "enabled" => @enabled.to_s,
-        "current_interval_seconds" => @current_interval.total_seconds,
-        "base_interval_seconds" => @base_interval.total_seconds,
-        "min_interval_seconds" => @min_interval.total_seconds,
-        "max_interval_seconds" => @max_interval.total_seconds,
-        "stable_cycles" => @stable_cycles,
-        "stability_threshold" => @stability_threshold,
-        "time_since_last_change_seconds" => time_since_last_change.total_seconds
+        "enabled"                        => @enabled.to_s,
+        "current_interval_seconds"       => @current_interval.total_seconds,
+        "base_interval_seconds"          => @base_interval.total_seconds,
+        "min_interval_seconds"           => @min_interval.total_seconds,
+        "max_interval_seconds"           => @max_interval.total_seconds,
+        "stable_cycles"                  => @stable_cycles,
+        "stability_threshold"            => @stability_threshold,
+        "time_since_last_change_seconds" => time_since_last_change.total_seconds,
       }
     end
   end
@@ -252,11 +252,11 @@ module AtomSpace
       broadcast_departure_message
 
       @server.try(&.close)
-      
+
       # Fibers will exit naturally when @running becomes false
       # Give them time to complete their current iteration
       sleep 0.1.seconds
-      
+
       emit_event(ClusterEvent::NODE_LEFT, @node_id)
       CogUtil::Logger.info("Cluster node #{@node_id} stopped")
     end
@@ -267,12 +267,12 @@ module AtomSpace
         socket = TCPSocket.new(seed_host, seed_port)
 
         join_request = {
-          "type" => "cluster_join_request",
+          "type"       => "cluster_join_request",
           "cluster_id" => @cluster_id,
-          "node_id" => @node_id,
-          "host" => @local_node.host,
-          "port" => @local_node.port,
-          "timestamp" => Time.utc.to_rfc3339
+          "node_id"    => @node_id,
+          "host"       => @local_node.host,
+          "port"       => @local_node.port,
+          "timestamp"  => Time.utc.to_rfc3339,
         }
 
         socket.puts(join_request.to_json)
@@ -355,16 +355,16 @@ module AtomSpace
       active_nodes = @cluster_nodes.values.count { |node| node.status == NodeStatus::Active }
 
       stats = {
-        "cluster_id" => JSON::Any.new(@cluster_id),
-        "total_nodes" => JSON::Any.new(@cluster_nodes.size.to_i64),
-        "active_nodes" => JSON::Any.new(active_nodes.to_i64),
-        "total_atoms" => JSON::Any.new(total_atoms.to_i64),
-        "local_atomspace_size" => JSON::Any.new(@local_atomspace.size.to_i64),
-        "pending_sync_operations" => JSON::Any.new(@pending_sync_ops.size.to_i64),
-        "sync_strategy" => JSON::Any.new(@sync_strategy.to_s),
-        "local_node_status" => JSON::Any.new(@local_node.status.to_s),
+        "cluster_id"                 => JSON::Any.new(@cluster_id),
+        "total_nodes"                => JSON::Any.new(@cluster_nodes.size.to_i64),
+        "active_nodes"               => JSON::Any.new(active_nodes.to_i64),
+        "total_atoms"                => JSON::Any.new(total_atoms.to_i64),
+        "local_atomspace_size"       => JSON::Any.new(@local_atomspace.size.to_i64),
+        "pending_sync_operations"    => JSON::Any.new(@pending_sync_ops.size.to_i64),
+        "sync_strategy"              => JSON::Any.new(@sync_strategy.to_s),
+        "local_node_status"          => JSON::Any.new(@local_node.status.to_s),
         "adaptive_heartbeat_enabled" => JSON::Any.new(@adaptive_heartbeat.enabled),
-        "heartbeat_interval_seconds" => JSON::Any.new(@adaptive_heartbeat.current_interval.total_seconds)
+        "heartbeat_interval_seconds" => JSON::Any.new(@adaptive_heartbeat.current_interval.total_seconds),
       }
 
       stats
@@ -485,7 +485,7 @@ module AtomSpace
 
     private def handle_join_request(message : JSON::Any, client : TCPSocket?)
       cluster_id = message["cluster_id"].as_s
-      
+
       if cluster_id != @cluster_id
         response = {"status" => "rejected", "reason" => "cluster_id_mismatch"}
         client.try(&.puts(response.to_json))
@@ -503,16 +503,16 @@ module AtomSpace
 
       # Send acceptance response with current cluster state
       response = {
-        "status" => "accepted",
+        "status"        => "accepted",
         "cluster_nodes" => @cluster_nodes.values.map { |node|
           {
-            "id" => node.id,
-            "host" => node.host,
-            "port" => node.port,
-            "status" => node.status.to_s,
-            "atomspace_size" => node.atomspace_size
+            "id"             => node.id,
+            "host"           => node.host,
+            "port"           => node.port,
+            "status"         => node.status.to_s,
+            "atomspace_size" => node.atomspace_size,
           }
-        }
+        },
       }
 
       client.try(&.puts(response.to_json))
@@ -523,7 +523,7 @@ module AtomSpace
 
     private def handle_heartbeat(message : JSON::Any)
       node_id = message["node_id"].as_s
-      
+
       if node = @cluster_nodes[node_id]?
         node.update_heartbeat
         node.status = NodeStatus.parse(message["status"].as_s)
@@ -540,7 +540,7 @@ module AtomSpace
       )
       sync_op.id = message["id"].as_s
       sync_op.timestamp = Time.parse_rfc3339(message["timestamp"].as_s)
-      
+
       if atom_data = message["atom_data"]?
         sync_op.atom_data = atom_data.as_h
       end
@@ -572,7 +572,6 @@ module AtomSpace
 
         update_vector_clock(sync_op.vector_clock)
         return true
-
       when "remove"
         if existing_atom = @local_atomspace.get_atom(Handle.new(sync_op.atom_handle))
           @local_atomspace.remove_atom(existing_atom)
@@ -593,12 +592,12 @@ module AtomSpace
 
         # Send heartbeat to all cluster nodes
         heartbeat_message = {
-          "type" => "heartbeat",
-          "node_id" => @node_id,
-          "status" => @local_node.status.to_s,
+          "type"           => "heartbeat",
+          "node_id"        => @node_id,
+          "status"         => @local_node.status.to_s,
           "atomspace_size" => @local_node.atomspace_size,
-          "load_factor" => @local_node.load_factor,
-          "timestamp" => Time.utc.to_rfc3339
+          "load_factor"    => @local_node.load_factor,
+          "timestamp"      => Time.utc.to_rfc3339,
         }
 
         broadcast_message(heartbeat_message)
@@ -664,14 +663,14 @@ module AtomSpace
 
     private def broadcast_sync_operation(sync_op : SyncOperation)
       message = {
-        "type" => "sync_operation",
-        "id" => sync_op.id,
+        "type"           => "sync_operation",
+        "id"             => sync_op.id,
         "operation_type" => sync_op.operation_type,
-        "atom_handle" => sync_op.atom_handle,
-        "source_node" => sync_op.source_node,
-        "timestamp" => sync_op.timestamp.to_rfc3339,
-        "atom_data" => sync_op.atom_data,
-        "vector_clock" => sync_op.vector_clock
+        "atom_handle"    => sync_op.atom_handle,
+        "source_node"    => sync_op.source_node,
+        "timestamp"      => sync_op.timestamp.to_rfc3339,
+        "atom_data"      => sync_op.atom_data,
+        "vector_clock"   => sync_op.vector_clock,
       }
 
       broadcast_message(message)
@@ -752,7 +751,7 @@ module AtomSpace
       return nil unless sync_op.vector_clock
 
       remote_clock = sync_op.vector_clock.not_nil!
-      
+
       # Check if this operation is concurrent with local changes
       remote_clock.each do |node_id, timestamp|
         local_timestamp = @vector_clock[node_id]? || 0_u64
@@ -766,8 +765,8 @@ module AtomSpace
 
     private def calculate_load_factor : Float64
       # Simple load factor based on atomspace size and pending operations
-      base_load = @local_atomspace.size.to_f / 10000.0  # Normalize to 10k atoms
-      sync_load = @pending_sync_ops.size.to_f / 100.0   # Normalize to 100 ops
+      base_load = @local_atomspace.size.to_f / 10000.0 # Normalize to 10k atoms
+      sync_load = @pending_sync_ops.size.to_f / 100.0  # Normalize to 100 ops
       Math.min(1.0, base_load + sync_load)
     end
 
@@ -796,9 +795,9 @@ module AtomSpace
 
     private def broadcast_departure_message
       departure_message = {
-        "type" => "cluster_departure",
-        "node_id" => @node_id,
-        "timestamp" => Time.utc.to_rfc3339
+        "type"      => "cluster_departure",
+        "node_id"   => @node_id,
+        "timestamp" => Time.utc.to_rfc3339,
       }
 
       broadcast_message(departure_message)

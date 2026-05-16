@@ -1,5 +1,6 @@
 require "spec"
 require "../../src/attention/attention_main"
+require "../../src/atomspace/atomspace_module"
 
 describe "Attention Main" do
   describe "initialization" do
