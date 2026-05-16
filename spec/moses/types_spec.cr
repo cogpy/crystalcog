@@ -357,6 +357,12 @@ describe Moses do
       c.score = Moses::CompositeScore.new(-0.5, 3)
       Moses.score_or_worst(c).should eq(-0.5)
     end
+
+    it "normalizes NaN penalized_score to VERY_WORST_SCORE" do
+      c = Moses::Candidate.new("$0")
+      c.score = Moses::CompositeScore.new(Float64::NAN, 3)
+      Moses.score_or_worst(c).should eq(Moses::VERY_WORST_SCORE)
+    end
   end
 
   describe "compare_candidates" do
@@ -376,6 +382,40 @@ describe Moses do
 
       result = Moses.compare_candidates(a, b)
       result.should be > 0
+    end
+
+    it "returns 0 for two unscored candidates" do
+      a = Moses::Candidate.new("a")
+      b = Moses::Candidate.new("b")
+      Moses.compare_candidates(a, b).should eq(0)
+    end
+
+    it "treats NaN-scored candidate as worst (transitively)" do
+      nan_cand = Moses::Candidate.new("nan")
+      nan_cand.score = Moses::CompositeScore.new(Float64::NAN, 2)
+
+      good = Moses::Candidate.new("good")
+      good.score = Moses::CompositeScore.new(-0.3, 2)
+
+      unscored = Moses::Candidate.new("unscored")
+
+      # NaN sorts as equal to unscored (both -> VERY_WORST_SCORE) and below good.
+      Moses.compare_candidates(nan_cand, good).should be < 0
+      Moses.compare_candidates(good, nan_cand).should be > 0
+      Moses.compare_candidates(nan_cand, unscored).should eq(0)
+    end
+
+    it "is safe to use as a sort comparator with NaN scores" do
+      a = Moses::Candidate.new("a")
+      a.score = Moses::CompositeScore.new(-0.5, 2)
+      b = Moses::Candidate.new("b")
+      b.score = Moses::CompositeScore.new(Float64::NAN, 2)
+      c = Moses::Candidate.new("c")
+      c.score = Moses::CompositeScore.new(-0.1, 2)
+
+      sorted = [a, b, c].sort { |x, y| Moses.compare_candidates(x, y) }
+      sorted.last.program.should eq("c") # best score wins
+      sorted.first.program.should eq("b") # NaN sorts as worst
     end
   end
 end
