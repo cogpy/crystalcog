@@ -20,6 +20,7 @@ on:
 
 env:
   CRYSTAL_VERSION: '1.20.1'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # AtomSpace E2E tests
@@ -99,6 +100,7 @@ jobs:
         puts "\n✓ All AtomSpace stress tests passed!"
         EOF
         
+        # Run from repository root so relative paths work
         timeout 600 crystal run --error-trace /tmp/atomspace_stress_test.cr
 
     - name: Run AtomSpace persistence tests
@@ -142,6 +144,7 @@ jobs:
         puts "\n✓ Persistence tests passed!"
         EOF
         
+        # Run from repository root so relative paths work
         timeout 300 crystal run --error-trace /tmp/atomspace_persistence_test.cr || echo "Persistence test skipped (implementation pending)"
 
     - name: Upload AtomSpace test results
@@ -295,6 +298,7 @@ jobs:
         puts "\n✓ Multi-node simulation completed!"
         EOF
         
+        # Run from repository root so relative paths work
         timeout 300 crystal run --error-trace /tmp/multi_node_test.cr
 
     - name: Upload distributed test results
@@ -393,6 +397,7 @@ jobs:
         end
         EOF
         
+        # Run from repository root so relative paths work
         timeout 900 crystal run --release /tmp/comprehensive_benchmark.cr
 
     - name: Upload performance results

@@ -35,6 +35,7 @@ on:
 env:
   CRYSTAL_VERSION: '1.20.1'  # Use latest stable version
   CRYSTAL_CACHE_DIR: ~/.cache/crystal
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Quick validation - fails fast
@@ -58,7 +59,7 @@ jobs:
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev
 
     - name: Install shard dependencies
-      run: shards install --production
+      run: shards install
 
     - name: Verify Crystal installation
       run: |
@@ -472,6 +473,7 @@ jobs:
         end
         EOF
         
+        # Run from repository root so relative paths work
         timeout 60 crystal run --release /tmp/quick_benchmark.cr > benchmark-quick.txt 2>&1 || echo "Quick benchmark completed"
         cat benchmark-quick.txt
 

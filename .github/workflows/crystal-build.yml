@@ -27,6 +27,7 @@ on:
 
 env:
   CRYSTAL_VERSION: 1.20.1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   crystal-build:
