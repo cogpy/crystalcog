@@ -7,11 +7,13 @@ module CogUtil
   # Reduces GC pressure and improves cache locality
   class AtomMemoryPool
     # Pool configuration
-    POOL_SIZE  =   10000
-    BLOCK_SIZE =     128 # bytes per block
-    TOTAL_SIZE = 1280000 # POOL_SIZE * BLOCK_SIZE
+    POOL_SIZE  = 10000
+    BLOCK_SIZE =   128 # bytes per block
 
-    @blocks : StaticArray(UInt8, TOTAL_SIZE)
+    # Use heap-allocated memory instead of StaticArray to avoid compiler crashes
+    # with large static allocations
+    @blocks : Pointer(UInt8)
+    @blocks_size : Int32
     @free_blocks : Array(Int32)
     @allocated_blocks : Set(Int32)
     @mutex : Mutex
@@ -47,7 +49,9 @@ module CogUtil
     end
 
     def initialize
-      @blocks = StaticArray(UInt8, TOTAL_SIZE).new(0_u8)
+      @blocks_size = POOL_SIZE * BLOCK_SIZE
+      @blocks = Pointer(UInt8).malloc(@blocks_size)
+      @blocks.clear(@blocks_size)
       @free_blocks = Array(Int32).new(POOL_SIZE) { |i| i }
       @allocated_blocks = Set(Int32).new
       @mutex = Mutex.new
@@ -76,7 +80,7 @@ module CogUtil
         end
 
         # Return pointer to block
-        @blocks.to_unsafe + (block_index * BLOCK_SIZE)
+        @blocks + (block_index * BLOCK_SIZE)
       end
     end
 
@@ -84,8 +88,8 @@ module CogUtil
     def deallocate(ptr : Pointer(UInt8)) : Bool
       @mutex.synchronize do
         # Check if pointer is within our pool range
-        pool_start = @blocks.to_unsafe
-        pool_end = pool_start + (POOL_SIZE * BLOCK_SIZE)
+        pool_start = @blocks
+        pool_end = pool_start + @blocks_size
 
         if ptr < pool_start || ptr >= pool_end
           # This was allocated outside the pool
@@ -137,6 +141,12 @@ module CogUtil
         "current_usage"       => stats.current_usage,
         "fragmentation_low"   => @free_blocks.size + @allocated_blocks.size == POOL_SIZE,
       }
+    end
+
+    # Cleanup memory on finalize
+    def finalize
+      # Note: In Crystal, the GC handles the pointer memory, but this is
+      # here for explicit documentation of cleanup expectations
     end
 
     private def memset(ptr : Pointer(UInt8), value : UInt8, size : Int32)
