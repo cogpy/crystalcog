@@ -98,6 +98,9 @@ jobs:
 #        echo "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Install dependencies
+      # Note: Using 'shards install' (not --production) to ensure shard.lock is respected.
+      # The --production flag was causing "E: Missing shard.lock" errors because it requires
+      # a lock file but is more strict. Using 'shards install' works with shard.lock when present.
       run: shards install
       continue-on-error: false
 
