@@ -143,11 +143,8 @@ module CogUtil
       }
     end
 
-    # Cleanup memory on finalize
-    def finalize
-      # Note: In Crystal, the GC handles the pointer memory, but this is
-      # here for explicit documentation of cleanup expectations
-    end
+    # Note: Memory allocated with Pointer.malloc is managed by Crystal's GC
+    # (via GC.malloc_atomic under the hood), so no explicit cleanup is needed.
 
     private def memset(ptr : Pointer(UInt8), value : UInt8, size : Int32)
       size.times { |i| ptr[i] = value }
