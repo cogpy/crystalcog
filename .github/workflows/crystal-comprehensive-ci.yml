@@ -39,6 +39,7 @@ on:
 
 env:
   CRYSTAL_CACHE_DIR: ~/.cache/crystal
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Test Matrix: Multiple Crystal versions and platforms
@@ -97,7 +98,10 @@ jobs:
 #        echo "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Install dependencies
-      run: shards install --production
+      # Note: Using 'shards install' (not --production) to ensure shard.lock is respected.
+      # The --production flag was causing "E: Missing shard.lock" errors because it requires
+      # a lock file but is more strict. Using 'shards install' works with shard.lock when present.
+      run: shards install
       continue-on-error: false
 
     - name: Verify Crystal installation

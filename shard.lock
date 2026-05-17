@@ -1,0 +1,10 @@
+version: 2.0
+shards:
+  pg:
+    git: https://github.com/will/crystal-pg.git
+    version: 0.28.0
+
+  sqlite3:
+    git: https://github.com/crystal-lang/crystal-sqlite3.git
+    version: 0.21.0
+
