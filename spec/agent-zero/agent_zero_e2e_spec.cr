@@ -57,7 +57,7 @@ describe "AgentZero E2E Tests" do
 
         # Stop network
         network.stop
-        sleep 0.1.seconds
+        sleep 0.2.seconds # Allow fibers to clean up
 
         # Verify cleanup
         agent1.status.should eq(AgentZero::AgentNode::AgentStatus::Offline)
@@ -101,6 +101,7 @@ describe "AgentZero E2E Tests" do
         reasoning_agent.stop
         learning_agent.stop
         memory_agent.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
     end
   end
@@ -168,6 +169,7 @@ describe "AgentZero E2E Tests" do
 
       network.stop
       agents.each(&.stop)
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -195,7 +197,7 @@ describe "AgentZero E2E Tests" do
       if agents.size > 0
         failing_agent = agents[0]
         failing_agent.stop
-        sleep 0.1.seconds
+        sleep 0.2.seconds # Allow fibers to clean up
 
         # Network should still function
         result = network.collaborative_reasoning("Test query after failure", timeout_seconds: 3)
@@ -208,6 +210,7 @@ describe "AgentZero E2E Tests" do
 
       network.stop
       agents.each(&.stop)
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -296,6 +299,7 @@ describe "AgentZero E2E Tests" do
 
       network.stop
       agents.each(&.stop)
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -316,9 +320,11 @@ describe "AgentZero E2E Tests" do
         status.should be_a(Hash(String, JSON::Any))
 
         agent.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
 
       network.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 end

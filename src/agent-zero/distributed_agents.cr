@@ -445,31 +445,41 @@ module AgentZero
     end
 
     private def discovery_heartbeat_loop
+      heartbeat_interval = 30.seconds
+      check_interval = 0.1.seconds
+      elapsed = Time::Span.zero
+
       while @running
-        # Send heartbeat to all known peers
-        heartbeat_message = Message.new("discovery_heartbeat", @id, {
-          "agent_id"     => @id,
-          "name"         => @name,
-          "host"         => @host,
-          "port"         => @port,
-          "status"       => @status.to_s,
-          "capabilities" => @capabilities,
-          "timestamp"    => Time.utc.to_rfc3339,
-        })
+        # Check running status frequently, but only send heartbeat at the configured interval
+        if elapsed >= heartbeat_interval
+          # Send heartbeat to all known peers
+          heartbeat_message = Message.new("discovery_heartbeat", @id, {
+            "agent_id"     => @id,
+            "name"         => @name,
+            "host"         => @host,
+            "port"         => @port,
+            "status"       => @status.to_s,
+            "capabilities" => @capabilities,
+            "timestamp"    => Time.utc.to_rfc3339,
+          })
 
-        broadcast_message(heartbeat_message)
+          broadcast_message(heartbeat_message)
 
-        # Clean up stale peers
-        @peers.reject! do |id, peer|
-          if peer.is_stale?
-            CogUtil::Logger.debug("Removing stale peer: #{peer.name}")
-            true
-          else
-            false
+          # Clean up stale peers
+          @peers.reject! do |id, peer|
+            if peer.is_stale?
+              CogUtil::Logger.debug("Removing stale peer: #{peer.name}")
+              true
+            else
+              false
+            end
           end
+
+          elapsed = Time::Span.zero
         end
 
-        sleep 30.seconds # Send heartbeat every 30 seconds
+        sleep check_interval
+        elapsed += check_interval
       end
     end
 
