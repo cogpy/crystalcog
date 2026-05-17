@@ -60,6 +60,7 @@ describe AgentZero::AgentNode do
 
       agent1.stop
       agent2.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -76,6 +77,7 @@ describe AgentZero::AgentNode do
       results.size.should eq(0)
 
       agent.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -100,6 +102,7 @@ describe AgentZero::AgentNode do
       shares.should eq(0)
 
       agent.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 
@@ -119,6 +122,7 @@ describe AgentZero::AgentNode do
       status["capabilities"].as_a.size.should be > 0
 
       agent.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
   end
 end
@@ -194,6 +198,7 @@ describe AgentZero::AgentNetwork do
 
         # Clean up
         agent.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
     end
 
@@ -232,6 +237,7 @@ describe AgentZero::AgentNetwork do
         # Clean up
         agent1.stop
         agent2.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
     end
 
@@ -275,6 +281,7 @@ describe AgentZero::AgentNetwork do
         # Clean up
         agent1.stop
         agent2.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
     end
   end
@@ -301,6 +308,7 @@ describe AgentZero::AgentNetwork do
         # Clean up
         agent1.stop
         agent2.stop
+        sleep 0.2.seconds # Allow fibers to clean up
       end
     end
   end
@@ -453,6 +461,7 @@ describe AgentZero::TaskCoordinator do
       result.execution_time_ms.should be > 0
 
       agents.each(&.stop)
+      sleep 0.2.seconds # Allow fibers to clean up
     end
 
     it "executes knowledge sharing tasks" do
@@ -481,6 +490,7 @@ describe AgentZero::TaskCoordinator do
       result.results.keys.should contain("successful_shares")
 
       agents.each(&.stop)
+      sleep 0.2.seconds # Allow fibers to clean up
     end
 
     it "handles tasks with no suitable agents" do
@@ -565,9 +575,11 @@ describe "Distributed Agent Network Integration" do
       agent1.stop
       agent2.stop
       agent3.stop
+      sleep 0.2.seconds # Allow fibers to clean up
     end
 
     network.stop
+    sleep 0.2.seconds # Allow fibers to clean up
   end
 
   it "handles network failures gracefully" do
@@ -585,6 +597,7 @@ describe "Distributed Agent Network Integration" do
     agent = network.create_agent("UnstableAgent")
     if agent
       agent.stop # Stop immediately
+      sleep 0.2.seconds # Allow fibers to clean up
 
       # Network should handle this gracefully
       status = network.network_status
