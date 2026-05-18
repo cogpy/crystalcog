@@ -646,13 +646,18 @@ describe "CrystalCog Performance Tests" do
       after_reasoning_memory = GC.stats.heap_size
       atoms_after = atomspace.size
 
-      # Calculate memory metrics
-      memory_per_atom_before = (before_reasoning_memory - initial_memory) / atoms_before
-      total_memory_increase = after_reasoning_memory - before_reasoning_memory
+      # Calculate memory metrics (use Int64 to avoid UInt64 underflow when GC reclaims memory)
+      memory_used_before = (before_reasoning_memory.to_i64 - initial_memory.to_i64).abs
+      memory_per_atom_before = if atoms_before > 0
+                                  memory_used_before // atoms_before
+                                else
+                                  0_i64
+                                end
+      total_memory_increase = (after_reasoning_memory.to_i64 - before_reasoning_memory.to_i64)
       new_atoms = atoms_after - atoms_before
 
       puts "Memory efficiency test:"
-      puts "  Initial memory usage: #{(before_reasoning_memory - initial_memory)} bytes for #{atoms_before} atoms"
+      puts "  Initial memory usage: #{memory_used_before} bytes for #{atoms_before} atoms"
       puts "  Memory per atom (before reasoning): #{memory_per_atom_before} bytes"
       puts "  Memory increase after reasoning: #{total_memory_increase} bytes for #{new_atoms} new atoms"
 
@@ -660,7 +665,7 @@ describe "CrystalCog Performance Tests" do
       memory_per_atom_before.should be < 2000 # bytes per atom (rough estimate)
 
       if new_atoms > 0
-        memory_per_new_atom = total_memory_increase / new_atoms
+        memory_per_new_atom = total_memory_increase // new_atoms
         puts "  Memory per new atom: #{memory_per_new_atom} bytes"
       end
     end
