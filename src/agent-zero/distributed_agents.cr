@@ -29,7 +29,7 @@ module AgentZero
     property trust_level : Float64
 
     @peers : Hash(String, PeerInfo)
-    @message_handlers : Hash(String, Proc(Message, Nil))
+    @message_handlers : Hash(String, Proc(Message, TCPSocket?, Nil))
     @server : TCPServer?
     @running : Bool = false
 
@@ -42,7 +42,7 @@ module AgentZero
       Failed
     end
 
-    struct PeerInfo
+    class PeerInfo
       property id : String
       property host : String
       property port : Int32
@@ -75,7 +75,7 @@ module AgentZero
       @capabilities = ["reasoning", "learning", "memory", "communication"]
       @trust_level = 1.0
       @peers = Hash(String, PeerInfo).new
-      @message_handlers = Hash(String, Proc(Message, Nil)).new
+      @message_handlers = Hash(String, Proc(Message, TCPSocket?, Nil)).new
 
       # Auto-assign port if not specified
       @port = find_available_port if @port == 0
@@ -124,7 +124,7 @@ module AgentZero
     def connect_to_peer(host : String, port : Int32) : Bool
       begin
         socket = TCPSocket.new(host, port)
-
+        socket.read_timeout = 10.seconds
         # Send introduction message
         intro_message = Message.new("agent_introduction", @id, {
           "agent_id"     => @id,
@@ -154,17 +154,16 @@ module AgentZero
 
             @peers[peer_info.id] = peer_info
             CogUtil::Logger.info("Connected to peer #{peer_info.name} (#{peer_info.id})")
-
-            socket.close
             return true
           end
         end
 
-        socket.close
         return false
       rescue ex
         CogUtil::Logger.error("Failed to connect to peer #{host}:#{port} - #{ex.message}")
         return false
+      ensure
+        socket.try(&.close)
       end
     end
 
@@ -217,7 +216,7 @@ module AgentZero
 
       # Set up response handler
       original_handler = @message_handlers["collaborative_reasoning_response"]?
-      @message_handlers["collaborative_reasoning_response"] = ->(message : Message) {
+      @message_handlers["collaborative_reasoning_response"] = ->(message : Message, _client : TCPSocket?) {
         if message.payload["reasoning_id"] == reasoning_id
           result = CollaborativeResult.new(
             message.sender_id,
@@ -227,7 +226,7 @@ module AgentZero
           )
           received_results << result
         end
-        original_handler.try(&.call(message))
+        original_handler.try(&.call(message, nil))
       }
 
       # Broadcast request
@@ -331,7 +330,7 @@ module AgentZero
     private def process_message(message : Message, client : TCPSocket?)
       handler = @message_handlers[message.type]?
       if handler
-        handler.call(message)
+        handler.call(message, client)
       else
         CogUtil::Logger.warn("No handler for message type: #{message.type}")
       end
@@ -344,7 +343,7 @@ module AgentZero
 
     private def setup_message_handlers
       # Agent introduction handler
-      @message_handlers["agent_introduction"] = ->(message : Message) {
+      @message_handlers["agent_introduction"] = ->(message : Message, client : TCPSocket?) {
         response_payload = {
           "status"       => "accepted",
           "agent_id"     => @id,
@@ -357,6 +356,15 @@ module AgentZero
         }
 
         response = Message.new("agent_introduction_response", @id, response_payload)
+
+        # Send response back to the connecting peer
+        if client
+          begin
+            client.puts(response.to_json)
+          rescue ex
+            CogUtil::Logger.error("Failed to send introduction response: #{ex.message}")
+          end
+        end
 
         # Add peer to our list
         peer_info = PeerInfo.new(
@@ -373,7 +381,7 @@ module AgentZero
       }
 
       # Collaborative reasoning request handler
-      @message_handlers["collaborative_reasoning_request"] = ->(message : Message) {
+      @message_handlers["collaborative_reasoning_request"] = ->(message : Message, _client : TCPSocket?) {
         query = message.payload["query"].as_s
         reasoning_id = message.payload["reasoning_id"].as_s
 
@@ -397,7 +405,7 @@ module AgentZero
       }
 
       # Knowledge sharing handler
-      @message_handlers["knowledge_share"] = ->(message : Message) {
+      @message_handlers["knowledge_share"] = ->(message : Message, _client : TCPSocket?) {
         knowledge_item = KnowledgeItem.new(
           message.payload["knowledge_id"].as_s,
           message.payload["type"].as_s,
@@ -413,7 +421,7 @@ module AgentZero
       }
 
       # Agent goodbye handler
-      @message_handlers["agent_goodbye"] = ->(message : Message) {
+      @message_handlers["agent_goodbye"] = ->(message : Message, _client : TCPSocket?) {
         peer_id = message.payload["agent_id"].as_s
         if peer = @peers.delete(peer_id)
           CogUtil::Logger.info("Peer #{peer.name} disconnected")
@@ -421,7 +429,7 @@ module AgentZero
       }
 
       # Discovery heartbeat handler
-      @message_handlers["discovery_heartbeat"] = ->(message : Message) {
+      @message_handlers["discovery_heartbeat"] = ->(message : Message, _client : TCPSocket?) {
         # Update or add peer information
         peer_id = message.sender_id
         if peer = @peers[peer_id]?
