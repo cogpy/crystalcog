@@ -19,6 +19,7 @@ dependencies:
     github: crystal-lang/crystal-sqlite3
   pg:
     github: will/crystal-pg
+    branch: master
 
 development_dependencies:
 
