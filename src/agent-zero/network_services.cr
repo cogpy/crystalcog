@@ -269,18 +269,28 @@ module AgentZero
     end
 
     private def cleanup_loop
+      cleanup_interval = 60.seconds
+      check_interval = 0.1.seconds
+      elapsed = Time::Span.zero
+
       while @running
-        # Remove stale agent registrations
-        @registered_agents.reject! do |id, reg|
-          if !reg.is_alive?
-            CogUtil::Logger.debug("Removing stale agent registration: #{reg.name}")
-            true
-          else
-            false
+        # Check running status frequently, but only cleanup at the configured interval
+        if elapsed >= cleanup_interval
+          # Remove stale agent registrations
+          @registered_agents.reject! do |id, reg|
+            if !reg.is_alive?
+              CogUtil::Logger.debug("Removing stale agent registration: #{reg.name}")
+              true
+            else
+              false
+            end
           end
+
+          elapsed = Time::Span.zero
         end
 
-        sleep 60.seconds # Cleanup every minute
+        sleep check_interval
+        elapsed += check_interval
       end
     end
 
