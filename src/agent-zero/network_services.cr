@@ -310,7 +310,7 @@ module AgentZero
     @running : Bool = false
     @consensus_state : Hash(String, ConsensusItem)
 
-    struct ConsensusItem
+    class ConsensusItem
       property id : String
       property proposal : JSON::Any
       property votes : Hash(String, Vote)
