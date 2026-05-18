@@ -17,7 +17,7 @@ module CogUtil
       if seed
         @rng = Random.new(seed)
       else
-        @rng = Random.new(Time.utc.to_unix_ms.to_u32)
+        @rng = Random.new
       end
     end
 
