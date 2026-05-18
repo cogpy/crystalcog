@@ -4,7 +4,7 @@
 on:
   push:
   pull_request:
-    branches: [master]
+    branches: [main]
   schedule:
     - cron: '0 6 * * 6'  # Every Saturday 6 AM
 jobs:
@@ -15,7 +15,7 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: ubuntu-latest
-            crystal: "1.12"
+            crystal: "1.20"
           - os: ubuntu-latest
             crystal: nightly
           - os: windows-latest
