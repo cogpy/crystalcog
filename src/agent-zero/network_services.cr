@@ -17,7 +17,7 @@ module AgentZero
     @server : TCPServer?
     @running : Bool = false
 
-    struct AgentRegistration
+    class AgentRegistration
       property agent_id : String
       property name : String
       property host : String
