@@ -122,10 +122,10 @@ module AgentZero
 
     # Connect to another agent
     def connect_to_peer(host : String, port : Int32) : Bool
-      begin
-        socket = TCPSocket.new(host, port)
-        socket.read_timeout = 10.seconds
+      socket = TCPSocket.new(host, port)
+      socket.read_timeout = 10.seconds
 
+      begin
         # Send introduction message
         intro_message = Message.new("agent_introduction", @id, {
           "agent_id"     => @id,
@@ -155,17 +155,16 @@ module AgentZero
 
             @peers[peer_info.id] = peer_info
             CogUtil::Logger.info("Connected to peer #{peer_info.name} (#{peer_info.id})")
-
-            socket.close
             return true
           end
         end
 
-        socket.close
         return false
       rescue ex
         CogUtil::Logger.error("Failed to connect to peer #{host}:#{port} - #{ex.message}")
         return false
+      ensure
+        socket.close
       end
     end
 
