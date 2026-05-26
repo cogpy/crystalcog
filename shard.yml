@@ -85,6 +85,10 @@ targets:
   profiler:
     main: tools/profiler.cr
 
+  # Genetic Programming module
+  genetic_programming:
+    main: src/genetic_programming/genetic_programming_main.cr
+
 scripts:
   build: crystal build src/crystalcog.cr
   test: crystal spec
