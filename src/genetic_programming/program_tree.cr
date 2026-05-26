@@ -102,7 +102,7 @@ module GeneticProgramming
     getter node_type : NodeType
     getter return_type : ReturnType
     getter children : Array(ProgramNode)
-    property value : Float64 | Bool | String | Nil
+    property value : Float64 | Bool | Nil
     property variable_index : Int32?
     property function_name : String?
 
@@ -404,7 +404,7 @@ module GeneticProgramming
       to_s_impl
     end
 
-    private def to_s_impl : String
+    def to_s_impl : String
       case @node_type
       when .constant?, .ephemeral_random?
         @value.to_s

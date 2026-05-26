@@ -20,8 +20,6 @@ require "./fitness"
 require "./synthesis"
 
 module GeneticProgramming
-  VERSION = "0.1.0"
-
   # Initialize the Genetic Programming subsystem
   def self.initialize
     CogUtil::Logger.info("GeneticProgramming #{VERSION} initializing")
