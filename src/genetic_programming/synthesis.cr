@@ -60,16 +60,16 @@ module GeneticProgramming
   # Main program synthesis engine
   class ProgramSynthesizer
     getter config : GPConfig
-    getter function_set : FunctionSet
-    getter fitness_function : FitnessFunction?
-    getter population : Array(Program)
+    getter function_set : FunctionSet?
+    property fitness_function : FitnessFunction?
+    property population : Array(Program)
     getter best_program : Program?
-    getter generation : Int32
+    property generation : Int32
     getter evaluations : Int32
     getter atomspace : AtomSpace::AtomSpace?
 
     # Genetic operators
-    @generator : TreeGenerator?
+    protected getter generator : TreeGenerator?
     @crossover : Crossover?
     @mutation : Mutation?
     @selection : Selection?
@@ -80,6 +80,7 @@ module GeneticProgramming
       @generation = 0
       @evaluations = 0
       @best_program = nil
+      @function_set = nil
     end
 
     # Setup for boolean synthesis
@@ -349,6 +350,20 @@ module GeneticProgramming
       @population = new_population
     end
 
+    # Public method to run a single evolution step (for co-evolution)
+    def step_evolution
+      evolve_generation
+      evaluate_population
+      update_best
+    end
+
+    # Initialize population from generator
+    def init_population
+      if gen = @generator
+        @population = gen.generate_population(@config.population_size)
+      end
+    end
+
     # Get current population statistics
     def stats : FitnessStats
       FitnessStats.new(@population, @generation)
@@ -362,6 +377,8 @@ module GeneticProgramming
     # Export best program to AtomSpace
     def export_to_atomspace : AtomSpace::Atom?
       if bp = @best_program
+        atomspace_instance = @atomspace || AtomSpace::AtomSpace.new
+        bp.to_atomspace(atomspace_instance)
         atomspace = @atomspace || AtomSpace::AtomSpace.new
         bp.to_atomspace(atomspace)
       end
@@ -445,6 +462,8 @@ module GeneticProgramming
 
       # Initialize populations
       @synthesizers.each do |s|
+        s.init_population
+        s.fitness_function = fitness
         s.initialize_for_coevolution
         s.configure_fitness_function(fitness)
       end
@@ -453,6 +472,8 @@ module GeneticProgramming
       @synthesizers.first.config.max_generations.times do |gen|
         # Evolve each population
         @synthesizers.each do |s|
+          s.generation = gen
+          s.step_evolution
           s.run_coevolution_generation(gen)
         end
 
@@ -489,6 +510,10 @@ module GeneticProgramming
 
       @synthesizers.each_with_index do |s, i|
         # Replace worst with immigrant from previous population
+        worst_idx = s.population.index(s.population.min_by(&.fitness))
+        if worst_idx
+          prev_idx = (i - 1) % @synthesizers.size
+          s.population[worst_idx] = bests[prev_idx]
         population = s.population
         worst_idx = population.index(population.min_by(&.fitness))
         if worst_idx

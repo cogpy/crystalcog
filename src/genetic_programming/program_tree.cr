@@ -12,7 +12,6 @@ require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 
 module GeneticProgramming
-  VERSION = "0.1.0"
 
   # Exception classes for Genetic Programming
   class GPException < CogUtil::OpenCogException
@@ -251,7 +250,13 @@ module GeneticProgramming
     def evaluate(variables : Array(Float64 | Bool)) : Float64 | Bool
       case @node_type
       when .constant?, .ephemeral_random?
-        @value.not_nil!
+        val = @value.not_nil!
+        case val
+        when Float64 then val
+        when Bool    then val
+        when String  then val.to_f? || 0.0
+        else              0.0
+        end
       when .variable?
         idx = @variable_index.not_nil!
         if idx < variables.size
@@ -404,7 +409,7 @@ module GeneticProgramming
       to_s_impl
     end
 
-    def to_s_impl : String
+    protected def to_s_impl : String
       case @node_type
       when .constant?, .ephemeral_random?
         @value.to_s
