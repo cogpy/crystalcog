@@ -514,11 +514,6 @@ module GeneticProgramming
         if worst_idx
           prev_idx = (i - 1) % @synthesizers.size
           s.population[worst_idx] = bests[prev_idx]
-        population = s.population
-        worst_idx = population.index(population.min_by(&.fitness))
-        if worst_idx
-          prev_idx = (i - 1) % @synthesizers.size
-          population[worst_idx] = bests[prev_idx]
         end
       end
     end
