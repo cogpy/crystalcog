@@ -75,6 +75,7 @@ module GeneticProgramming
     @selection : Selection?
 
     def initialize(@config : GPConfig = GPConfig.new)
+      @function_set = FunctionSet.new(1)
       @population = [] of Program
       @generation = 0
       @evaluations = 0
@@ -120,6 +121,27 @@ module GeneticProgramming
     def configure_function_set(function_set : FunctionSet)
       @function_set = function_set
       setup_operators
+      self
+    end
+
+    # Configure externally-created fitness function
+    def configure_fitness_function(fitness_function : FitnessFunction)
+      @fitness_function = fitness_function
+      self
+    end
+
+    # Initialize population for co-evolution workflows
+    def initialize_for_coevolution
+      initialize_population
+      self
+    end
+
+    # Run one generation for co-evolution workflows
+    def run_coevolution_generation(generation : Int32)
+      @generation = generation
+      evolve_generation
+      evaluate_population
+      update_best
       self
     end
 
@@ -340,8 +362,8 @@ module GeneticProgramming
     # Export best program to AtomSpace
     def export_to_atomspace : AtomSpace::Atom?
       if bp = @best_program
-        as = @atomspace || AtomSpace::AtomSpace.new
-        bp.to_atomspace(as)
+        atomspace = @atomspace || AtomSpace::AtomSpace.new
+        bp.to_atomspace(atomspace)
       end
     end
   end
@@ -423,18 +445,15 @@ module GeneticProgramming
 
       # Initialize populations
       @synthesizers.each do |s|
-        s.@population = s.@generator.not_nil!.generate_population(s.config.population_size)
-        s.@fitness_function = fitness
+        s.initialize_for_coevolution
+        s.configure_fitness_function(fitness)
       end
 
       # Co-evolve
       @synthesizers.first.config.max_generations.times do |gen|
         # Evolve each population
         @synthesizers.each do |s|
-          s.@generation = gen
-          s.send(:evolve_generation)
-          s.send(:evaluate_population)
-          s.send(:update_best)
+          s.run_coevolution_generation(gen)
         end
 
         # Migration
@@ -466,14 +485,15 @@ module GeneticProgramming
 
     private def migrate
       # Ring migration - send best from each to next
-      bests = @synthesizers.map { |s| s.@population.max_by(&.fitness).clone }
+      bests = @synthesizers.map { |s| s.population.max_by(&.fitness).clone }
 
       @synthesizers.each_with_index do |s, i|
         # Replace worst with immigrant from previous population
-        worst_idx = s.@population.index(s.@population.min_by(&.fitness))
+        population = s.population
+        worst_idx = population.index(population.min_by(&.fitness))
         if worst_idx
           prev_idx = (i - 1) % @synthesizers.size
-          s.@population[worst_idx] = bests[prev_idx]
+          population[worst_idx] = bests[prev_idx]
         end
       end
     end
