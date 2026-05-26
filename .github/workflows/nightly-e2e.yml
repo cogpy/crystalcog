@@ -49,7 +49,7 @@ jobs:
 
     - name: Run AtomSpace stress tests
       run: |
-        cat > /tmp/atomspace_stress_test.cr << 'EOF'
+        cat > ./atomspace_stress_test.cr << 'EOF'
         require "./src/atomspace/atomspace"
         
         puts "AtomSpace Stress Test"
@@ -101,7 +101,7 @@ jobs:
         EOF
         
         # Run from repository root so relative paths work
-        timeout 600 crystal run --error-trace /tmp/atomspace_stress_test.cr
+        timeout 600 crystal run --error-trace ./atomspace_stress_test.cr
 
     - name: Run AtomSpace persistence tests
       run: |
