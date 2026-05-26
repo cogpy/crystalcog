@@ -101,7 +101,7 @@ module GeneticProgramming
     getter node_type : NodeType
     getter return_type : ReturnType
     getter children : Array(ProgramNode)
-    property value : Float64 | Bool | String | Nil
+    property value : Float64 | Bool | Nil
     property variable_index : Int32?
     property function_name : String?
 
