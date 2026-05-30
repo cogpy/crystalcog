@@ -36,6 +36,11 @@ jobs:
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+      - name: Set environment for Windows
+        if: runner.os == 'Windows'
+        run: |
+          echo "DISABLE_ROCKSDB=1" >> $GITHUB_ENV
+          echo "DISABLE_SQLITE3=1" >> $GITHUB_ENV
       - name: Install shards
         run: shards update --ignore-crystal-version
       - name: Run tests
@@ -45,4 +50,3 @@ jobs:
             echo "⚠️  Test run failed, retrying with single-threaded execution..."
             CRYSTAL_WORKERS=1 crystal spec --order=random --error-trace --no-color
           }
-
