@@ -70,9 +70,9 @@ describe "CrystalCog Memory Usage Comparison Tests" do
     it "tests memory scaling vs C++ AtomSpace scaling" do
       atomspace = AtomSpace::AtomSpace.new
 
-      # Test memory scaling with different AtomSpace sizes
-      # Based on C++ benchmark parameters
-      scale_factors = [100, 500, 1000]
+      # Test memory scaling with different AtomSpace sizes.
+      # Start at 500 atoms because RSS measurements at 100 atoms are too noisy on CI.
+      scale_factors = [500, 1000, 2000]
 
       results = CogUtil::MemoryProfiler.benchmark_atomspace_scaling(atomspace, scale_factors)
 
@@ -316,7 +316,7 @@ describe "CrystalCog Memory Usage Comparison Tests" do
           list = atomspace.add_list_link([c1, c2])
           atomspace.add_inheritance_link(list, c3)
         end
-        2000
+        4000
       end
 
       # 4. Truth value heavy operations
