@@ -390,6 +390,29 @@ docker-compose -f docker-compose.production.yml config
 
 ### Common Issues
 
+#### Database Dependencies Not Found
+
+If you encounter database linking errors during build or test, you can disable specific database backends using environment variables:
+
+```bash
+# Disable RocksDB (requires librocksdb-dev)
+export DISABLE_ROCKSDB=1
+
+# Disable SQLite3 (requires libsqlite3-dev)
+export DISABLE_SQLITE3=1
+
+# Disable PostgreSQL (requires libpq-dev)
+export DISABLE_POSTGRES=1
+
+# You can combine multiple flags:
+DISABLE_ROCKSDB=1 DISABLE_SQLITE3=1 DISABLE_POSTGRES=1 crystal spec
+
+# Or set them all in your shell profile for Windows builds:
+export DISABLE_ROCKSDB=1 DISABLE_SQLITE3=1 DISABLE_POSTGRES=1
+```
+
+When all database backends are disabled, use `MemoryStorageNode` or `FileStorageNode` for persistence.
+
 #### RocksDB Dependency Not Found
 
 If you encounter RocksDB linking errors during build or test:

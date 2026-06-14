@@ -1,5 +1,10 @@
 # This CI job installs Crystal and shard dependencies, then executes `crystal spec` to run the test suite
 # More configuration options are available at https://crystal-lang.github.io/install-crystal/configurator.html
+#
+# Database dependencies can be disabled at compile time using environment variables:
+#   DISABLE_SQLITE3=1  - Disable SQLite3 support
+#   DISABLE_POSTGRES=1 - Disable PostgreSQL support
+#   DISABLE_ROCKSDB=1  - Disable RocksDB support
 
 on:
   push:
@@ -35,12 +40,13 @@ jobs:
           restore-keys: ${{ runner.os }}-shards-
       - name: Install system dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libpq-dev
       - name: Set environment for Windows
         if: runner.os == 'Windows'
         run: |
           echo "DISABLE_ROCKSDB=1" >> $GITHUB_ENV
           echo "DISABLE_SQLITE3=1" >> $GITHUB_ENV
+          echo "DISABLE_POSTGRES=1" >> $GITHUB_ENV
       - name: Install shards
         run: shards update --ignore-crystal-version
       - name: Run tests
