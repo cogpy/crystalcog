@@ -197,6 +197,15 @@ module AtomSpace
       end
     end
 
+    # Get a single atom by name (returns first match, or nil)
+    def get_atom_by_name(name : String) : Atom?
+      @mutex.synchronize do
+        name_set = @atoms_by_name[name]?
+        return nil unless name_set
+        name_set.first?
+      end
+    end
+
     # Get nodes by name
     def get_nodes_by_name(name : String, type : AtomType? = nil) : Array(Atom)
       @mutex.synchronize do

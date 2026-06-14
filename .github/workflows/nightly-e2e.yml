@@ -198,7 +198,7 @@ jobs:
           # Load test
           echo "Running load test..."
           for i in {1..100}; do
-            curl -s -X POST -H "Content-Type: application/json" \
+            curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
               -d "{\"type\":\"ConceptNode\",\"name\":\"load_test_$i\"}" \
               http://localhost:18080/atom &
           done
@@ -206,7 +206,7 @@ jobs:
           wait
           
           # Check status
-          curl -s http://localhost:18080/summary | jq .
+          curl -s --max-time 5 http://localhost:18080/summary | jq .
           
           # Cleanup
           kill $COGSERVER_PID
@@ -339,7 +339,7 @@ jobs:
       run: |
         echo "Running comprehensive performance benchmarks..."
         
-        cat > /tmp/comprehensive_benchmark.cr << 'EOF'
+        cat > ./comprehensive_benchmark_tmp.cr << 'EOF'
         require "./src/atomspace/atomspace"
         require "benchmark"
         
@@ -398,7 +398,7 @@ jobs:
         EOF
         
         # Run from repository root so relative paths work
-        timeout 900 crystal run --release /tmp/comprehensive_benchmark.cr
+        timeout 900 crystal run --release ./comprehensive_benchmark_tmp.cr
 
     - name: Upload performance results
       uses: actions/upload-artifact@v4
