@@ -13,8 +13,15 @@ description: |
   A complete rewrite of the OpenCog artificial intelligence system
   in Crystal, providing better performance, memory safety, and maintainability.
 
+  Database dependencies can be disabled at compile time using environment variables:
+    DISABLE_SQLITE3=1  - Disable SQLite3 support (requires libsqlite3-dev)
+    DISABLE_POSTGRES=1 - Disable PostgreSQL support (requires libpq-dev)
+    DISABLE_ROCKSDB=1  - Disable RocksDB support (requires librocksdb-dev)
+
+  When all database backends are disabled, use MemoryStorageNode or FileStorageNode.
+
 dependencies:
-  # Database and persistence
+  # Database and persistence (optional - can be disabled with DISABLE_* env vars)
   sqlite3:
     github: crystal-lang/crystal-sqlite3
   pg:
