@@ -130,3 +130,103 @@ describe NeuralSymbolic do
     end
   end
 end
+
+describe NeuralSymbolic::EmbeddingTrainer do
+  it "raises for non-positive dimension" do
+    atomspace = AtomSpace::AtomSpace.new
+    expect_raises(NeuralSymbolic::NeuralSymbolicException) do
+      NeuralSymbolic::EmbeddingTrainer.new(atomspace, 0)
+    end
+  end
+
+  it "returns empty store for empty atomspace" do
+    atomspace = AtomSpace::AtomSpace.new
+    trainer = NeuralSymbolic::EmbeddingTrainer.new(atomspace, 8)
+    store = trainer.train
+    store.size.should eq(0)
+  end
+
+  it "trains embeddings for all concepts in the atomspace" do
+    atomspace = AtomSpace::AtomSpace.new
+    dog = atomspace.add_concept_node("dog")
+    animal = atomspace.add_concept_node("animal")
+    atomspace.add_inheritance_link(dog, animal)
+
+    trainer = NeuralSymbolic::EmbeddingTrainer.new(atomspace, 8)
+    store = trainer.train
+    store.size.should eq(2)
+    store.get("dog").not_nil!.dimension.should eq(8)
+  end
+
+  it "makes co-occurring concepts more similar than unrelated ones" do
+    atomspace = AtomSpace::AtomSpace.new
+    dog = atomspace.add_concept_node("dog")
+    animal = atomspace.add_concept_node("animal")
+    rock = atomspace.add_concept_node("rock")
+    atomspace.add_inheritance_link(dog, animal)
+
+    trainer = NeuralSymbolic::EmbeddingTrainer.new(atomspace, 16)
+    store = trainer.train(20)
+
+    dog_emb = store.get("dog").not_nil!
+    animal_emb = store.get("animal").not_nil!
+    rock_emb = store.get("rock").not_nil!
+
+    related_sim = dog_emb.cosine_similarity(animal_emb)
+    unrelated_sim = dog_emb.cosine_similarity(rock_emb)
+    (related_sim > unrelated_sim).should be_true
+  end
+end
+
+describe NeuralSymbolic::TruthValueEstimator do
+  it "returns nil for unknown concepts" do
+    store = NeuralSymbolic::EmbeddingStore.new
+    estimator = NeuralSymbolic::TruthValueEstimator.new(store)
+    estimator.estimate("a", "b").should be_nil
+  end
+
+  it "estimates high strength for identical embeddings" do
+    store = NeuralSymbolic::EmbeddingStore.new
+    store.add(NeuralSymbolic::Embedding.new("a", [1.0, 0.0, 0.0]))
+    store.add(NeuralSymbolic::Embedding.new("b", [1.0, 0.0, 0.0]))
+
+    estimator = NeuralSymbolic::TruthValueEstimator.new(store)
+    tv = estimator.estimate("a", "b").not_nil!
+    tv.strength.should be_close(1.0, 1e-9)
+    tv.confidence.should be > 0.5
+  end
+
+  it "estimates low strength for opposite embeddings" do
+    store = NeuralSymbolic::EmbeddingStore.new
+    store.add(NeuralSymbolic::Embedding.new("a", [1.0, 0.0]))
+    store.add(NeuralSymbolic::Embedding.new("b", [-1.0, 0.0]))
+
+    estimator = NeuralSymbolic::TruthValueEstimator.new(store)
+    tv = estimator.estimate("a", "b").not_nil!
+    tv.strength.should be_close(0.0, 1e-9)
+  end
+
+  it "materializes estimated similarity links into the atomspace" do
+    atomspace = AtomSpace::AtomSpace.new
+    store = NeuralSymbolic::EmbeddingStore.new
+    store.add(NeuralSymbolic::Embedding.new("cat", [1.0, 0.1]))
+    store.add(NeuralSymbolic::Embedding.new("dog", [0.9, 0.2]))
+
+    estimator = NeuralSymbolic::TruthValueEstimator.new(store)
+    count = estimator.materialize_estimates(atomspace, 0.5)
+    count.should eq(1)
+
+    preds = atomspace.get_nodes_by_name("estimated_similar_to", AtomSpace::AtomType::PREDICATE_NODE)
+    preds.should_not be_empty
+  end
+
+  it "does not materialize links below the threshold" do
+    atomspace = AtomSpace::AtomSpace.new
+    store = NeuralSymbolic::EmbeddingStore.new
+    store.add(NeuralSymbolic::Embedding.new("a", [1.0, 0.0]))
+    store.add(NeuralSymbolic::Embedding.new("b", [-1.0, 0.0]))
+
+    estimator = NeuralSymbolic::TruthValueEstimator.new(store)
+    estimator.materialize_estimates(atomspace, 0.5).should eq(0)
+  end
+end

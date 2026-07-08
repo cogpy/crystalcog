@@ -302,3 +302,130 @@ describe PatternMining do
     end
   end
 end
+
+describe PatternMining::StreamingPatternMiner do
+  it "creates with default parameters" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace)
+    miner.window_size.should eq(1000)
+    miner.min_support.should eq(2)
+    miner.total_processed.should eq(0)
+  end
+
+  it "raises for non-positive window size" do
+    atomspace = AtomSpace::AtomSpace.new
+    expect_raises(PatternMining::MiningException) do
+      PatternMining::StreamingPatternMiner.new(atomspace, 0)
+    end
+  end
+
+  it "processes atoms and tracks counts" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace, 10, 2)
+
+    a = atomspace.add_concept_node("a")
+    b = atomspace.add_concept_node("b")
+    miner.process_atoms([a, b])
+
+    miner.total_processed.should eq(2)
+    miner.window_count.should eq(2)
+  end
+
+  it "detects frequent structural patterns in the stream" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace, 100, 2)
+
+    animal = atomspace.add_concept_node("animal")
+    ["dog", "cat", "cow"].each do |name|
+      node = atomspace.add_concept_node(name)
+      link = atomspace.add_inheritance_link(node, animal)
+      miner.process_atom(link)
+    end
+
+    frequent = miner.frequent_patterns
+    frequent.should_not be_empty
+    frequent.first.support.should eq(3)
+    frequent.first.pattern.template.type.should eq(AtomSpace::AtomType::INHERITANCE_LINK)
+  end
+
+  it "evicts old atoms when the window is full" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace, 2, 1)
+
+    a = atomspace.add_concept_node("a")
+    b = atomspace.add_concept_node("b")
+    animal = atomspace.add_concept_node("animal")
+    link = atomspace.add_inheritance_link(a, animal)
+
+    miner.process_atoms([a, b, link])
+    miner.window_count.should eq(2)
+    miner.total_processed.should eq(3)
+  end
+
+  it "detects emerging patterns crossing the support threshold" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace, 100, 2)
+
+    animal = atomspace.add_concept_node("animal")
+    dog = atomspace.add_concept_node("dog")
+    link1 = atomspace.add_inheritance_link(dog, animal)
+    miner.process_atom(link1)
+
+    snapshot = miner.counts_snapshot
+
+    cat = atomspace.add_concept_node("cat")
+    link2 = atomspace.add_inheritance_link(cat, animal)
+    miner.process_atom(link2)
+
+    emerging = miner.emerging_patterns(snapshot)
+    emerging.should_not be_empty
+  end
+
+  it "resets state" do
+    atomspace = AtomSpace::AtomSpace.new
+    miner = PatternMining::StreamingPatternMiner.new(atomspace, 10, 1)
+    miner.process_atom(atomspace.add_concept_node("x"))
+    miner.reset
+    miner.total_processed.should eq(0)
+    miner.window_count.should eq(0)
+    miner.frequent_patterns.should be_empty
+  end
+end
+
+describe PatternMining::SurprisingnessScorer do
+  it "returns zero surprisingness when observation matches expectation" do
+    atomspace = AtomSpace::AtomSpace.new
+    scorer = PatternMining::SurprisingnessScorer.new(atomspace)
+    scorer.i_surprisingness(0.25, [0.5, 0.5]).should be_close(0.0, 1e-9)
+  end
+
+  it "scores deviation from independence as surprising" do
+    atomspace = AtomSpace::AtomSpace.new
+    scorer = PatternMining::SurprisingnessScorer.new(atomspace)
+    score = scorer.i_surprisingness(0.9, [0.5, 0.5])
+    score.should be > 0.5
+  end
+
+  it "returns zero for empty component frequencies" do
+    atomspace = AtomSpace::AtomSpace.new
+    scorer = PatternMining::SurprisingnessScorer.new(atomspace)
+    scorer.i_surprisingness(0.5, [] of Float64).should eq(0.0)
+  end
+
+  it "ranks patterns by surprisingness" do
+    atomspace = AtomSpace::AtomSpace.new
+    animal = atomspace.add_concept_node("animal")
+    dog = atomspace.add_concept_node("dog")
+    atomspace.add_inheritance_link(dog, animal)
+
+    var_x = AtomSpace::VariableNode.new("$X")
+    pattern = PatternMatching::Pattern.new(var_x)
+    ps1 = PatternMining::PatternSupport.new(pattern, 3, 4)
+    ps2 = PatternMining::PatternSupport.new(pattern, 1, 4)
+
+    scorer = PatternMining::SurprisingnessScorer.new(atomspace)
+    ranked = scorer.rank_patterns([ps2, ps1], 4)
+    ranked.size.should eq(2)
+    (ranked[0][1] >= ranked[1][1]).should be_true
+  end
+end

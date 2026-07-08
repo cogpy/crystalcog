@@ -182,6 +182,131 @@ module NeuralSymbolic
     end
   end
 
+  # Trains concept embeddings from the structural relationships in an
+  # AtomSpace, using link co-occurrence as the training signal. This
+  # completes the embedding-to-atom round trip: atoms -> embeddings -> atoms.
+  class EmbeddingTrainer
+    getter atomspace : AtomSpace::AtomSpace
+    getter dimension : Int32
+
+    def initialize(@atomspace : AtomSpace::AtomSpace, @dimension : Int32 = 16)
+      raise NeuralSymbolicException.new("dimension must be positive") if @dimension <= 0
+    end
+
+    # Train embeddings from concept co-occurrence in links. Concepts that
+    # appear together in links receive similar embeddings via iterative
+    # averaging (a simplified skip-gram style update).
+    def train(iterations : Int32 = 10, learning_rate : Float64 = 0.5) : EmbeddingStore
+      store = EmbeddingStore.new
+      concepts = @atomspace.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE)
+        .compact_map { |a| a.as?(AtomSpace::Node).try(&.name) }
+        .uniq
+
+      return store if concepts.empty?
+
+      # Initialize with deterministic pseudo-random vectors (seeded per concept)
+      vectors = Hash(String, Array(Float64)).new
+      concepts.each do |c|
+        rng = Random.new(c.hash.to_u64!)
+        vectors[c] = Array(Float64).new(@dimension) { rng.rand * 2.0 - 1.0 }
+      end
+
+      pairs = co_occurring_pairs
+
+      iterations.times do
+        pairs.each do |c1, c2|
+          v1, v2 = vectors[c1]?, vectors[c2]?
+          next unless v1 && v2
+          # Pull co-occurring concepts toward each other
+          @dimension.times do |d|
+            mid = (v1[d] + v2[d]) / 2.0
+            v1[d] += learning_rate * (mid - v1[d])
+            v2[d] += learning_rate * (mid - v2[d])
+          end
+        end
+      end
+
+      vectors.each { |c, v| store.add(Embedding.new(c, v)) }
+      CogUtil::Logger.info("Trained #{vectors.size} embeddings (dim=#{@dimension}, iters=#{iterations})")
+      store
+    end
+
+    # Extract concept name pairs that co-occur within the same link
+    private def co_occurring_pairs : Array(Tuple(String, String))
+      pairs = [] of Tuple(String, String)
+
+      @atomspace.get_all_atoms.each do |atom|
+        next unless atom.is_a?(AtomSpace::Link)
+        names = collect_concept_names(atom)
+        names.each_with_index do |n1, i|
+          names[(i + 1)..].each { |n2| pairs << {n1, n2} }
+        end
+      end
+
+      pairs
+    end
+
+    private def collect_concept_names(link : AtomSpace::Link) : Array(String)
+      names = [] of String
+      link.outgoing.each do |child|
+        case child
+        when AtomSpace::Link
+          names.concat(collect_concept_names(child))
+        when AtomSpace::Node
+          names << child.name if child.type == AtomSpace::AtomType::CONCEPT_NODE
+        end
+      end
+      names
+    end
+  end
+
+  # Estimates truth values for unobserved relationships using embedding
+  # similarity — "neural truth value estimation".
+  class TruthValueEstimator
+    getter embedding_store : EmbeddingStore
+
+    def initialize(@embedding_store : EmbeddingStore)
+    end
+
+    # Estimate the truth value of a similarity/inheritance relation between
+    # two concepts from their embedding similarity. Confidence scales with
+    # the magnitude of the similarity signal.
+    def estimate(concept_a : String, concept_b : String) : AtomSpace::SimpleTruthValue?
+      emb_a = @embedding_store.get(concept_a)
+      emb_b = @embedding_store.get(concept_b)
+      return nil unless emb_a && emb_b
+
+      sim = emb_a.cosine_similarity(emb_b)
+      strength = ((sim + 1.0) / 2.0).clamp(0.0, 1.0) # Map [-1,1] -> [0,1]
+      confidence = sim.abs.clamp(0.0, 0.9)           # Stronger signal -> higher confidence
+      AtomSpace::SimpleTruthValue.new(strength, confidence)
+    end
+
+    # Materialize estimated relations into the AtomSpace for concept pairs
+    # exceeding a similarity threshold. Returns the number of links created.
+    def materialize_estimates(atomspace : AtomSpace::AtomSpace, threshold : Float64 = 0.5) : Int32
+      concepts = @embedding_store.embeddings.keys
+      count = 0
+
+      concepts.each_with_index do |c1, i|
+        concepts[(i + 1)..].each do |c2|
+          tv = estimate(c1, c2)
+          next unless tv && tv.strength >= threshold
+
+          n1 = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, c1)
+          n2 = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, c2)
+          pred = atomspace.add_node(AtomSpace::AtomType::PREDICATE_NODE, "estimated_similar_to")
+          list = atomspace.add_link(AtomSpace::AtomType::LIST_LINK, [n1, n2])
+          atomspace.add_link(AtomSpace::AtomType::EVALUATION_LINK, [pred, list], tv)
+          count += 1
+        end
+      end
+
+      CogUtil::Logger.info("Materialized #{count} estimated similarity links")
+      count
+    end
+  end
+
   # Initialize the NeuralSymbolic subsystem
   def self.initialize
     CogUtil::Logger.info("Initializing NeuralSymbolic subsystem...")
