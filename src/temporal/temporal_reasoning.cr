@@ -90,6 +90,71 @@ module Temporal
     end
   end
 
+  # Inverse of an Allen relation: if allen_relation(a, b) == r,
+  # then allen_relation(b, a) == inverse_relation(r).
+  def self.inverse_relation(rel : IntervalRelation) : IntervalRelation
+    case rel
+    when IntervalRelation::BEFORE        then IntervalRelation::AFTER
+    when IntervalRelation::AFTER         then IntervalRelation::BEFORE
+    when IntervalRelation::MEETS         then IntervalRelation::MET_BY
+    when IntervalRelation::MET_BY        then IntervalRelation::MEETS
+    when IntervalRelation::OVERLAPS      then IntervalRelation::OVERLAPPED_BY
+    when IntervalRelation::OVERLAPPED_BY then IntervalRelation::OVERLAPS
+    when IntervalRelation::STARTS        then IntervalRelation::STARTED_BY
+    when IntervalRelation::STARTED_BY    then IntervalRelation::STARTS
+    when IntervalRelation::DURING        then IntervalRelation::CONTAINS
+    when IntervalRelation::CONTAINS      then IntervalRelation::DURING
+    when IntervalRelation::FINISHES      then IntervalRelation::FINISHED_BY
+    when IntervalRelation::FINISHED_BY   then IntervalRelation::FINISHES
+    else                                      IntervalRelation::EQUALS
+    end
+  end
+
+  # Compose two Allen relations: given allen_relation(a, b) == r1 and
+  # allen_relation(b, c) == r2, returns the set of possible relations
+  # between a and c. Implements key entries of Allen's composition table;
+  # unconstrained combinations return all 13 relations.
+  def self.compose_relations(r1 : IntervalRelation, r2 : IntervalRelation) : Array(IntervalRelation)
+    all = IntervalRelation.values
+
+    # Identity: composing with EQUALS preserves the other relation
+    return [r2] if r1 == IntervalRelation::EQUALS
+    return [r1] if r2 == IntervalRelation::EQUALS
+
+    before_ish = [IntervalRelation::BEFORE, IntervalRelation::MEETS,
+                  IntervalRelation::OVERLAPS, IntervalRelation::STARTS,
+                  IntervalRelation::DURING]
+
+    case {r1, r2}
+    when {IntervalRelation::BEFORE, IntervalRelation::BEFORE},
+         {IntervalRelation::BEFORE, IntervalRelation::MEETS},
+         {IntervalRelation::MEETS, IntervalRelation::BEFORE}
+      [IntervalRelation::BEFORE]
+    when {IntervalRelation::AFTER, IntervalRelation::AFTER},
+         {IntervalRelation::AFTER, IntervalRelation::MET_BY},
+         {IntervalRelation::MET_BY, IntervalRelation::AFTER}
+      [IntervalRelation::AFTER]
+    when {IntervalRelation::MEETS, IntervalRelation::MEETS}
+      [IntervalRelation::BEFORE]
+    when {IntervalRelation::MET_BY, IntervalRelation::MET_BY}
+      [IntervalRelation::AFTER]
+    when {IntervalRelation::DURING, IntervalRelation::DURING}
+      [IntervalRelation::DURING]
+    when {IntervalRelation::CONTAINS, IntervalRelation::CONTAINS}
+      [IntervalRelation::CONTAINS]
+    when {IntervalRelation::BEFORE, IntervalRelation::DURING}
+      before_ish
+    when {IntervalRelation::OVERLAPS, IntervalRelation::OVERLAPS}
+      [IntervalRelation::BEFORE, IntervalRelation::MEETS, IntervalRelation::OVERLAPS]
+    when {IntervalRelation::STARTS, IntervalRelation::STARTS}
+      [IntervalRelation::STARTS]
+    when {IntervalRelation::FINISHES, IntervalRelation::FINISHES}
+      [IntervalRelation::FINISHES]
+    else
+      all
+    end
+  end
+
   # An event that happens at a point in time or over an interval
   class Event
     getter id : String
@@ -127,6 +192,18 @@ module Temporal
 
     def initiate(interval : Interval)
       @holds_during << interval
+    end
+
+    # Terminate the fluent at time t (Event Calculus "terminates"):
+    # clips any interval containing t so the fluent no longer holds after t.
+    def terminate(t : Float64)
+      @holds_during = @holds_during.compact_map do |iv|
+        if iv.contains?(t)
+          t > iv.start_time ? Interval.new(iv.start_time, t) : nil
+        else
+          iv.end_time <= t ? iv : nil
+        end
+      end
     end
   end
 
@@ -181,6 +258,46 @@ module Temporal
         chains << chain if chain.size > 1
       end
       chains
+    end
+
+    # Learn frequent event-name sequences (bigrams) from the timeline,
+    # enabling simple sequence prediction from temporal data.
+    def sequence_statistics : Hash(Tuple(String, String), Int32)
+      stats = Hash(Tuple(String, String), Int32).new(0)
+      @events.each_cons_pair do |e1, e2|
+        stats[{e1.name, e2.name}] += 1
+      end
+      stats
+    end
+
+    # Predict the most likely next event name after the given event name,
+    # based on observed sequence statistics. Returns nil if unknown.
+    def predict_next(event_name : String) : String?
+      stats = sequence_statistics
+      candidates = stats.select { |(from, _), _| from == event_name }
+      return nil if candidates.empty?
+      candidates.max_by { |_, count| count }[0][1]
+    end
+
+    # Infer causal relationships: pairs of event names where the first
+    # consistently precedes (meets or is before) the second. Returns pairs
+    # with their co-occurrence counts.
+    def infer_causal_pairs(min_occurrences : Int32 = 2) : Array(Tuple(String, String, Int32))
+      pair_counts = Hash(Tuple(String, String), Int32).new(0)
+
+      @events.each_with_index do |e1, i|
+        @events[(i + 1)..].each do |e2|
+          rel = Temporal.allen_relation(e1.interval, e2.interval)
+          if rel == IntervalRelation::BEFORE || rel == IntervalRelation::MEETS
+            pair_counts[{e1.name, e2.name}] += 1
+          end
+        end
+      end
+
+      pair_counts
+        .select { |_, count| count >= min_occurrences }
+        .map { |(from, to), count| {from, to, count} }
+        .sort_by { |_, _, count| -count }
     end
 
     # Store timeline in AtomSpace

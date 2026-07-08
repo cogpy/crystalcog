@@ -168,3 +168,119 @@ describe Temporal do
     end
   end
 end
+
+describe "Temporal enhancements" do
+  describe "inverse_relation" do
+    it "inverts BEFORE to AFTER and vice versa" do
+      Temporal.inverse_relation(Temporal::IntervalRelation::BEFORE).should eq(Temporal::IntervalRelation::AFTER)
+      Temporal.inverse_relation(Temporal::IntervalRelation::AFTER).should eq(Temporal::IntervalRelation::BEFORE)
+    end
+
+    it "inverts MEETS to MET_BY" do
+      Temporal.inverse_relation(Temporal::IntervalRelation::MEETS).should eq(Temporal::IntervalRelation::MET_BY)
+    end
+
+    it "keeps EQUALS as its own inverse" do
+      Temporal.inverse_relation(Temporal::IntervalRelation::EQUALS).should eq(Temporal::IntervalRelation::EQUALS)
+    end
+
+    it "is consistent with allen_relation" do
+      a = Temporal::Interval.new(0.0, 2.0)
+      b = Temporal::Interval.new(3.0, 5.0)
+      rel = Temporal.allen_relation(a, b)
+      Temporal.allen_relation(b, a).should eq(Temporal.inverse_relation(rel))
+    end
+  end
+
+  describe "compose_relations" do
+    it "composes BEFORE with BEFORE to BEFORE" do
+      result = Temporal.compose_relations(Temporal::IntervalRelation::BEFORE, Temporal::IntervalRelation::BEFORE)
+      result.should eq([Temporal::IntervalRelation::BEFORE])
+    end
+
+    it "treats EQUALS as identity" do
+      result = Temporal.compose_relations(Temporal::IntervalRelation::EQUALS, Temporal::IntervalRelation::DURING)
+      result.should eq([Temporal::IntervalRelation::DURING])
+    end
+
+    it "composes DURING with DURING to DURING" do
+      result = Temporal.compose_relations(Temporal::IntervalRelation::DURING, Temporal::IntervalRelation::DURING)
+      result.should eq([Temporal::IntervalRelation::DURING])
+    end
+
+    it "returns multiple candidates for ambiguous compositions" do
+      result = Temporal.compose_relations(Temporal::IntervalRelation::BEFORE, Temporal::IntervalRelation::DURING)
+      result.size.should be > 1
+      result.should contain(Temporal::IntervalRelation::BEFORE)
+    end
+  end
+
+  describe "Fluent#terminate" do
+    it "clips a holding interval at termination time" do
+      fluent = Temporal::Fluent.new("light_on")
+      fluent.initiate(Temporal::Interval.new(0.0, 10.0))
+      fluent.terminate(5.0)
+      fluent.holds_at?(3.0).should be_true
+      fluent.holds_at?(6.0).should be_false
+    end
+
+    it "removes intervals entirely after termination time" do
+      fluent = Temporal::Fluent.new("alarm")
+      fluent.initiate(Temporal::Interval.new(5.0, 10.0))
+      fluent.terminate(2.0)
+      fluent.holds_at?(7.0).should be_false
+    end
+
+    it "keeps intervals fully before termination time" do
+      fluent = Temporal::Fluent.new("done")
+      fluent.initiate(Temporal::Interval.new(0.0, 3.0))
+      fluent.terminate(5.0)
+      fluent.holds_at?(1.0).should be_true
+    end
+  end
+
+  describe "Timeline sequence learning" do
+    it "computes sequence statistics from event bigrams" do
+      timeline = Temporal::Timeline.new
+      timeline.add_event(Temporal::Event.new("wake", Temporal::Interval.new(0.0, 1.0)))
+      timeline.add_event(Temporal::Event.new("eat", Temporal::Interval.new(2.0, 3.0)))
+      timeline.add_event(Temporal::Event.new("work", Temporal::Interval.new(4.0, 5.0)))
+      stats = timeline.sequence_statistics
+      stats[{"wake", "eat"}].should eq(1)
+      stats[{"eat", "work"}].should eq(1)
+    end
+
+    it "predicts next event based on observed sequences" do
+      timeline = Temporal::Timeline.new
+      timeline.add_event(Temporal::Event.new("a", Temporal::Interval.new(0.0, 1.0)))
+      timeline.add_event(Temporal::Event.new("b", Temporal::Interval.new(2.0, 3.0)))
+      timeline.add_event(Temporal::Event.new("a", Temporal::Interval.new(4.0, 5.0)))
+      timeline.add_event(Temporal::Event.new("b", Temporal::Interval.new(6.0, 7.0)))
+      timeline.predict_next("a").should eq("b")
+    end
+
+    it "returns nil prediction for unknown events" do
+      timeline = Temporal::Timeline.new
+      timeline.predict_next("unknown").should be_nil
+    end
+  end
+
+  describe "Timeline causal inference" do
+    it "infers causal pairs from repeated precedence" do
+      timeline = Temporal::Timeline.new
+      timeline.add_event(Temporal::Event.new("rain", Temporal::Interval.new(0.0, 1.0)))
+      timeline.add_event(Temporal::Event.new("wet", Temporal::Interval.new(2.0, 3.0)))
+      timeline.add_event(Temporal::Event.new("rain", Temporal::Interval.new(4.0, 5.0)))
+      timeline.add_event(Temporal::Event.new("wet", Temporal::Interval.new(6.0, 7.0)))
+      pairs = timeline.infer_causal_pairs(2)
+      pairs.any? { |from, to, _| from == "rain" && to == "wet" }.should be_true
+    end
+
+    it "filters out pairs below the occurrence threshold" do
+      timeline = Temporal::Timeline.new
+      timeline.add_event(Temporal::Event.new("x", Temporal::Interval.new(0.0, 1.0)))
+      timeline.add_event(Temporal::Event.new("y", Temporal::Interval.new(2.0, 3.0)))
+      timeline.infer_causal_pairs(5).should be_empty
+    end
+  end
+end
