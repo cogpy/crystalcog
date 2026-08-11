@@ -24,6 +24,8 @@ module Attention
     TARGET_LTI_FUNDS          =  10000_i16 # Global LTI fund target
     MIN_STI                   = -32768_i16 # Minimum STI value
     MAX_STI                   =  32767_i16 # Maximum STI value
+    DEFAULT_DECAY_RATE        =    0.1_f64 # Default exponential forgetting rate
+    DEFAULT_FORGET_THRESHOLD  =      0_i16 # STI below which hybrid forget zeros atoms
   end
 
   # Priority levels for attention allocation

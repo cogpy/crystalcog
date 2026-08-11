@@ -538,6 +538,268 @@ module PatternMining
     end
   end
 
+  # Pattern evaluation metrics for ranking and filtering discovered patterns
+  struct PatternMetrics
+    getter support : Int32
+    getter frequency : Float64
+    getter surprisingness : Float64
+    getter confidence : Float64
+    getter lift : Float64
+    getter conviction : Float64
+
+    def initialize(@support : Int32, @frequency : Float64,
+                   @surprisingness : Float64 = 0.0,
+                   @confidence : Float64 = 0.0,
+                   @lift : Float64 = 0.0,
+                   @conviction : Float64 = 0.0)
+    end
+
+    # Composite quality score combining multiple metrics
+    def quality_score(w_freq : Float64 = 0.3, w_surprise : Float64 = 0.3,
+                      w_conf : Float64 = 0.2, w_lift : Float64 = 0.2) : Float64
+      (w_freq * @frequency) +
+        (w_surprise * @surprisingness) +
+        (w_conf * @confidence) +
+        (w_lift * Math.min(@lift / 10.0, 1.0))
+    end
+  end
+
+  # Evaluates mined patterns with association-rule style metrics
+  class PatternEvaluator
+    getter atomspace : AtomSpace::AtomSpace
+    getter surprisingness_scorer : SurprisingnessScorer
+
+    def initialize(@atomspace : AtomSpace::AtomSpace)
+      @surprisingness_scorer = SurprisingnessScorer.new(@atomspace)
+    end
+
+    # Evaluate a single pattern support entry
+    def evaluate(pattern_support : PatternSupport, database_size : Int32,
+                 antecedent_support : Int32? = nil, consequent_support : Int32? = nil) : PatternMetrics
+      surprise = @surprisingness_scorer.score(pattern_support, database_size)
+
+      conf = 0.0
+      lift = 0.0
+      conviction = 0.0
+
+      if antecedent_support && antecedent_support.not_nil! > 0
+        conf = pattern_support.support.to_f / antecedent_support.not_nil!.to_f
+      end
+
+      if consequent_support && database_size > 0 && consequent_support.not_nil! > 0
+        expected = consequent_support.not_nil!.to_f / database_size.to_f
+        lift = expected > 0 ? conf / expected : 0.0
+        conviction = if conf < 1.0 && expected < 1.0
+                       (1.0 - expected) / (1.0 - conf)
+                     else
+                       conf >= 1.0 ? Float64::INFINITY : 0.0
+                     end
+        conviction = 0.0 unless conviction.finite?
+      end
+
+      PatternMetrics.new(
+        pattern_support.support,
+        pattern_support.frequency,
+        surprise,
+        conf.clamp(0.0, 1.0),
+        lift,
+        conviction
+      )
+    end
+
+    # Rank patterns by composite quality
+    def rank(patterns : Array(PatternSupport), database_size : Int32) : Array(Tuple(PatternSupport, PatternMetrics))
+      scored = patterns.map { |p| {p, evaluate(p, database_size)} }
+      scored.sort_by { |_, m| -m.quality_score }
+    end
+  end
+
+  # Frequent itemset miner (Apriori-style) over AtomSpace concept co-occurrence.
+  # Treats each link's outgoing concept names as a transaction.
+  class FrequentItemsetMiner
+    getter atomspace : AtomSpace::AtomSpace
+    getter min_support : Int32
+    getter max_itemset_size : Int32
+
+    def initialize(@atomspace : AtomSpace::AtomSpace, @min_support : Int32 = 2, @max_itemset_size : Int32 = 4)
+      raise MiningException.new("min_support must be positive") if @min_support <= 0
+      raise MiningException.new("max_itemset_size must be positive") if @max_itemset_size <= 0
+    end
+
+    # Extract transactions: each link contributes the set of concept node names it contains
+    def transactions : Array(Set(String))
+      txns = [] of Set(String)
+
+      @atomspace.get_all_atoms.each do |atom|
+        next unless atom.is_a?(AtomSpace::Link)
+        names = collect_concept_names(atom)
+        txns << names.to_set unless names.empty?
+      end
+
+      txns
+    end
+
+    # Run Apriori frequent itemset mining
+    def mine : Array(Tuple(Set(String), Int32))
+      txns = transactions
+      return [] of Tuple(Set(String), Int32) if txns.empty?
+
+      # Count singletons
+      item_counts = Hash(String, Int32).new(0)
+      txns.each { |t| t.each { |item| item_counts[item] += 1 } }
+
+      frequent = [] of Tuple(Set(String), Int32)
+      current_level = [] of Set(String)
+
+      item_counts.each do |item, count|
+        if count >= @min_support
+          s = Set{item}
+          frequent << {s, count}
+          current_level << s
+        end
+      end
+
+      k = 2
+      while k <= @max_itemset_size && !current_level.empty?
+        candidates = generate_candidates(current_level, k)
+        next_level = [] of Set(String)
+
+        candidates.each do |candidate|
+          count = txns.count { |t| candidate.subset_of?(t) }
+          if count >= @min_support
+            frequent << {candidate, count}
+            next_level << candidate
+          end
+        end
+
+        current_level = next_level
+        k += 1
+      end
+
+      frequent.sort_by { |_, c| -c }
+    end
+
+    # Convert frequent itemsets into PatternSupport objects
+    def mine_as_patterns : Array(PatternSupport)
+      db_size = Math.max(@atomspace.size.to_i32, 1)
+      mine.map do |itemset, support|
+        # Represent itemset as a ListLink of concept nodes (variables for generality)
+        atoms = itemset.map { |name| AtomSpace::ConceptNode.new(name).as(AtomSpace::Atom) }
+        template = if atoms.size == 1
+                     atoms.first
+                   else
+                     AtomSpace::ListLink.new(atoms)
+                   end
+        pattern = PatternMatching::Pattern.new(template)
+        PatternSupport.new(pattern, support, db_size)
+      end
+    end
+
+    private def collect_concept_names(link : AtomSpace::Link) : Array(String)
+      names = [] of String
+      link.outgoing.each do |child|
+        case child
+        when AtomSpace::Link
+          names.concat(collect_concept_names(child))
+        when AtomSpace::Node
+          names << child.name if child.type == AtomSpace::AtomType::CONCEPT_NODE
+        end
+      end
+      names
+    end
+
+    private def generate_candidates(prev_level : Array(Set(String)), k : Int32) : Array(Set(String))
+      candidates = [] of Set(String)
+      n = prev_level.size
+
+      (0...n).each do |i|
+        ((i + 1)...n).each do |j|
+          union = prev_level[i] | prev_level[j]
+          next unless union.size == k
+          # Apriori prune: all (k-1) subsets should be frequent
+          if all_subsets_frequent?(union, prev_level)
+            candidates << union unless candidates.includes?(union)
+          end
+        end
+      end
+
+      candidates
+    end
+
+    private def all_subsets_frequent?(itemset : Set(String), prev_level : Array(Set(String))) : Bool
+      items = itemset.to_a
+      items.each_index do |i|
+        subset = itemset.dup
+        subset.delete(items[i])
+        return false unless prev_level.any? { |p| p == subset }
+      end
+      true
+    end
+  end
+
+  # Knowledge discovery pipeline: mine -> evaluate -> rank -> optionally assert
+  class KnowledgeDiscoveryPipeline
+    getter atomspace : AtomSpace::AtomSpace
+    getter min_support : Int32
+    getter min_quality : Float64
+
+    def initialize(@atomspace : AtomSpace::AtomSpace, @min_support : Int32 = 2, @min_quality : Float64 = 0.1)
+    end
+
+    # Run full discovery: frequent itemsets + pattern mining + evaluation
+    def discover(max_patterns : Int32 = 100) : Array(Tuple(PatternSupport, PatternMetrics))
+      results = [] of Tuple(PatternSupport, PatternMetrics)
+      db_size = Math.max(@atomspace.size.to_i32, 1)
+      evaluator = PatternEvaluator.new(@atomspace)
+
+      # 1. Frequent itemsets
+      itemset_miner = FrequentItemsetMiner.new(@atomspace, @min_support)
+      itemset_patterns = itemset_miner.mine_as_patterns
+      itemset_patterns.each do |ps|
+        metrics = evaluator.evaluate(ps, db_size)
+        results << {ps, metrics} if metrics.quality_score >= @min_quality
+      end
+
+      # 2. Classic pattern miner (bounded)
+      miner = PatternMiner.new(@atomspace, @min_support, max_patterns, 5)
+      mining_result = miner.mine_patterns
+      mining_result.patterns.each do |ps|
+        metrics = evaluator.evaluate(ps, db_size)
+        results << {ps, metrics} if metrics.quality_score >= @min_quality
+      end
+
+      # 3. Streaming snapshot of current atomspace
+      streamer = StreamingPatternMiner.new(@atomspace, 1000, @min_support)
+      streamer.process_atoms(@atomspace.get_all_atoms)
+      streamer.frequent_patterns.each do |ps|
+        metrics = evaluator.evaluate(ps, db_size)
+        results << {ps, metrics} if metrics.quality_score >= @min_quality
+      end
+
+      results.sort_by { |_, m| -m.quality_score }.first(max_patterns)
+    end
+
+    # Assert high-quality patterns into AtomSpace as EvaluationLinks
+    def assert_discoveries(discoveries : Array(Tuple(PatternSupport, PatternMetrics)),
+                           min_quality : Float64 = @min_quality) : Int32
+      count = 0
+      discoveries.each do |ps, metrics|
+        next if metrics.quality_score < min_quality
+
+        pred = @atomspace.add_node(AtomSpace::AtomType::PREDICATE_NODE, "discovered_pattern")
+        quality_node = @atomspace.add_node(
+          AtomSpace::AtomType::CONCEPT_NODE,
+          "quality_#{metrics.quality_score.round(3)}"
+        )
+        list = @atomspace.add_link(AtomSpace::AtomType::LIST_LINK, [ps.pattern.template, quality_node])
+        tv = AtomSpace::SimpleTruthValue.new(metrics.frequency.clamp(0.0, 1.0), metrics.confidence.clamp(0.0, 1.0))
+        @atomspace.add_link(AtomSpace::AtomType::EVALUATION_LINK, [pred, list], tv)
+        count += 1
+      end
+      count
+    end
+  end
+
   # Utility functions for pattern mining
   module Utils
     # Create a top pattern that matches everything

@@ -334,6 +334,154 @@ module Temporal
     end
   end
 
+  # A temporal plan step: an action to execute during an interval
+  struct PlanStep
+    getter action : String
+    getter interval : Interval
+    getter preconditions : Array(String)
+    getter effects : Array(String)
+
+    def initialize(@action : String, @interval : Interval,
+                   @preconditions : Array(String) = [] of String,
+                   @effects : Array(String) = [] of String)
+    end
+  end
+
+  # Temporal planner using Allen relations and event-calculus fluents
+  class TemporalPlanner
+    getter timeline : Timeline
+    getter actions : Hash(String, PlanStep)
+
+    def initialize(@timeline : Timeline = Timeline.new)
+      @actions = {} of String => PlanStep
+    end
+
+    def register_action(step : PlanStep)
+      @actions[step.action] = step
+    end
+
+    # Check whether preconditions of a step hold at the start of its interval
+    def preconditions_hold?(step : PlanStep) : Bool
+      t = step.interval.start_time
+      step.preconditions.all? do |fluent_name|
+        @timeline.fluent_value_at(fluent_name, t) == "true"
+      end
+    end
+
+    # Apply effects of a step: initiate effect fluents from action start through horizon
+    def apply_effects(step : PlanStep, horizon : Float64 = step.interval.end_time)
+      effect_interval = Interval.new(step.interval.start_time, Math.max(step.interval.end_time, horizon))
+      step.effects.each do |fluent_name|
+        fluent = @timeline.fluents[fluent_name]? || Fluent.new(fluent_name, "true")
+        fluent.initiate(effect_interval)
+        @timeline.add_fluent(fluent) unless @timeline.fluents.has_key?(fluent_name)
+      end
+
+      # Record the action as an event
+      event = Event.new(step.action, step.interval)
+      @timeline.add_event(event)
+    end
+
+    # Greedy temporal planning: select registered actions whose preconditions
+    # hold and whose intervals don't conflict, ordered by start time.
+    # goal_fluents lists fluent names that should hold at the end.
+    def plan(goal_fluents : Array(String), horizon : Float64 = 100.0) : Array(PlanStep)
+      selected = [] of PlanStep
+      candidates = @actions.values.select { |s| s.interval.end_time <= horizon }
+      candidates.sort_by! { |s| s.interval.start_time }
+
+      candidates.each do |step|
+        # Skip if overlaps an already selected step incompatibly
+        conflicts = selected.any? do |prev|
+          rel = Temporal.allen_relation(prev.interval, step.interval)
+          rel == IntervalRelation::OVERLAPS ||
+            rel == IntervalRelation::OVERLAPPED_BY ||
+            rel == IntervalRelation::CONTAINS ||
+            rel == IntervalRelation::DURING ||
+            rel == IntervalRelation::EQUALS
+        end
+        next if conflicts
+        next unless preconditions_hold?(step)
+
+        apply_effects(step, horizon)
+        selected << step
+      end
+
+      # Verify goals
+      if goal_fluents.all? { |g| @timeline.fluent_value_at(g, horizon) == "true" }
+        CogUtil::Logger.info("TemporalPlanner", "Plan succeeded with #{selected.size} steps")
+      else
+        CogUtil::Logger.info("TemporalPlanner", "Plan incomplete: goals not fully satisfied")
+      end
+
+      selected
+    end
+
+    # Find a sequence of existing timeline events that achieve a causal chain
+    # ending with an event of the given name (simple backward search).
+    def find_causal_plan(goal_event_name : String) : Array(Event)
+      chains = @timeline.causal_chains
+      best = chains.select { |c| c.last.name == goal_event_name }
+      return [] of Event if best.empty?
+      best.max_by(&.size)
+    end
+  end
+
+  # Optimized temporal queries over a timeline
+  class TemporalQueryEngine
+    getter timeline : Timeline
+    # Index: event name -> events
+    @name_index : Hash(String, Array(Event))
+    # Sorted by start time for range queries
+    @sorted_events : Array(Event)
+
+    def initialize(@timeline : Timeline)
+      @name_index = Hash(String, Array(Event)).new { |h, k| h[k] = [] of Event }
+      @sorted_events = [] of Event
+      rebuild_index
+    end
+
+    def rebuild_index
+      @name_index.clear
+      @sorted_events = @timeline.events.sort_by { |e| e.interval.start_time }
+      @sorted_events.each do |e|
+        @name_index[e.name] << e
+      end
+    end
+
+    # Find events by name (O(1) lookup)
+    def events_named(name : String) : Array(Event)
+      @name_index[name]
+    end
+
+    # Range query: events starting within [t0, t1]
+    def events_starting_between(t0 : Float64, t1 : Float64) : Array(Event)
+      @sorted_events.select { |e| e.interval.start_time >= t0 && e.interval.start_time <= t1 }
+    end
+
+    # Find all event pairs satisfying a given Allen relation
+    def pairs_with_relation(rel : IntervalRelation) : Array(Tuple(Event, Event))
+      pairs = [] of Tuple(Event, Event)
+      n = @sorted_events.size
+      (0...n).each do |i|
+        ((i + 1)...n).each do |j|
+          e1 = @sorted_events[i]
+          e2 = @sorted_events[j]
+          # Early exit: if e1 is fully before e2 start with gap and we want non-before, skip deeper when sorted
+          if Temporal.allen_relation(e1.interval, e2.interval) == rel
+            pairs << {e1, e2}
+          end
+        end
+      end
+      pairs
+    end
+
+    # Query fluents holding at time t
+    def fluents_at(t : Float64) : Array(Fluent)
+      @timeline.fluents.values.select { |f| f.holds_at?(t) }
+    end
+  end
+
   # Initialize Temporal subsystem
   def self.initialize
     CogUtil::Logger.info("Initializing Temporal subsystem...")
