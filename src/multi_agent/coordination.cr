@@ -170,5 +170,189 @@ module MultiAgent
         end
       end
     end
+
+    # Bilateral negotiation over a proposal value
+    class Negotiator
+      getter agent_a : String
+      getter agent_b : String
+      getter history : Array(Tuple(String, Float64))
+
+      def initialize(@agent_a : String, @agent_b : String)
+        @history = [] of Tuple(String, Float64)
+      end
+
+      # Alternating offers; each side concedes toward the midpoint until gap <= tolerance
+      def negotiate(offer_a : Float64, offer_b : Float64, tolerance : Float64 = 0.05,
+                    max_rounds : Int32 = 20) : Float64?
+        a = offer_a
+        b = offer_b
+        max_rounds.times do |round|
+          proposer = round.even? ? @agent_a : @agent_b
+          current = round.even? ? a : b
+          @history << {proposer, current}
+
+          gap = (a - b).abs
+          return (a + b) / 2.0 if gap <= tolerance
+
+          # Concede 25% of remaining gap each round
+          mid = (a + b) / 2.0
+          if round.even?
+            a = a + (mid - a) * 0.25
+          else
+            b = b + (mid - b) * 0.25
+          end
+        end
+        nil
+      end
+    end
+
+    # Majority / weighted consensus among agents
+    class ConsensusEngine
+      def majority(votes : Hash(String, String)) : String?
+        return nil if votes.empty?
+        tallies = Hash(String, Int32).new(0)
+        votes.each_value { |v| tallies[v] += 1 }
+        winner, count = tallies.max_by { |_, c| c }
+        # Require strict majority
+        count > votes.size / 2.0 ? winner : nil
+      end
+
+      def weighted(votes : Hash(String, String), weights : Hash(String, Float64)) : String?
+        return nil if votes.empty?
+        scores = Hash(String, Float64).new(0.0)
+        votes.each do |agent, choice|
+          scores[choice] += weights[agent]? || 1.0
+        end
+        scores.max_by { |_, s| s }[0]
+      end
+
+      # Iterative opinion dynamics: agents adopt neighbor majority until stable
+      def iterate(opinions : Hash(String, String),
+                  neighbors : Hash(String, Array(String)),
+                  max_iters : Int32 = 10) : Hash(String, String)
+        current = opinions.dup
+        max_iters.times do
+          nxt = current.dup
+          current.each_key do |agent|
+            neigh = neighbors[agent]? || [] of String
+            next if neigh.empty?
+            ballots = neigh.map { |n| current[n]? }.compact
+            ballots << current[agent]
+            tallies = Hash(String, Int32).new(0)
+            ballots.each { |b| tallies[b] += 1 }
+            nxt[agent] = tallies.max_by { |_, c| c }[0]
+          end
+          break if nxt == current
+          current = nxt
+        end
+        current
+      end
+    end
+
+    # Coalition formation based on complementary capabilities
+    class CoalitionFormer
+      struct Coalition
+        getter members : Array(String)
+        getter capabilities : Array(String)
+        getter value : Float64
+
+        def initialize(@members : Array(String), @capabilities : Array(String), @value : Float64)
+        end
+      end
+
+      def form(agents : Array(Agent), required : Array(String),
+               max_size : Int32 = 4) : Coalition?
+        return nil if agents.empty? || required.empty?
+
+        # Greedy set cover by capability gain
+        remaining = required.dup
+        selected = [] of Agent
+        covered = Set(String).new
+
+        while !remaining.empty? && selected.size < max_size
+          best = nil.as(Agent?)
+          best_gain = 0
+          agents.each do |a|
+            next if selected.includes?(a)
+            gain = a.capabilities.count { |c| remaining.includes?(c) && !covered.includes?(c) }
+            if gain > best_gain
+              best_gain = gain
+              best = a
+            end
+          end
+          break unless best && best_gain > 0
+          selected << best
+          best.capabilities.each { |c| covered << c if remaining.includes?(c) }
+          remaining.reject! { |c| covered.includes?(c) }
+        end
+
+        return nil if selected.empty?
+        caps = selected.flat_map(&.capabilities).uniq
+        value = required.count { |c| caps.includes?(c) }.to_f / required.size
+        Coalition.new(selected.map(&.id), caps, value)
+      end
+
+      # Partition agents into non-overlapping coalitions for a set of tasks
+      def partition_for_tasks(agents : Array(Agent), tasks : Array(Task)) : Array(Coalition)
+        available = agents.dup
+        coalitions = [] of Coalition
+        tasks.sort_by { |t| -t.priority }.each do |task|
+          coal = form(available, task.required_capabilities)
+          next unless coal
+          coalitions << coal
+          available.reject! { |a| coal.members.includes?(a.id) }
+        end
+        coalitions
+      end
+    end
+
+    # Shared mental model: common beliefs across agents with consensus tracking
+    class SharedMentalModel
+      getter beliefs : Hash(String, Float64) # proposition -> confidence
+      getter endorsements : Hash(String, Set(String)) # proposition -> agent ids
+
+      def initialize
+        @beliefs = {} of String => Float64
+        @endorsements = Hash(String, Set(String)).new { |h, k| h[k] = Set(String).new }
+      end
+
+      def assert(agent_id : String, proposition : String, confidence : Float64)
+        conf = confidence.clamp(0.0, 1.0)
+        @endorsements[proposition] << agent_id
+        # Confidence = average of endorsing agents' latest (simplified: max then dilute)
+        prev = @beliefs[proposition]? || 0.0
+        n = @endorsements[proposition].size.to_f
+        @beliefs[proposition] = (prev * (n - 1) + conf) / n
+      end
+
+      def retract(agent_id : String, proposition : String)
+        @endorsements[proposition].delete(agent_id)
+        if @endorsements[proposition].empty?
+          @beliefs.delete(proposition)
+          @endorsements.delete(proposition)
+        end
+      end
+
+      def consensus?(proposition : String, min_agents : Int32, min_confidence : Float64 = 0.5) : Bool
+        (@endorsements[proposition]?.try(&.size) || 0) >= min_agents &&
+          (@beliefs[proposition]? || 0.0) >= min_confidence
+      end
+
+      def common_ground(min_agents : Int32 = 2) : Array(String)
+        @beliefs.keys.select { |p| consensus?(p, min_agents) }
+      end
+
+      def to_atomspace(atomspace : AtomSpace::AtomSpace)
+        @beliefs.each do |prop, conf|
+          node = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, "belief:#{prop}")
+          pred = atomspace.add_node(AtomSpace::AtomType::PREDICATE_NODE, "shared_belief")
+          atomspace.add_link(
+            AtomSpace::AtomType::EVALUATION_LINK,
+            [pred, node],
+            AtomSpace::SimpleTruthValue.new(conf, 0.9)
+          )
+        end
+      end
+    end
   end
 end

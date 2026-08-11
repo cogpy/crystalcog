@@ -112,7 +112,7 @@ module Temporal
 
   # Compose two Allen relations: given allen_relation(a, b) == r1 and
   # allen_relation(b, c) == r2, returns the set of possible relations
-  # between a and c. Implements key entries of Allen's composition table;
+  # between a and c. Implements Allen's composition table for common cases;
   # unconstrained combinations return all 13 relations.
   def self.compose_relations(r1 : IntervalRelation, r2 : IntervalRelation) : Array(IntervalRelation)
     all = IntervalRelation.values
@@ -124,34 +124,187 @@ module Temporal
     before_ish = [IntervalRelation::BEFORE, IntervalRelation::MEETS,
                   IntervalRelation::OVERLAPS, IntervalRelation::STARTS,
                   IntervalRelation::DURING]
+    after_ish = [IntervalRelation::AFTER, IntervalRelation::MET_BY,
+                 IntervalRelation::OVERLAPPED_BY, IntervalRelation::FINISHED_BY,
+                 IntervalRelation::CONTAINS]
 
     case {r1, r2}
     when {IntervalRelation::BEFORE, IntervalRelation::BEFORE},
          {IntervalRelation::BEFORE, IntervalRelation::MEETS},
-         {IntervalRelation::MEETS, IntervalRelation::BEFORE}
+         {IntervalRelation::MEETS, IntervalRelation::BEFORE},
+         {IntervalRelation::BEFORE, IntervalRelation::OVERLAPS},
+         {IntervalRelation::BEFORE, IntervalRelation::STARTS},
+         {IntervalRelation::BEFORE, IntervalRelation::CONTAINS},
+         {IntervalRelation::BEFORE, IntervalRelation::FINISHED_BY}
       [IntervalRelation::BEFORE]
     when {IntervalRelation::AFTER, IntervalRelation::AFTER},
          {IntervalRelation::AFTER, IntervalRelation::MET_BY},
-         {IntervalRelation::MET_BY, IntervalRelation::AFTER}
+         {IntervalRelation::MET_BY, IntervalRelation::AFTER},
+         {IntervalRelation::AFTER, IntervalRelation::OVERLAPPED_BY},
+         {IntervalRelation::AFTER, IntervalRelation::FINISHES},
+         {IntervalRelation::AFTER, IntervalRelation::CONTAINS},
+         {IntervalRelation::AFTER, IntervalRelation::STARTED_BY}
       [IntervalRelation::AFTER]
     when {IntervalRelation::MEETS, IntervalRelation::MEETS}
       [IntervalRelation::BEFORE]
     when {IntervalRelation::MET_BY, IntervalRelation::MET_BY}
       [IntervalRelation::AFTER]
-    when {IntervalRelation::DURING, IntervalRelation::DURING}
+    when {IntervalRelation::MEETS, IntervalRelation::MET_BY}
+      [IntervalRelation::FINISHES, IntervalRelation::FINISHED_BY, IntervalRelation::EQUALS]
+    when {IntervalRelation::DURING, IntervalRelation::DURING},
+         {IntervalRelation::DURING, IntervalRelation::STARTS},
+         {IntervalRelation::DURING, IntervalRelation::FINISHES}
       [IntervalRelation::DURING]
-    when {IntervalRelation::CONTAINS, IntervalRelation::CONTAINS}
+    when {IntervalRelation::CONTAINS, IntervalRelation::CONTAINS},
+         {IntervalRelation::CONTAINS, IntervalRelation::STARTED_BY},
+         {IntervalRelation::CONTAINS, IntervalRelation::FINISHED_BY}
       [IntervalRelation::CONTAINS]
-    when {IntervalRelation::BEFORE, IntervalRelation::DURING}
+    when {IntervalRelation::BEFORE, IntervalRelation::DURING},
+         {IntervalRelation::BEFORE, IntervalRelation::FINISHES},
+         {IntervalRelation::BEFORE, IntervalRelation::OVERLAPPED_BY}
       before_ish
+    when {IntervalRelation::AFTER, IntervalRelation::DURING},
+         {IntervalRelation::AFTER, IntervalRelation::STARTS},
+         {IntervalRelation::AFTER, IntervalRelation::OVERLAPS}
+      after_ish
     when {IntervalRelation::OVERLAPS, IntervalRelation::OVERLAPS}
       [IntervalRelation::BEFORE, IntervalRelation::MEETS, IntervalRelation::OVERLAPS]
+    when {IntervalRelation::OVERLAPPED_BY, IntervalRelation::OVERLAPPED_BY}
+      [IntervalRelation::AFTER, IntervalRelation::MET_BY, IntervalRelation::OVERLAPPED_BY]
     when {IntervalRelation::STARTS, IntervalRelation::STARTS}
       [IntervalRelation::STARTS]
+    when {IntervalRelation::STARTED_BY, IntervalRelation::STARTED_BY}
+      [IntervalRelation::STARTED_BY]
     when {IntervalRelation::FINISHES, IntervalRelation::FINISHES}
       [IntervalRelation::FINISHES]
+    when {IntervalRelation::FINISHED_BY, IntervalRelation::FINISHED_BY}
+      [IntervalRelation::FINISHED_BY]
+    when {IntervalRelation::STARTS, IntervalRelation::DURING}
+      [IntervalRelation::DURING]
+    when {IntervalRelation::FINISHES, IntervalRelation::DURING}
+      [IntervalRelation::DURING]
+    when {IntervalRelation::DURING, IntervalRelation::CONTAINS}
+      all
+    when {IntervalRelation::CONTAINS, IntervalRelation::DURING}
+      all
     else
       all
+    end
+  end
+
+  # Event calculus: holds-at, happens, initiates, terminates, clipped
+  # (simplified Kowalski–Sergot style over discrete intervals).
+  class EventCalculus
+    getter timeline : Timeline
+
+    def initialize(@timeline : Timeline = Timeline.new)
+    end
+
+    # True if fluent *name* holds at time t
+    def holds_at?(name : String, t : Float64) : Bool
+      @timeline.fluent_value_at(name, t) != nil
+    end
+
+    # True if an event with the given name is occurring at t
+    def happens?(name : String, t : Float64) : Bool
+      @timeline.events_at(t).any? { |e| e.name == name }
+    end
+
+    # Record that *event* initiates fluent *fluent_name* with optional value
+    def initiates(event : Event, fluent_name : String, value : String = "true",
+                  until_time : Float64 = event.interval.end_time + 1000.0)
+      fluent = @timeline.fluents[fluent_name]? || Fluent.new(fluent_name, value)
+      fluent.value = value
+      fluent.initiate(Interval.new(event.interval.end_time, until_time))
+      @timeline.add_fluent(fluent)
+      @timeline.add_event(event) unless @timeline.events.includes?(event)
+    end
+
+    # Terminate fluent at the end of the event
+    def terminates(event : Event, fluent_name : String)
+      fluent = @timeline.fluents[fluent_name]?
+      return unless fluent
+      fluent.terminate(event.interval.end_time)
+      @timeline.add_event(event) unless @timeline.events.includes?(event)
+    end
+
+    # Fluent is clipped between t1 and t2 if terminated in (t1, t2)
+    def clipped?(fluent_name : String, t1 : Float64, t2 : Float64) : Bool
+      fluent = @timeline.fluents[fluent_name]?
+      return false unless fluent
+      fluent.holds_at?(t1) && !fluent.holds_at?(t2)
+    end
+
+    # Deduce fluents that hold throughout an interval
+    def fluents_holding_during(interval : Interval) : Array(String)
+      @timeline.fluents.keys.select do |name|
+        mid = (interval.start_time + interval.end_time) / 2.0
+        holds_at?(name, interval.start_time) &&
+          holds_at?(name, mid) &&
+          holds_at?(name, interval.end_time)
+      end
+    end
+  end
+
+  # N-gram sequence learner over event names on a timeline
+  class SequenceLearner
+    getter n : Int32
+    @counts : Hash(Array(String), Int32)
+    @total_sequences : Int32
+
+    def initialize(@n : Int32 = 2)
+      raise TemporalException.new("n must be >= 2") if @n < 2
+      @counts = Hash(Array(String), Int32).new(0)
+      @total_sequences = 0
+    end
+
+    def learn_from(timeline : Timeline)
+      names = timeline.events.map(&.name)
+      return if names.size < @n
+      (0..(names.size - @n)).each do |i|
+        gram = names[i, @n]
+        @counts[gram] += 1
+        @total_sequences += 1
+      end
+    end
+
+    def observe(sequence : Array(String))
+      return if sequence.size < @n
+      (0..(sequence.size - @n)).each do |i|
+        gram = sequence[i, @n]
+        @counts[gram] += 1
+        @total_sequences += 1
+      end
+    end
+
+    # Probability of full n-gram
+    def probability(gram : Array(String)) : Float64
+      return 0.0 if @total_sequences == 0
+      @counts[gram].to_f / @total_sequences.to_f
+    end
+
+    # Most likely next token given a prefix of length n-1
+    def predict(prefix : Array(String)) : String?
+      raise TemporalException.new("prefix size must be n-1") if prefix.size != @n - 1
+      candidates = @counts.select { |gram, _| gram[0...-1] == prefix }
+      return nil if candidates.empty?
+      candidates.max_by { |_, c| c }[0].last
+    end
+
+    # Top-k next tokens with scores
+    def predict_topk(prefix : Array(String), k : Int32 = 3) : Array(Tuple(String, Float64))
+      raise TemporalException.new("prefix size must be n-1") if prefix.size != @n - 1
+      candidates = @counts.select { |gram, _| gram[0...-1] == prefix }
+      return [] of Tuple(String, Float64) if candidates.empty?
+      total = candidates.values.sum.to_f
+      candidates
+        .map { |gram, c| {gram.last, c.to_f / total} }
+        .sort_by { |_, p| -p }
+        .first(k)
+    end
+
+    def unique_patterns : Int32
+      @counts.size
     end
   end
 
@@ -179,7 +332,7 @@ module Temporal
   # Fluent: a property that holds over time intervals (Event Calculus)
   class Fluent
     getter name : String
-    getter value : String
+    property value : String
     property holds_during : Array(Interval)
 
     def initialize(@name : String, @value : String = "true")
