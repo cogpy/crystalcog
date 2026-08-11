@@ -582,12 +582,12 @@ module PatternMining
       lift = 0.0
       conviction = 0.0
 
-      if antecedent_support && antecedent_support.not_nil! > 0
-        conf = pattern_support.support.to_f / antecedent_support.not_nil!.to_f
+      if (ant = antecedent_support) && ant > 0
+        conf = pattern_support.support.to_f / ant.to_f
       end
 
-      if consequent_support && database_size > 0 && consequent_support.not_nil! > 0
-        expected = consequent_support.not_nil!.to_f / database_size.to_f
+      if (cons = consequent_support) && database_size > 0 && cons > 0
+        expected = cons.to_f / database_size.to_f
         lift = expected > 0 ? conf / expected : 0.0
         conviction = if conf < 1.0 && expected < 1.0
                        (1.0 - expected) / (1.0 - conf)

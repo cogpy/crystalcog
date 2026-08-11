@@ -118,7 +118,10 @@ module Learning
       end
 
       def ensure_actions(state : String, actions : Array(String))
-        actions.each { |a| @q_table[state][a] = @q_table[state][a] }
+        # Materialize default Q=0.0 entries so actions appear in keys
+        actions.each do |a|
+          @q_table[state][a] = @q_table[state][a]? || 0.0
+        end
       end
 
       # Epsilon-greedy action selection

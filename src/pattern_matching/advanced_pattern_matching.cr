@@ -905,14 +905,12 @@ module PatternMatching
         getter created_at : Time
         getter hit_count : Int32
 
-        def initialize(@results : Array(MatchResult))
-          @created_at = Time.utc
-          @hit_count = 0
+        def initialize(@results : Array(MatchResult), @hit_count : Int32 = 0,
+                       @created_at : Time = Time.utc)
         end
 
         def touch : CacheEntry
-          entry = CacheEntry.new(@results)
-          entry
+          CacheEntry.new(@results, @hit_count + 1, @created_at)
         end
 
         def age_seconds : Float64
@@ -941,9 +939,9 @@ module PatternMatching
           return nil
         end
         @hits += 1
-        # Bump hit count via replace
-        @entries[key] = CacheEntry.new(entry.results)
-        entry.results
+        touched = entry.touch
+        @entries[key] = touched
+        touched.results
       end
 
       def store(key : String, results : Array(MatchResult))

@@ -195,6 +195,10 @@ module Temporal
   # Event calculus: holds-at, happens, initiates, terminates, clipped
   # (simplified Kowalski–Sergot style over discrete intervals).
   class EventCalculus
+    # Default fluent lifetime after initiation, in the same time units as Interval
+    # (callers may pass an explicit until_time to override).
+    DEFAULT_FLUENT_HORIZON = 1000.0
+
     getter timeline : Timeline
 
     def initialize(@timeline : Timeline = Timeline.new)
@@ -212,7 +216,7 @@ module Temporal
 
     # Record that *event* initiates fluent *fluent_name* with optional value
     def initiates(event : Event, fluent_name : String, value : String = "true",
-                  until_time : Float64 = event.interval.end_time + 1000.0)
+                  until_time : Float64 = event.interval.end_time + DEFAULT_FLUENT_HORIZON)
       fluent = @timeline.fluents[fluent_name]? || Fluent.new(fluent_name, value)
       fluent.value = value
       fluent.initiate(Interval.new(event.interval.end_time, until_time))
