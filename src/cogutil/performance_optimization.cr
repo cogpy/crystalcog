@@ -313,8 +313,8 @@ module CogUtil
     end
 
     private def hash_key(key : K) : UInt32
-      # Use Crystal's built-in hash for type safety
-      key.hash.to_u32
+      # Use Crystal's built-in hash; truncate without overflow checks
+      key.hash.to_u32!
     end
 
     private def resize_if_needed
