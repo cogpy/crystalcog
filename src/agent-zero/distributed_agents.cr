@@ -202,17 +202,22 @@ module AgentZero
     # Request collaborative reasoning from the network
     def request_collaborative_reasoning(query : String, timeout_seconds : Int32 = 30) : Array(CollaborativeResult)
       reasoning_id = UUID.random.to_s
-      request_message = Message.new("collaborative_reasoning_request", @id, {
-        "reasoning_id" => reasoning_id,
-        "query"        => query,
-        "requester"    => @name,
-        "timeout"      => timeout_seconds,
-        "timestamp"    => Time.utc.to_rfc3339,
-      })
-
-      # Store expected responses
-      expected_responses = @peers.keys
       received_results = [] of CollaborativeResult
+
+      # Always contribute local reasoning so single-agent / offline networks
+      # still produce real results instead of empty placeholders.
+      local_start = Time.instant
+      local = perform_local_reasoning(query)
+      local_ms = (Time.instant - local_start).total_milliseconds
+      received_results << CollaborativeResult.new(
+        @id,
+        local.content,
+        local.confidence,
+        local_ms
+      )
+
+      # Store expected peer responses
+      expected_responses = @peers.keys
 
       # Set up response handler
       original_handler = @message_handlers["collaborative_reasoning_response"]?
@@ -229,14 +234,25 @@ module AgentZero
         original_handler.try(&.call(message, nil))
       }
 
-      # Broadcast request
-      broadcast_message(request_message)
+      if expected_responses.size > 0
+        request_message = Message.new("collaborative_reasoning_request", @id, {
+          "reasoning_id" => reasoning_id,
+          "query"        => query,
+          "requester"    => @name,
+          "timeout"      => timeout_seconds,
+          "timestamp"    => Time.utc.to_rfc3339,
+        })
 
-      # Wait for responses with timeout
-      start_time = Time.instant
-      while received_results.size < expected_responses.size &&
-            (Time.instant - start_time).total_seconds < timeout_seconds
-        sleep 0.1.seconds
+        # Broadcast request
+        broadcast_message(request_message)
+
+        # Wait for peer responses with timeout
+        start_time = Time.instant
+        peer_results_target = expected_responses.size
+        while (received_results.size - 1) < peer_results_target &&
+              (Time.instant - start_time).total_seconds < timeout_seconds
+          sleep 0.1.seconds
+        end
       end
 
       # Restore original handler
@@ -492,20 +508,32 @@ module AgentZero
     end
 
     private def perform_local_reasoning(query : String) : ReasoningResult
-      # Use the cognitive kernel for local reasoning
-      # This is a simplified implementation - would integrate with PLN, ECAN, etc.
-
-      # Add query to atomspace
+      # Integrate cognitive kernel with lightweight concept extraction
       query_node = @cognitive_kernel.add_concept_node("query_#{UUID.random}")
       query_content = @cognitive_kernel.add_concept_node(query)
       @cognitive_kernel.add_evaluation_link(query_node, query_content)
 
-      # Generate cognitive tensor encoding for the query
-      tensor_encoding = @cognitive_kernel.cognitive_tensor_field_encoding("reasoning")
+      # Seed conceptual structure from query tokens
+      tokens = query.downcase.gsub(/[^a-z0-9\s]/, " ").split(/\s+/).reject(&.empty?).reject { |t| t.size < 3 }
+      concepts = tokens.map { |t| @cognitive_kernel.add_concept_node(t) }
+      if concepts.size >= 2
+        (0...concepts.size - 1).each do |i|
+          tv = AtomSpace::SimpleTruthValue.new(0.7, 0.6)
+          @cognitive_kernel.add_inheritance_link(concepts[i], concepts[i + 1], tv)
+        end
+      end
 
-      # Simple reasoning based on tensor field patterns
-      confidence = Math.min(0.9, tensor_encoding.sum / tensor_encoding.size / 10.0)
-      response_content = "Reasoning result for: #{query} (confidence: #{confidence.round(3)})"
+      # Confidence from concept structure and kernel size (avoid overflow-prone tensor path)
+      knowledge_bonus = Math.min(0.35, concepts.size * 0.05)
+      kernel_bonus = Math.min(0.2, @cognitive_kernel.size * 0.01)
+      confidence = Math.min(0.95, 0.45 + knowledge_bonus + kernel_bonus)
+
+      related = concepts.map(&.name).first(5).join(", ")
+      response_content = String.build do |str|
+        str << "Agent #{@name} reasoning on: #{query}. "
+        str << "Concepts: [#{related}]. " unless related.empty?
+        str << "Confidence: #{confidence.round(3)}"
+      end
 
       ReasoningResult.new(response_content, confidence)
     end

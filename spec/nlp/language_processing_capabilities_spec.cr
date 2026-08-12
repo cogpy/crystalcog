@@ -142,7 +142,8 @@ describe "Language Processing Capabilities" do
       # Run forward chaining to derive spatial relationships
       new_atoms = ure_engine.forward_chain(5)
 
-      atomspace.size.should be >= initial_size
+      atomspace.size.should be > initial_size
+      new_atoms.size.should be > 0
 
       puts "Spatial reasoning: processed #{spatial_sentences.size} spatial sentences"
       puts "Generated #{new_atoms.size} spatial inferences"
@@ -211,15 +212,16 @@ describe "Language Processing Capabilities" do
         tv
       )
 
-      # Create PLN engine for comparative reasoning
-      pln_engine = PLN.create_engine(atomspace)
+      # URE EvaluationTransitivity derives elephant > cat from chained bigger_than facts
+      ure_engine = URE.create_engine(atomspace)
 
       initial_size = atomspace.size
 
       # Run reasoning to derive transitive comparisons
-      new_atoms = pln_engine.reason(8)
+      new_atoms = ure_engine.forward_chain(5)
 
-      atomspace.size.should be >= initial_size
+      atomspace.size.should be > initial_size
+      new_atoms.size.should be > 0
 
       puts "Comparative reasoning: processed #{comparative_sentences.size} comparative sentences"
       puts "Generated #{new_atoms.size} comparative inferences"
@@ -304,7 +306,8 @@ describe "Language Processing Capabilities" do
       # Run reasoning to derive temporal sequences
       new_atoms = ure_engine.forward_chain(5)
 
-      atomspace.size.should be >= initial_size
+      atomspace.size.should be > initial_size
+      new_atoms.size.should be > 0
 
       puts "Temporal reasoning: processed #{temporal_sentences.size} temporal sentences"
       puts "Generated #{new_atoms.size} temporal inferences"

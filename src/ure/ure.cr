@@ -32,6 +32,8 @@ module URE
 
     def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
       return nil unless premises.size >= 2
+      # Do not conjoin open patterns containing free variables
+      return nil if premises.any? { |p| contains_variable?(p) }
 
       # Calculate conjunction truth value
       min_strength = premises.map(&.truth_value.strength).min
@@ -44,8 +46,21 @@ module URE
     end
 
     def fitness(premises : Array(AtomSpace::Atom)) : Float64
+      return 0.0 if premises.any? { |p| contains_variable?(p) }
       # Fitness based on truth value confidence
       premises.map(&.truth_value.confidence).sum / premises.size
+    end
+
+    private def contains_variable?(atom : AtomSpace::Atom) : Bool
+      visited = Set(UInt64).new
+      stack = [atom]
+      while node = stack.pop?
+        next unless visited.add?(node.handle)
+        return true if node.type == AtomSpace::AtomType::VARIABLE_NODE
+        next unless node.is_a?(AtomSpace::Link)
+        node.outgoing.each { |child| stack << child }
+      end
+      false
     end
   end
 
@@ -120,26 +135,162 @@ module URE
 
       if_part, then_part = implication.outgoing[0], implication.outgoing[1]
 
-      # Check if antecedent matches the if_part
-      return nil unless antecedent == if_part
+      # Exact match (ground implication)
+      if antecedent == if_part
+        tv_impl = implication.truth_value
+        tv_ante = antecedent.truth_value
+        new_strength = [tv_ante.strength, tv_impl.strength].min
+        new_confidence = tv_ante.confidence * tv_impl.confidence * 0.95
+        tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
 
-      # Calculate conclusion truth value using modus ponens formula
+        if then_part.is_a?(AtomSpace::EvaluationLink)
+          return atomspace.add_evaluation_link(then_part.predicate, then_part.arguments, tv)
+        end
+
+        then_part.truth_value = tv
+        return then_part
+      end
+
+      # Pattern implication: Implication(Evaluation(P, vars), Evaluation(Q, vars))
+      # grounded by Evaluation(P, constants)
+      return nil unless if_part.is_a?(AtomSpace::EvaluationLink)
+      return nil unless then_part.is_a?(AtomSpace::EvaluationLink)
+      return nil unless antecedent.is_a?(AtomSpace::EvaluationLink)
+
+      # Same predicate on the antecedent side
+      return nil unless if_part.predicate == antecedent.predicate
+
+      bindings = unify_atoms(if_part.arguments, antecedent.arguments)
+      return nil if bindings.nil?
+
+      grounded_args = substitute_bindings(then_part.arguments, bindings, atomspace)
+      return nil unless grounded_args
+
       tv_impl = implication.truth_value
       tv_ante = antecedent.truth_value
-
-      # Simplified modus ponens: min(P(A), P(A->B))
       new_strength = [tv_ante.strength, tv_impl.strength].min
       new_confidence = tv_ante.confidence * tv_impl.confidence * 0.95
-
       tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
 
-      # Return the consequent with new truth value
-      then_part.truth_value = tv
-      then_part
+      atomspace.add_evaluation_link(then_part.predicate, grounded_args, tv)
     end
 
     def fitness(premises : Array(AtomSpace::Atom)) : Float64
       premises.map(&.truth_value.strength).min
+    end
+
+    # Unify pattern atom against ground atom; returns variable bindings or nil
+    private def unify_atoms(pattern : AtomSpace::Atom, ground : AtomSpace::Atom) : Hash(String, AtomSpace::Atom)?
+      bindings = {} of String => AtomSpace::Atom
+      return nil unless unify(pattern, ground, bindings)
+      bindings
+    end
+
+    private def unify(pattern : AtomSpace::Atom, ground : AtomSpace::Atom, bindings : Hash(String, AtomSpace::Atom)) : Bool
+      if pattern.type == AtomSpace::AtomType::VARIABLE_NODE && pattern.is_a?(AtomSpace::Node)
+        name = pattern.name
+        if existing = bindings[name]?
+          return existing == ground
+        end
+        bindings[name] = ground
+        return true
+      end
+
+      return false unless pattern.type == ground.type
+
+      if pattern.is_a?(AtomSpace::Link) && ground.is_a?(AtomSpace::Link)
+        return false unless pattern.outgoing.size == ground.outgoing.size
+        pattern.outgoing.zip(ground.outgoing).each do |p, g|
+          return false unless unify(p, g, bindings)
+        end
+        return true
+      end
+
+      # Ground nodes must match by identity or name
+      if pattern.is_a?(AtomSpace::Node) && ground.is_a?(AtomSpace::Node)
+        return pattern.name == ground.name
+      end
+
+      pattern == ground
+    end
+
+    private def substitute_bindings(atom : AtomSpace::Atom, bindings : Hash(String, AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
+      if atom.type == AtomSpace::AtomType::VARIABLE_NODE && atom.is_a?(AtomSpace::Node)
+        return bindings[atom.name]?
+      end
+
+      if atom.is_a?(AtomSpace::Link)
+        new_outgoing = atom.outgoing.map do |child|
+          substituted = substitute_bindings(child, bindings, atomspace)
+          return nil unless substituted
+          substituted
+        end
+
+        case atom.type
+        when AtomSpace::AtomType::LIST_LINK
+          atomspace.add_list_link(new_outgoing)
+        when AtomSpace::AtomType::EVALUATION_LINK
+          return nil unless new_outgoing.size == 2
+          atomspace.add_evaluation_link(new_outgoing[0], new_outgoing[1])
+        else
+          atomspace.add_link(atom.type, new_outgoing)
+        end
+      else
+        atom
+      end
+    end
+  end
+
+  # Transitive closure over binary EvaluationLinks sharing a predicate:
+  # Evaluation(P, [A,B]) & Evaluation(P, [B,C]) => Evaluation(P, [A,C])
+  class EvaluationTransitivityRule < Rule
+    def name : String
+      "EvaluationTransitivityRule"
+    end
+
+    def premises : Array(AtomSpace::AtomType)
+      [AtomSpace::AtomType::EVALUATION_LINK, AtomSpace::AtomType::EVALUATION_LINK]
+    end
+
+    def conclusion : AtomSpace::AtomType
+      AtomSpace::AtomType::EVALUATION_LINK
+    end
+
+    def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
+      return nil unless premises.size == 2
+
+      link1, link2 = premises[0], premises[1]
+      return nil unless link1.is_a?(AtomSpace::EvaluationLink)
+      return nil unless link2.is_a?(AtomSpace::EvaluationLink)
+      return nil unless link1.predicate == link2.predicate
+
+      args1 = link1.arguments
+      args2 = link2.arguments
+      return nil unless args1.is_a?(AtomSpace::ListLink) && args2.is_a?(AtomSpace::ListLink)
+      return nil unless args1.outgoing.size == 2 && args2.outgoing.size == 2
+
+      a, b = args1.outgoing[0], args1.outgoing[1]
+      b2, c = args2.outgoing[0], args2.outgoing[1]
+      return nil unless b == b2
+      return nil if a == c
+
+      tv1, tv2 = link1.truth_value, link2.truth_value
+      new_strength = tv1.strength * tv2.strength
+      new_confidence = tv1.confidence * tv2.confidence * 0.9
+      tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
+
+      predicate = link1.predicate
+      # Derive "above" from stacked "on" relations for spatial reasoning
+      if predicate.responds_to?(:name) && predicate.name == "on"
+        above = atomspace.add_predicate_node("above")
+        return atomspace.add_evaluation_link(above, atomspace.add_list_link([a, c]), tv)
+      end
+
+      atomspace.add_evaluation_link(predicate, atomspace.add_list_link([a, c]), tv)
+    end
+
+    def fitness(premises : Array(AtomSpace::Atom)) : Float64
+      premises.map(&.truth_value.confidence).sum / premises.size
     end
   end
 
@@ -167,6 +318,7 @@ module URE
       add_rule(ConjunctionRule.new)
       add_rule(ModusPonensRule.new)
       add_rule(InheritanceTransitivityRule.new)
+      add_rule(EvaluationTransitivityRule.new)
     end
 
     def run : Array(AtomSpace::Atom)
@@ -198,15 +350,21 @@ module URE
           fitness = rule.fitness(premises)
           next if fitness < 0.1
 
+          # Track size so we only count atoms actually created by apply.
+          # Rules add results into the atomspace, so contains?(result) is
+          # true afterwards and must not be used as a "new atom" check.
+          size_before = @atomspace.size
           result = rule.apply(premises, @atomspace)
-          if result
+          if result && @atomspace.size > size_before
             key = "#{result.type}:#{result.to_s}"
             next if @seen_results.includes?(key)
             @seen_results.add(key)
-            if !@atomspace.contains?(result)
-              step_atoms << result
-              CogUtil::Logger.debug("URE: Applied #{rule.name}, fitness: #{fitness}")
-            end
+            step_atoms << result
+            CogUtil::Logger.debug("URE: Applied #{rule.name}, fitness: #{fitness}")
+          elsif result
+            # Already-present conclusion — mark seen so we do not reapply forever
+            key = "#{result.type}:#{result.to_s}"
+            @seen_results.add(key)
           end
         end
       end

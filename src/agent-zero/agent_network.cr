@@ -140,8 +140,13 @@ module AgentZero
 
       selected_agents.each do |agent|
         spawn do
-          results = agent.request_collaborative_reasoning(query, timeout_seconds)
-          channel.send(results)
+          begin
+            results = agent.request_collaborative_reasoning(query, timeout_seconds)
+            channel.send(results)
+          rescue ex
+            CogUtil::Logger.error("Collaborative reasoning failed on #{agent.name}: #{ex.message}")
+            channel.send([] of CollaborativeResult)
+          end
         end
       end
 

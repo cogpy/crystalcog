@@ -534,28 +534,100 @@ module PLN
       # Check if goal already exists
       return true if @atomspace.contains?(goal)
 
-      # Try to derive the goal using available rules
-      @rules.each do |rule|
-        # This is a simplified backward chaining
-        # In practice, this would be more sophisticated
-        if rule.applies_to?(goal)
-          premises = find_premises_for_goal(goal, rule)
-          premises.each do |premise|
-            if @atomspace.contains?(premise)
-              derived = rule.apply(premise, @atomspace)
-              return true if derived && derived == goal
-            end
+      # Try to derive the goal from existing premises via known rules
+      find_premises_for_goal(goal).each do |premise|
+        @rules.each do |rule|
+          next unless rule.applies_to?(premise)
+          derived = rule.apply(premise, @atomspace)
+          next unless derived
+
+          # Goal reached if we produced an equivalent atom (same type/structure)
+          if atoms_match_goal?(derived, goal)
+            return true
           end
         end
       end
 
-      false
+      # One more forward-ish sweep: run a single reasoning iteration and re-check
+      reason(1)
+      @atomspace.contains?(goal) || find_equivalent(goal) != nil
     end
 
-    private def find_premises_for_goal(goal : AtomSpace::Atom, rule : PLNRule) : Array(AtomSpace::Atom)
-      # This would contain rule-specific logic to find premises
-      # that could lead to the goal
-      [] of AtomSpace::Atom
+    # Find premises in the atomspace that could produce the goal under PLN rules
+    private def find_premises_for_goal(goal : AtomSpace::Atom) : Array(AtomSpace::Atom)
+      premises = [] of AtomSpace::Atom
+
+      case goal
+      when AtomSpace::Link
+        return premises unless goal.outgoing.size == 2
+        target_a, target_b = goal.outgoing[0], goal.outgoing[1]
+
+        case goal.type
+        when AtomSpace::AtomType::INHERITANCE_LINK
+          # Deduction: A->B, B->C => A->C  — look for middle term B
+          inheritance_links = @atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK)
+          inheritance_links.each do |link|
+            next unless link.is_a?(AtomSpace::Link) && link.outgoing.size == 2
+            # A->B where A matches goal source
+            if link.outgoing[0] == target_a
+              middle = link.outgoing[1]
+              # Need B->C
+              has_bc = inheritance_links.any? do |other|
+                other.is_a?(AtomSpace::Link) && other.outgoing.size == 2 &&
+                  other.outgoing[0] == middle && other.outgoing[1] == target_b
+              end
+              premises << link if has_bc
+            end
+          end
+
+          # Inversion: B->A could produce A->B
+          inheritance_links.each do |link|
+            next unless link.is_a?(AtomSpace::Link) && link.outgoing.size == 2
+            if link.outgoing[0] == target_b && link.outgoing[1] == target_a
+              premises << link
+            end
+          end
+
+          # Abduction: A->B and C->B can relate A and C
+          inheritance_links.each do |link|
+            next unless link.is_a?(AtomSpace::Link) && link.outgoing.size == 2
+            if link.outgoing[0] == target_a
+              premises << link
+            end
+          end
+        else
+          # Generic: any atom of matching premise-friendly types
+          @atomspace.get_atoms_by_type(goal.type).each { |a| premises << a }
+        end
+      else
+        # Node goals: look for inheritance links that conclude the node via modus ponens
+        inheritance_links = @atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK)
+        inheritance_links.each do |link|
+          next unless link.is_a?(AtomSpace::Link) && link.outgoing.size == 2
+          premises << link if link.outgoing[1] == goal
+        end
+      end
+
+      premises.uniq!
+      premises
+    end
+
+    private def atoms_match_goal?(derived : AtomSpace::Atom, goal : AtomSpace::Atom) : Bool
+      return true if derived == goal
+      return false unless derived.type == goal.type
+
+      if derived.responds_to?(:outgoing) && goal.responds_to?(:outgoing)
+        return false unless derived.outgoing.size == goal.outgoing.size
+        derived.outgoing.zip(goal.outgoing).all? { |d, g| d == g }
+      elsif derived.responds_to?(:name) && goal.responds_to?(:name)
+        derived.name == goal.name
+      else
+        false
+      end
+    end
+
+    private def find_equivalent(goal : AtomSpace::Atom) : AtomSpace::Atom?
+      @atomspace.get_atoms_by_type(goal.type).find { |atom| atoms_match_goal?(atom, goal) }
     end
   end
 
