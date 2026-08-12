@@ -88,11 +88,14 @@ module AgentZero
     def start
       return if @running
 
+      # Bind the server socket synchronously so peers can connect immediately
+      # after start returns. The accept loop still runs in a fiber.
+      @server = TCPServer.new(@host, @port)
       @running = true
       @status = AgentStatus::Active
 
       spawn do
-        start_server
+        accept_connections
       end
 
       spawn do
@@ -109,62 +112,85 @@ module AgentZero
       @running = false
       @status = AgentStatus::Offline
 
-      # Send goodbye messages to peers
-      broadcast_message(Message.new("agent_goodbye", @id, {
+      # Best-effort goodbye. Peers may already be offline during coordinated
+      # shutdown, so connection failures here are expected and not logged as errors.
+      goodbye = Message.new("agent_goodbye", @id, {
         "agent_id"  => @id,
         "name"      => @name,
         "timestamp" => Time.utc.to_rfc3339,
-      }))
+      })
+      @peers.each_value do |peer|
+        begin
+          socket = TCPSocket.new(peer.host, peer.port)
+          socket.puts(goodbye.to_json)
+          socket.close
+        rescue
+          # Peer already gone during shutdown races
+        end
+      end
+      @peers.clear
 
       @server.try(&.close)
       CogUtil::Logger.info("AgentNode #{@name} stopped")
     end
 
-    # Connect to another agent
-    def connect_to_peer(host : String, port : Int32) : Bool
-      begin
-        socket = TCPSocket.new(host, port)
-        socket.read_timeout = 10.seconds
-        # Send introduction message
-        intro_message = Message.new("agent_introduction", @id, {
-          "agent_id"     => @id,
-          "name"         => @name,
-          "host"         => @host,
-          "port"         => @port,
-          "capabilities" => @capabilities,
-          "trust_level"  => @trust_level,
-          "timestamp"    => Time.utc.to_rfc3339,
-        })
+    # Connect to another agent. Retries briefly to tolerate slow peer startup.
+    def connect_to_peer(host : String, port : Int32, retries : Int32 = 5) : Bool
+      last_error : String? = nil
 
-        socket.puts(intro_message.to_json)
+      retries.times do |attempt|
+        socket = nil
+        begin
+          socket = TCPSocket.new(host, port)
+          socket.read_timeout = 10.seconds
+          # Send introduction message
+          intro_message = Message.new("agent_introduction", @id, {
+            "agent_id"     => @id,
+            "name"         => @name,
+            "host"         => @host,
+            "port"         => @port,
+            "capabilities" => @capabilities,
+            "trust_level"  => @trust_level,
+            "timestamp"    => Time.utc.to_rfc3339,
+          })
 
-        # Wait for response
-        response_data = socket.gets
-        if response_data
-          response = Message.from_json(response_data)
-          if response.type == "agent_introduction_response" && response.payload["status"] == "accepted"
-            peer_info = PeerInfo.new(
-              response.sender_id,
-              response.payload["host"].as_s,
-              response.payload["port"].as_i,
-              response.payload["name"].as_s
-            )
-            peer_info.capabilities = response.payload["capabilities"].as_a.map(&.as_s)
-            peer_info.trust_level = response.payload["trust_level"].as_f
+          socket.puts(intro_message.to_json)
 
-            @peers[peer_info.id] = peer_info
-            CogUtil::Logger.info("Connected to peer #{peer_info.name} (#{peer_info.id})")
-            return true
+          # Wait for response
+          response_data = socket.gets
+          if response_data
+            response = Message.from_json(response_data)
+            if response.type == "agent_introduction_response" && response.payload["status"] == "accepted"
+              peer_info = PeerInfo.new(
+                response.sender_id,
+                response.payload["host"].as_s,
+                response.payload["port"].as_i,
+                response.payload["name"].as_s
+              )
+              peer_info.capabilities = response.payload["capabilities"].as_a.map(&.as_s)
+              peer_info.trust_level = response.payload["trust_level"].as_f
+
+              @peers[peer_info.id] = peer_info
+              CogUtil::Logger.info("Connected to peer #{peer_info.name} (#{peer_info.id})")
+              return true
+            end
           end
-        end
 
-        return false
-      rescue ex
-        CogUtil::Logger.error("Failed to connect to peer #{host}:#{port} - #{ex.message}")
-        return false
-      ensure
-        socket.try(&.close)
+          return false
+        rescue ex
+          last_error = ex.message
+          # Retry connection-refused / transient startup races
+          if attempt < retries - 1
+            sleep(0.05.seconds * (attempt + 1))
+            next
+          end
+        ensure
+          socket.try(&.close)
+        end
       end
+
+      CogUtil::Logger.error("Failed to connect to peer #{host}:#{port} - #{last_error}")
+      false
     end
 
     # Send a message to a specific peer
@@ -309,9 +335,8 @@ module AgentZero
       }
     end
 
-    private def start_server
-      @server = TCPServer.new(@host, @port)
-
+    # Accept loop for an already-bound server socket.
+    private def accept_connections
       while @running && (server = @server)
         begin
           client = server.accept
