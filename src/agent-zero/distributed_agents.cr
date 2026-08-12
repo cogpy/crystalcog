@@ -523,10 +523,9 @@ module AgentZero
         end
       end
 
-      # Confidence from concept structure and kernel size (avoid overflow-prone tensor path)
-      knowledge_bonus = Math.min(0.35, concepts.size * 0.05)
-      kernel_bonus = Math.min(0.2, @cognitive_kernel.size * 0.01)
-      confidence = Math.min(0.95, 0.45 + knowledge_bonus + kernel_bonus)
+      # Confidence from extracted concept structure (avoid overflow-prone tensor path)
+      knowledge_bonus = Math.min(0.4, concepts.size * 0.06)
+      confidence = Math.min(0.95, 0.5 + knowledge_bonus)
 
       related = concepts.map(&.name).first(5).join(", ")
       response_content = String.build do |str|
