@@ -214,6 +214,35 @@ describe AgentZero::AgentNetwork do
       agent.should be_nil
       network.agents.size.should eq(0)
     end
+
+    it "establishes mesh peer connections without connection refused errors" do
+      # Regression for CI priority issue: create_agent previously connected peers
+      # before the new agent's server was listening, logging Connection refused.
+      network = AgentZero::AgentNetwork.new("PeerConnectNetwork")
+
+      agent1 = network.create_agent("PeerAgent1")
+      agent2 = network.create_agent("PeerAgent2")
+      agent3 = network.create_agent("PeerAgent3")
+
+      agent1.should_not be_nil
+      agent2.should_not be_nil
+      agent3.should_not be_nil
+
+      if agent1 && agent2 && agent3
+        sleep 0.1.seconds
+
+        # Full mesh: each agent should know about the other two via
+        # one-way connect + introduction handshake reverse registration.
+        agent1.network_status["peer_count"].as_i64.should eq(2)
+        agent2.network_status["peer_count"].as_i64.should eq(2)
+        agent3.network_status["peer_count"].as_i64.should eq(2)
+
+        agent1.stop
+        agent2.stop
+        agent3.stop
+        sleep 0.2.seconds
+      end
+    end
   end
 
   describe "#collaborative_reasoning" do

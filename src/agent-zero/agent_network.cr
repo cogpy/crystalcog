@@ -117,10 +117,14 @@ module AgentZero
       agent = AgentNode.new(name, @network_config.discovery_host, port)
       agent.capabilities = capabilities unless capabilities.empty?
 
+      # Start the agent before connecting peers so its server is listening.
+      # Without this, mesh reverse-connect attempts hit Connection refused.
+      agent.start
+
       if add_agent(agent)
-        agent.start
         return agent
       else
+        agent.stop
         return nil
       end
     end
@@ -270,27 +274,34 @@ module AgentZero
     end
 
     private def connect_agent_to_network(agent : AgentNode)
+      # Only connect outward from the joining agent. The introduction handshake
+      # registers the reverse peer entry on the remote side. Connecting the other
+      # direction here races with agent.start and produces Connection refused noise.
+      return unless agent.status.active?
+
       case @network_config.network_topology
       when "mesh"
-        # Connect to all other agents (full mesh)
+        # Connect to all other active agents (full mesh via one-way connect + intro)
         @agents.each_value do |existing_agent|
           next if existing_agent.id == agent.id
+          next unless existing_agent.status.active?
           agent.connect_to_peer(existing_agent.host, existing_agent.port)
-          existing_agent.connect_to_peer(agent.host, agent.port)
         end
       when "star"
         # Connect to a central hub (first agent becomes hub)
         if @agents.size > 1
           hub_agent = @agents.values.first
-          agent.connect_to_peer(hub_agent.host, hub_agent.port)
-          hub_agent.connect_to_peer(agent.host, agent.port)
+          if hub_agent.status.active?
+            agent.connect_to_peer(hub_agent.host, hub_agent.port)
+          end
         end
       when "ring"
         # Connect to previous agent in a ring topology
-        if @agents.size > 1
-          prev_agent = @agents.values.last
-          agent.connect_to_peer(prev_agent.host, prev_agent.port)
-          prev_agent.connect_to_peer(agent.host, agent.port)
+        candidates = @agents.values.reject { |a| a.id == agent.id }
+        if prev_agent = candidates.last?
+          if prev_agent.status.active?
+            agent.connect_to_peer(prev_agent.host, prev_agent.port)
+          end
         end
       end
     end
