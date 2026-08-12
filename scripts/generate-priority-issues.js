@@ -45,10 +45,13 @@ const STUB_PATTERNS = [
   { re: /not\s+yet\s+implemented/i, kind: 'not-implemented', priority: 'high' },
   { re: /raise\s+[\"']Not(?:\s+yet)?\s+implemented/i, kind: 'not-implemented', priority: 'high' },
   { re: /raise\s+[\"']TODO/i, kind: 'not-implemented', priority: 'high' },
-  { re: /^\s*#\s*require\s+[\"'].*[\"']\s*$/, kind: 'disabled-require', priority: 'high' },
   { re: /\bpending\s+do\b/, kind: 'pending-spec', priority: 'medium' },
   { re: /\bpending\s+[\"']/, kind: 'pending-spec', priority: 'medium' },
 ];
+
+// Commented-out requires only count when the previous line marks them incomplete
+const DISABLED_REQUIRE_RE = /^\s*#\s*require\s+[\"'][^\"']+[\"']\s*$/;
+const DISABLED_REQUIRE_CONTEXT_RE = /\b(TODO|FIXME|XXX|disabled|broken|skip(?:ped)?|incomplete)\b/i;
 
 // Conditional backend stubs that are intentional when libs are disabled
 const INTENTIONAL_STUB_RE = /is disabled - provide stub implementation|support is disabled/i;
@@ -114,12 +117,30 @@ function scanIncompleteStubs() {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      const prev = lines[Math.max(0, i - 1)] || '';
+
+      // Disabled require only when nearby comment indicates intentional disable/TODO
+      if (DISABLED_REQUIRE_RE.test(line) && DISABLED_REQUIRE_CONTEXT_RE.test(prev + ' ' + line)) {
+        findings.push({
+          type: 'incomplete_stub',
+          kind: 'disabled-require',
+          priority: 'high',
+          file: fileRel,
+          line: i + 1,
+          detail: line.trim().slice(0, 200),
+          component: componentFromPath(fileRel),
+          fingerprint: `stub:${fileRel}:${i + 1}:disabled-require`,
+          title: `[Stub] Incomplete: ${fileRel}:${i + 1}`,
+        });
+        continue;
+      }
+
       for (const pattern of STUB_PATTERNS) {
         const m = line.match(pattern.re);
         if (!m) continue;
 
         // Skip intentional disabled-backend stubs (still record at low priority once per file)
-        const intentional = INTENTIONAL_STUB_RE.test(line) || INTENTIONAL_STUB_RE.test(lines[Math.max(0, i - 1)] || '');
+        const intentional = INTENTIONAL_STUB_RE.test(line) || INTENTIONAL_STUB_RE.test(prev);
         const priority = intentional ? 'low' : pattern.priority;
         const detail = (m[1] || line).trim().slice(0, 200);
 
@@ -284,14 +305,8 @@ function parseCrystalSpecLog(text) {
   return failures;
 }
 
-function parseE2EReports(artifactDir, jobResults) {
+function parseE2EReports(artifactDir) {
   const findings = [];
-  const patterns = [
-    'e2e-report.txt',
-    'integration-report.txt',
-    '*-e2e-results/**',
-  ];
-
   const reportFiles = [];
   function collect(dir, depth = 0) {
     if (!fs.existsSync(dir) || depth > 4) return;
@@ -608,8 +623,19 @@ async function githubRequest(method, urlPath, body, token) {
 async function ensureLabels(owner, repo, labels, token) {
   const known = new Map();
   try {
-    const existing = await githubRequest('GET', `/repos/${owner}/${repo}/labels?per_page=100`, null, token);
-    for (const l of existing) known.set(l.name, true);
+    let page = 1;
+    while (page <= 10) {
+      const existing = await githubRequest(
+        'GET',
+        `/repos/${owner}/${repo}/labels?per_page=100&page=${page}`,
+        null,
+        token
+      );
+      if (!Array.isArray(existing) || existing.length === 0) break;
+      for (const l of existing) known.set(l.name, true);
+      if (existing.length < 100) break;
+      page += 1;
+    }
   } catch (e) {
     console.warn('Could not list labels:', e.message);
   }
@@ -646,7 +672,10 @@ async function ensureLabels(owner, repo, labels, token) {
 }
 
 async function findOpenIssueByFingerprint(owner, repo, fingerprint, token) {
-  const q = encodeURIComponent(`repo:${owner}/${repo} is:issue is:open label:${AUTO_LABEL} ${fingerprint} in:body`);
+  // Quote fingerprint so colons are not treated as GitHub search qualifiers
+  const q = encodeURIComponent(
+    `repo:${owner}/${repo} is:issue is:open label:${AUTO_LABEL} "${fingerprint}" in:body`
+  );
   const result = await githubRequest('GET', `/search/issues?q=${q}&per_page=5`, null, token);
   return (result.items && result.items[0]) || null;
 }
@@ -810,7 +839,7 @@ async function main() {
 
   const stubs = scanIncompleteStubs();
   const unitFails = collectTestFailures(artifactDir);
-  const e2eFails = parseE2EReports(artifactDir, jobResults);
+  const e2eFails = parseE2EReports(artifactDir);
   let findings = dedupeFindings([...unitFails, ...e2eFails, ...stubs]);
   findings = addJobLevelFindings(findings, jobResults);
   findings = sortFindings(findings);
