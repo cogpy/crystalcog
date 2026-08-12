@@ -22,15 +22,21 @@ This directory contains GitHub Actions workflows for building, testing, and depl
    - Includes integration testing phase
 
 4. **multi-platform-build.yml** - Cross-platform build matrix
-   - Tests on Ubuntu 20.04 and 22.04
+   - Tests on Ubuntu 22.04 and 24.04
    - Builds in both Release and Debug modes
    - Includes sanitizer builds (AddressSanitizer, ThreadSanitizer, UBSan)
    - Code quality checks with clang-format and cppcheck
 
 ### Reusable Workflows
 
-- **reusable/build-component.yml** - Reusable workflow for building OpenCog components
-  - Standardizes the build process across all components
+> **Important:** GitHub Actions only supports reusable workflows as files directly
+> under `.github/workflows/` (for example `generate-priority-issues-reusable.yml`).
+> Paths like `.github/workflows/reusable/*.yml` are **not** callable via `workflow_call`
+> and will cause the caller workflow to fail instantly with zero jobs.
+
+- **generate-priority-issues-reusable.yml** - Scans CI artifacts/stubs and opens prioritized issues
+- **reusable/** (templates only, not callable) - Historical OpenCog component build templates
+  - Standardizes the build process across components when copied to top-level reusable files
   - Handles dependency downloads and artifact uploads
   - Configurable for different repositories and build options
 
@@ -99,7 +105,8 @@ To add a new component to the build sequence:
 ```yaml
   my-component:
     needs: atomspace  # or other dependencies
-    uses: ./.github/workflows/reusable/build-component.yml
+    # Reusable workflows must live directly under .github/workflows/ (no subdirs).
+    uses: ./.github/workflows/build-component-reusable.yml
     with:
       component-name: my-component
       repository: opencog/my-component
@@ -114,7 +121,8 @@ You can pass additional CMake arguments through the reusable workflow:
 
 ```yaml
   my-component:
-    uses: ./.github/workflows/reusable/build-component.yml
+    # Reusable workflows must live directly under .github/workflows/ (no subdirs).
+    uses: ./.github/workflows/build-component-reusable.yml
     with:
       component-name: my-component
       repository: opencog/my-component
@@ -154,7 +162,7 @@ You can pass additional CMake arguments through the reusable workflow:
 
 ## Crystal-Specific Workflows
 
-### Priority Issue Generation (`reusable/generate-priority-issues.yml`)
+### Priority Issue Generation (`generate-priority-issues-reusable.yml`)
 
 **Purpose**: Final job shared by CI workflows that opens/updates GitHub issues from:
 

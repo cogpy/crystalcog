@@ -1,5 +1,8 @@
 name: Generate Priority Issues (reusable)
 
+# NOTE: Reusable workflows must live directly under .github/workflows/
+# (subdirectories like .github/workflows/reusable/ are not supported by GitHub Actions).
+
 on:
   workflow_call:
     inputs:
@@ -105,7 +108,7 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
-          # On pull requests, default to dry-run to avoid issue spam from forks/PRs
+          # On pull requests from forks, default to dry-run to avoid issue spam
           if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
             ARGS+=(--dry-run)
           fi

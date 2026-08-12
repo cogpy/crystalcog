@@ -28,7 +28,7 @@ permissions:
 jobs:
   generate-priority-issues:
     name: Generate Priority Issues
-    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    uses: ./.github/workflows/generate-priority-issues-reusable.yml
     secrets: inherit
     with:
       source_workflow: 'Generate Priority Issues'

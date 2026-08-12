@@ -24,7 +24,14 @@ jobs:
           - os: ubuntu-latest
             crystal: nightly
           - os: windows-latest
+            disable_dbs: "1"
     runs-on: ${{ matrix.os }}
+    # Compile-time flags must be present for the whole job (Windows has no DB libs).
+    # Using job-level env avoids PowerShell/$GITHUB_ENV issues on windows-latest.
+    env:
+      DISABLE_ROCKSDB: ${{ matrix.disable_dbs }}
+      DISABLE_SQLITE3: ${{ matrix.disable_dbs }}
+      DISABLE_POSTGRES: ${{ matrix.disable_dbs }}
     steps:
       - name: Download source
         uses: actions/checkout@v4
@@ -41,18 +48,13 @@ jobs:
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libpq-dev
-      - name: Set environment for Windows
-        if: runner.os == 'Windows'
-        run: |
-          echo "DISABLE_ROCKSDB=1" >> $GITHUB_ENV
-          echo "DISABLE_SQLITE3=1" >> $GITHUB_ENV
-          echo "DISABLE_POSTGRES=1" >> $GITHUB_ENV
       - name: Install shards
         run: shards update --ignore-crystal-version
       - name: Run tests
+        shell: bash
         run: |
           # Run tests with error handling for compiler crashes
           crystal spec --order=random --error-trace --no-color || {
-            echo "⚠️  Test run failed, retrying with single-threaded execution..."
+            echo "Test run failed, retrying with single-threaded execution..."
             CRYSTAL_WORKERS=1 crystal spec --order=random --error-trace --no-color
           }
