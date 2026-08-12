@@ -4,6 +4,27 @@ This directory contains utility scripts for the CrystalCog project.
 
 ## Available Scripts
 
+### `generate-priority-issues.js` - CI Priority Issue Generator
+
+Scans failing unit/E2E test artifacts and incomplete stubs, then creates or updates
+GitHub issues labeled `auto-priority` to guide next development work.
+
+**Usage:**
+```bash
+# Local dry-run (no issues created)
+node scripts/generate-priority-issues.js --dry-run
+
+# Scan only, write findings JSON
+node scripts/generate-priority-issues.js --scan-only --output findings.json
+
+# In CI (token present): create/update issues
+UNIT_RESULT=failure E2E_RESULT=failure ARTIFACT_DIR=./ci-artifacts \
+  node scripts/generate-priority-issues.js
+```
+
+**Wired into workflows** as a final job via
+`.github/workflows/reusable/generate-priority-issues.yml`.
+
 ### `validation/test_nlp_structure.sh` - NLP Module Structure Validation
 Comprehensive validation script for the Natural Language Processing (NLP) module structure, dependencies, and integration.
 

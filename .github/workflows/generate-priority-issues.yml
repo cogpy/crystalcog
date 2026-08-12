@@ -1,0 +1,40 @@
+name: Generate Priority Issues
+
+# Manual / scheduled entry point for scanning failing tests & incomplete stubs
+# and opening prioritized GitHub issues. Also invoked as a final job from CI workflows.
+
+on:
+  schedule:
+    # Weekly Monday 9 AM UTC — refresh priority board from codebase stubs
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Scan only; do not create or update issues'
+        required: false
+        default: false
+        type: boolean
+      max_issues:
+        description: 'Maximum new individual issues'
+        required: false
+        default: '15'
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  generate-priority-issues:
+    name: Generate Priority Issues
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'Generate Priority Issues'
+      unit_result: ''
+      e2e_result: ''
+      integration_result: ''
+      artifact_names: ''
+      max_issues: ${{ github.event.inputs.max_issues || '15' }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}

@@ -59,6 +59,12 @@ This document describes the comprehensive CI/CD pipeline implemented for Crystal
 - Generate summary report
 - Fail if core tests fail
 
+#### Generate Priority Issues (final job)
+- Runs after all other jobs (`if: always()`)
+- Parses unit/E2E failure artifacts and scans incomplete stubs
+- Creates/updates GitHub issues labeled `auto-priority` (dry-run on pull requests)
+- Implementation: `scripts/generate-priority-issues.js` + reusable workflow
+
 **Status**: ✅ Production Ready
 
 ---

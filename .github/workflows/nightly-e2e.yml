@@ -488,3 +488,22 @@ jobs:
         else
           echo "✅ All E2E tests passed or were skipped"
         fi
+
+  # Generate GitHub issues from failing E2E tests and incomplete stubs
+  generate-priority-issues:
+    name: Generate Priority Issues
+    needs: [atomspace-e2e, cogserver-e2e, distributed-e2e, performance-e2e, websocket-e2e, e2e-summary]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'Nightly E2E Tests'
+      unit_result: ''
+      integration_result: ''
+      e2e_result: ${{ needs.e2e-summary.result }}
+      artifact_names: 'atomspace-e2e-results,cogserver-e2e-results,distributed-e2e-results,performance-e2e-results,websocket-e2e-results'
+      max_issues: '15'

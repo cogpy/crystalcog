@@ -424,3 +424,36 @@ jobs:
           if (buildSuccess && testSuccess && context.eventName === 'pull_request') {
             console.log('💡 Tip: For pull requests affecting core components, consider running comprehensive tests.');
           }
+
+    - name: Upload test logs for priority issue generation
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          test.log
+          build.log
+          install.log
+          *.log
+        retention-days: 7
+        if-no-files-found: ignore
+
+  # Generate GitHub issues from failing unit tests and incomplete stubs
+  generate-priority-issues:
+    name: Generate Priority Issues
+    needs: [crystal-build]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'Crystal Build and Test'
+      unit_result: ${{ needs.crystal-build.result }}
+      e2e_result: ''
+      integration_result: ''
+      artifact_names: 'test-results,crystal-build-artifacts'
+      max_issues: '15'
+      dry_run: ${{ github.event_name == 'pull_request' }}

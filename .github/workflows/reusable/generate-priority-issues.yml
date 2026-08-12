@@ -1,0 +1,124 @@
+name: Generate Priority Issues (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      source_workflow:
+        description: 'Name of the calling workflow'
+        required: false
+        type: string
+        default: ''
+      unit_result:
+        description: 'Unit test job result'
+        required: false
+        type: string
+        default: ''
+      e2e_result:
+        description: 'E2E test job result'
+        required: false
+        type: string
+        default: ''
+      integration_result:
+        description: 'Integration test job result'
+        required: false
+        type: string
+        default: ''
+      artifact_names:
+        description: 'Comma-separated artifact name prefixes to download'
+        required: false
+        type: string
+        default: 'test-results,e2e-report,integration-report'
+      max_issues:
+        description: 'Maximum new individual issues per run'
+        required: false
+        type: string
+        default: '15'
+      dry_run:
+        description: 'If true, scan only and do not create issues'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  generate-priority-issues:
+    name: Generate issues from failures & stubs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download CI artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: ci-artifacts
+          merge-multiple: true
+
+      - name: Collect named artifacts (best effort)
+        continue-on-error: true
+        env:
+          ARTIFACT_NAMES: ${{ inputs.artifact_names }}
+        run: |
+          mkdir -p ci-artifacts
+          # Some callers upload multiple artifacts; download-artifact above
+          # already merges when possible. List what we have for debugging.
+          echo "Artifact tree:"
+          find ci-artifacts -type f 2>/dev/null | head -100 || true
+          ls -la ci-artifacts 2>/dev/null || true
+
+      - name: Scan and generate priority issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_WORKFLOW: ${{ github.workflow }}
+          SOURCE_WORKFLOW: ${{ inputs.source_workflow || github.workflow }}
+          UNIT_RESULT: ${{ inputs.unit_result }}
+          E2E_RESULT: ${{ inputs.e2e_result }}
+          INTEGRATION_RESULT: ${{ inputs.integration_result }}
+          ARTIFACT_DIR: ${{ github.workspace }}/ci-artifacts
+          MAX_NEW_ISSUES: ${{ inputs.max_issues }}
+        run: |
+          chmod +x scripts/generate-priority-issues.js
+          mkdir -p ci-artifacts
+
+          # Also copy any root-level logs if present
+          cp -f test-results.xml ci-artifacts/ 2>/dev/null || true
+          cp -f *.log ci-artifacts/ 2>/dev/null || true
+
+          ARGS=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          # On pull requests, default to dry-run to avoid issue spam from forks/PRs
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          node scripts/generate-priority-issues.js "${ARGS[@]}" --output ci-artifacts/priority-findings.json
+
+      - name: Upload priority findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-findings
+          path: |
+            ci-artifacts/priority-findings.json
+            ci-artifacts/priority-issues-report.json
+          retention-days: 30
+          if-no-files-found: warn
