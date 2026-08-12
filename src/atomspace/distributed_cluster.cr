@@ -783,7 +783,8 @@ module AtomSpace
       Random.rand(26000..30000)
     end
 
-    private def emit_event(event : ClusterEvent, node_id : String)
+    # Public so DistributedStorageNode and other cluster participants can notify observers
+    def emit_event(event : ClusterEvent, node_id : String)
       @event_observers.each do |observer|
         begin
           observer.call(event, node_id)

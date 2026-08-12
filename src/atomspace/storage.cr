@@ -939,7 +939,7 @@ module AtomSpace
     end
 
     def get_stats : Hash(String, String | Int32 | Int64)
-      {"type" => "SQLiteStorage", "status" => "disabled"}
+      Hash(String, String | Int32 | Int64){"type" => "SQLiteStorage", "status" => "disabled"}
     end
   end
   {% end %}
@@ -1492,7 +1492,7 @@ module AtomSpace
     end
 
     def get_stats : Hash(String, String | Int32 | Int64)
-      {"type" => "PostgreSQLStorage", "status" => "disabled"}
+      Hash(String, String | Int32 | Int64){"type" => "PostgreSQLStorage", "status" => "disabled"}
     end
   end
   {% end %}
