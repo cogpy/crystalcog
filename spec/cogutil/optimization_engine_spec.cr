@@ -3,32 +3,32 @@ require "../../src/cogutil/performance_profiler"
 require "../../src/cogutil/performance_regression"
 require "../../src/cogutil/optimization_engine"
 
+# Build a profiler session with deterministic metrics so rules can be tested
+# without depending on wall-clock sleeps.
+private def build_optimization_session(entries : Hash(String, NamedTuple(
+  wall_time: Float64,
+  call_count: UInt64,
+  memory_peak: UInt64,
+  gc_time: Float64,
+  errors: UInt64
+))) : CogUtil::PerformanceProfiler::Session
+  session = CogUtil::PerformanceProfiler::Session.new
+  entries.each do |name, values|
+    session.start_profile(name)
+    session.end_profile(name)
+    metrics = session.get_metrics(name).not_nil!
+    metrics.wall_time = values[:wall_time]
+    metrics.call_count = values[:call_count]
+    metrics.memory_peak = values[:memory_peak]
+    metrics.gc_time = values[:gc_time]
+    metrics.errors = values[:errors]
+  end
+  session
+end
+
 # Unit coverage for CogUtil::OptimizationEngine
 # (required path: spec/cogutil/optimization_engine_spec.cr)
 describe CogUtil::OptimizationEngine do
-  # Build a profiler session with deterministic metrics so rules can be tested
-  # without depending on wall-clock sleeps.
-  def self.build_session(entries : Hash(String, NamedTuple(
-    wall_time: Float64,
-    call_count: UInt64,
-    memory_peak: UInt64,
-    gc_time: Float64,
-    errors: UInt64
-  ))) : CogUtil::PerformanceProfiler::Session
-    session = CogUtil::PerformanceProfiler::Session.new
-    entries.each do |name, values|
-      session.start_profile(name)
-      session.end_profile(name)
-      metrics = session.get_metrics(name).not_nil!
-      metrics.wall_time = values[:wall_time]
-      metrics.call_count = values[:call_count]
-      metrics.memory_peak = values[:memory_peak]
-      metrics.gc_time = values[:gc_time]
-      metrics.errors = values[:errors]
-    end
-    session
-  end
-
   describe "Recommendation" do
     it "reports critical and high priority thresholds" do
       critical = CogUtil::OptimizationEngine::Recommendation.new(
@@ -114,8 +114,10 @@ describe CogUtil::OptimizationEngine do
   end
 
   describe "#analyze_and_recommend" do
-    it "returns empty recommendations for well-behaved metrics" do
-      session = build_session({
+    it "does not fire per-function rules for well-behaved metrics" do
+      # A single function is always a hot path relative to total time, so global
+      # pattern recommendations may still appear; rule-based categories should not.
+      session = build_optimization_session({
         "healthy" => {
           wall_time:   0.001,
           call_count:  1_u64,
@@ -128,11 +130,24 @@ describe CogUtil::OptimizationEngine do
       engine = CogUtil::OptimizationEngine.new
       recommendations = engine.analyze_and_recommend(session)
       recommendations.should be_a(Array(CogUtil::OptimizationEngine::Recommendation))
-      recommendations.should be_empty
+
+      rule_categories = %w[Performance Memory Caching Reliability]
+      rule_hits = recommendations.select { |r| rule_categories.includes?(r.category) && r.function_name == "healthy" }
+      # High-execution / memory / caching / error rules should stay quiet
+      rule_hits.reject { |r| r.category == "Architecture" }.should be_empty
+      recommendations.none? { |r| r.category == "Performance" && r.function_name == "healthy" }.should be_true
+      recommendations.none? { |r| r.category == "Caching" }.should be_true
+      recommendations.none? { |r| r.category == "Reliability" }.should be_true
+    end
+
+    it "returns no recommendations for an empty session" do
+      session = CogUtil::PerformanceProfiler::Session.new
+      engine = CogUtil::OptimizationEngine.new
+      engine.analyze_and_recommend(session).should be_empty
     end
 
     it "recommends for high execution time" do
-      session = build_session({
+      session = build_optimization_session({
         "slow_fn" => {
           wall_time:   1.0,
           call_count:  20_u64,
@@ -151,7 +166,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "recommends for high memory usage" do
-      session = build_session({
+      session = build_optimization_session({
         "mem_fn" => {
           wall_time:   0.01,
           call_count:  5_u64,
@@ -170,7 +185,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "recommends caching for high call frequency with costly calls" do
-      session = build_session({
+      session = build_optimization_session({
         "hot_fn" => {
           wall_time:   20.0, # avg > 1ms per call with 10001 calls
           call_count:  10_001_u64,
@@ -189,7 +204,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "recommends reliability fixes for high error rates" do
-      session = build_session({
+      session = build_optimization_session({
         "flaky_fn" => {
           wall_time:   0.05,
           call_count:  100_u64,
@@ -208,7 +223,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "recommends reducing allocations under GC pressure" do
-      session = build_session({
+      session = build_optimization_session({
         "gc_fn" => {
           wall_time:   1.0,
           call_count:  5_u64,
@@ -228,7 +243,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "sorts recommendations by priority then expected improvement" do
-      session = build_session({
+      session = build_optimization_session({
         "flaky" => {
           wall_time:   0.05,
           call_count:  100_u64,
@@ -254,7 +269,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "detects hot path global patterns" do
-      session = build_session({
+      session = build_optimization_session({
         "hot" => {
           wall_time:   5.0,
           call_count:  10_u64,
@@ -341,7 +356,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "returns 0.0 for unknown function names" do
-      session = build_session({
+      session = build_optimization_session({
         "known" => {
           wall_time:   0.5,
           call_count:  200_u64,
@@ -357,7 +372,7 @@ describe CogUtil::OptimizationEngine do
     end
 
     it "estimates impact for known optimization types" do
-      session = build_session({
+      session = build_optimization_session({
         "target" => {
           wall_time:   1.5,
           call_count:  1500_u64,
