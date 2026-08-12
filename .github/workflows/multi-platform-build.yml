@@ -17,11 +17,12 @@ jobs:
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
         build_type: [Release, Debug]
+        # opencog/opencog-deps only publishes :latest on Docker Hub today
         include:
           - os: ubuntu-22.04
-            container: opencog/opencog-deps:ubuntu-22.04
+            container: opencog/opencog-deps:latest
           - os: ubuntu-24.04
-            container: opencog/opencog-deps:ubuntu-24.04
+            container: opencog/opencog-deps:latest
     
     container:
       image: ${{ matrix.container }}
