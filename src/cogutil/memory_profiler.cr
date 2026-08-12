@@ -105,17 +105,17 @@ module CogUtil
       outgoing_size = 0
 
       # Estimate truth value size
-      if atom.respond_to?(:truth_value) && atom.truth_value
+      if atom.responds_to?(:truth_value) && atom.truth_value
         truth_value_size = 32 # Estimate for SimpleTruthValue
       end
 
       # Estimate name size for nodes
-      if atom.respond_to?(:name) && atom.name
+      if atom.responds_to?(:name) && atom.name
         name_size = atom.name.bytesize + 8 # String overhead
       end
 
       # Estimate outgoing set size for links
-      if atom.respond_to?(:outgoing) && atom.outgoing
+      if atom.responds_to?(:outgoing) && atom.outgoing
         outgoing_size = atom.outgoing.size * 8 # Handle size estimate
       end
 
