@@ -39,8 +39,7 @@ require "./nlp/dependency_parser_spec"
 require "./performance/performance_spec"
 
 # Require error handling and edge case tests
-# TODO: Fix error_handling_spec - instance variable scope issues
-# require "./error_handling/error_handling_spec"
+require "./error_handling/error_handling_spec"
 
 # Require integration scenario tests
 require "./integration/integration_spec"
