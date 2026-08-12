@@ -112,15 +112,18 @@ describe Attention do
 
     it "diffuses STI to targets and reduces own STI" do
       source = Attention::AttentionMetrics.new(100_i16)
-      t1 = Attention::AttentionMetrics.new(0_i16)
-      t2 = Attention::AttentionMetrics.new(0_i16)
+      targets = [
+        Attention::AttentionMetrics.new(0_i16),
+        Attention::AttentionMetrics.new(0_i16),
+      ]
 
-      source.diffuse_to([t1, t2], 0.4)
+      source.diffuse_to(targets, 0.4)
 
       # spread_amount = (100 * 0.4 / 2).round = 20
+      # Struct targets are updated in the array (value-type semantics)
       source.sti.should eq(60)
-      t1.sti.should eq(20)
-      t2.sti.should eq(20)
+      targets[0].sti.should eq(20)
+      targets[1].sti.should eq(20)
     end
 
     it "does nothing when diffusing to an empty target list" do
@@ -131,19 +134,19 @@ describe Attention do
 
     it "skips diffusion when computed spread amount is non-positive" do
       source = Attention::AttentionMetrics.new(1_i16)
-      target = Attention::AttentionMetrics.new(0_i16)
+      targets = [Attention::AttentionMetrics.new(0_i16)]
 
-      source.diffuse_to([target], 0.0)
+      source.diffuse_to(targets, 0.0)
       source.sti.should eq(1)
-      target.sti.should eq(0)
+      targets[0].sti.should eq(0)
     end
 
     it "clamps target STI to MAX_STI during diffusion" do
       source = Attention::AttentionMetrics.new(1000_i16)
-      target = Attention::AttentionMetrics.new(Attention::ECANParams::MAX_STI)
+      targets = [Attention::AttentionMetrics.new(Attention::ECANParams::MAX_STI)]
 
-      source.diffuse_to([target], 1.0)
-      target.sti.should eq(Attention::ECANParams::MAX_STI)
+      source.diffuse_to(targets, 1.0)
+      targets[0].sti.should eq(Attention::ECANParams::MAX_STI)
     end
 
     it "formats a readable string representation" do
