@@ -488,40 +488,40 @@ describe "Language Processing Capabilities" do
       simple_stats = NLP::TextProcessor.get_text_stats(simple_text)
       complex_stats = NLP::TextProcessor.get_text_stats(complex_text)
 
-      # Create complexity concepts
+      # Create complexity concepts and hierarchy for PLN
       simple_concept = atomspace.add_concept_node("simple_language")
       complex_concept = atomspace.add_concept_node("complex_language")
+      language = atomspace.add_concept_node("language")
+      high_complexity = atomspace.add_concept_node("high_complexity")
+      low_complexity = atomspace.add_concept_node("low_complexity")
+
+      tv = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
+      atomspace.add_inheritance_link(simple_concept, language, tv)
+      atomspace.add_inheritance_link(complex_concept, language, tv)
+      atomspace.add_inheritance_link(simple_concept, low_complexity, tv)
+      atomspace.add_inheritance_link(complex_concept, high_complexity, tv)
+      atomspace.add_inheritance_link(low_complexity, language, tv)
+      atomspace.add_inheritance_link(high_complexity, language, tv)
 
       # Linguistic features
       word_count_feature = atomspace.add_predicate_node("word_count")
-      avg_word_length = atomspace.add_predicate_node("avg_word_length")
-
-      tv_simple = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
-      tv_complex = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
-
-      # Create facts about text complexity
       simple_wc = AtomSpace::NumberNode.new(simple_stats["word_count"].to_f64)
       complex_wc = AtomSpace::NumberNode.new(complex_stats["word_count"].to_f64)
-
       atomspace.add_atom(simple_wc)
       atomspace.add_atom(complex_wc)
 
       atomspace.add_evaluation_link(
         word_count_feature,
         atomspace.add_list_link([simple_concept, simple_wc]),
-        tv_simple
+        tv
       )
-
       atomspace.add_evaluation_link(
         word_count_feature,
         atomspace.add_list_link([complex_concept, complex_wc]),
-        tv_complex
+        tv
       )
 
-      # Reasoning about linguistic complexity
-      complexity_rule = atomspace.add_concept_node("complexity_analysis_rule")
-
-      # Run reasoning
+      # Run reasoning over the complexity hierarchy
       pln_engine = PLN.create_engine(atomspace)
       complexity_atoms = pln_engine.reason(5)
 
@@ -530,8 +530,9 @@ describe "Language Processing Capabilities" do
       puts "  Complex text: #{complex_stats["word_count"]} words, #{complex_stats["average_word_length"]} avg length"
       puts "  Generated #{complexity_atoms.size} complexity inferences"
 
-      # Should understand that more words generally means more complexity
-      complexity_atoms.size.should be >= 0
+      simple_stats["word_count"].should be < complex_stats["word_count"]
+      complex_atoms.size.should be > simple_atoms.size
+      complexity_atoms.size.should be > 0
     end
   end
 end

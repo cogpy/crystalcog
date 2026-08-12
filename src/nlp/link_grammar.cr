@@ -276,7 +276,15 @@ module NLP
             [Connector.new("S", "-"), Connector.new("O", "+")],
             [Connector.new("S", "-"), Connector.new("MV", "+")],
           ]
-        elsif w[0]?.try(&.uppercase?) || true
+        elsif word[0]?.try(&.uppercase?)
+          # Capitalized words: prefer noun-like subject/object roles (proper nouns)
+          [
+            [Connector.new("S", "+")],
+            [Connector.new("O", "-")],
+            [Connector.new("D", "-"), Connector.new("S", "+")],
+            [Connector.new("J", "-")],
+          ]
+        else
           # Default open-class noun/verb ambiguity
           [
             [Connector.new("D", "-"), Connector.new("S", "+")],
@@ -287,8 +295,6 @@ module NLP
             [Connector.new("S", "-"), Connector.new("O", "+")],
             [Connector.new("J", "-")],
           ]
-        else
-          [[Connector.new("S", "+")]]
         end
       end
 
