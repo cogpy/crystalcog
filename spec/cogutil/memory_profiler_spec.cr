@@ -129,6 +129,7 @@ describe CogUtil::MemoryProfiler do
       estimate = CogUtil::MemoryProfiler.estimate_atom_memory(link)
 
       estimate.atom_size.should eq(64)
+      estimate.name_size.should eq(0) # Links expose a blank name; no name overhead
       estimate.outgoing_size.should eq(link.outgoing.size * 8)
       estimate.total_size.should be > estimate.atom_size
     end
@@ -270,6 +271,14 @@ describe CogUtil::MemoryProfiler do
       end
 
       has_leak.should be_a(Bool)
+    end
+
+    it "does not flag short-lived allocations as leaks" do
+      has_leak = CogUtil::MemoryProfiler.detect_memory_leaks(30) do
+        Array(Int32).new(8) { |i| i }.sum
+      end
+
+      has_leak.should be_false
     end
   end
 end
