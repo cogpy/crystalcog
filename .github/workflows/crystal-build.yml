@@ -447,7 +447,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    uses: ./.github/workflows/generate-priority-issues-reusable.yml
     secrets: inherit
     with:
       source_workflow: 'Crystal Build and Test'

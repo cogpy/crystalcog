@@ -137,7 +137,7 @@ jobs:
         EOF
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.get_version.outputs.version }}
         name: CrystalCog ${{ steps.get_version.outputs.version }}
@@ -238,7 +238,6 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
         echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-        echo "| Build Release | ${{ needs.build-release.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| GitHub Release | ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Docker Image | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Package Publish | ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY

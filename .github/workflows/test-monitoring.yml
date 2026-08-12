@@ -183,37 +183,41 @@ jobs:
           if (shouldCreateIssue) {
             // Create issue for test instability
             const issueTitle = '[Test Monitoring] Multiple Test Failures Detected';
-            const issueBody = `
-        ## Test Stability Issue Detected
-        
-        The automated test monitoring has detected multiple test failures in recent runs.
-        
-        ### Statistics
-        - **Success Rate**: ${stats.success_rate}% (last 10 runs)
-        - **Recent Failures**: ${recentFailures.length}
-        - **Failed Runs**: ${recentFailures.map(r => `#${r.id} (${r.head_branch})`).join(', ')}
-        
-        ### Recent Failed Runs
-        ${recentFailures.map(run => `- Run #${run.id}: Branch \`${run.head_branch}\`, Commit \`${run.head_sha}\`, Date: ${run.created_at}`).join('\n')}
-        
-        ### Recommended Actions
-        1. Investigate common failure patterns in the above runs
-        2. Check for environmental issues (dependencies, system changes)
-        3. Review recent code changes that might have introduced instability
-        4. Consider adding retry mechanisms for flaky tests
-        5. Improve test isolation and cleanup procedures
-        
-        ### Next Steps
-        - [ ] Review failed run logs for error patterns
-        - [ ] Identify root cause of test instability
-        - [ ] Implement fixes for identified issues
-        - [ ] Monitor success rate improvement
-        
-        ---
-        *This issue was automatically created by the Test Monitoring workflow.*
-        *Success rate threshold: 80% | Current: ${stats.success_rate}%*
-            `.trim();
-        
+            const failedRunsList = recentFailures.map(run =>
+              `- Run #${run.id}: Branch \`${run.head_branch}\`, Commit \`${run.head_sha}\`, Date: ${run.created_at}`
+            ).join('\n');
+            const failedRunIds = recentFailures.map(r => `#${r.id} (${r.head_branch})`).join(', ');
+            const issueBody = [
+              '## Test Stability Issue Detected',
+              '',
+              'The automated test monitoring has detected multiple test failures in recent runs.',
+              '',
+              '### Statistics',
+              `- **Success Rate**: ${stats.success_rate}% (last 10 runs)`,
+              `- **Recent Failures**: ${recentFailures.length}`,
+              `- **Failed Runs**: ${failedRunIds}`,
+              '',
+              '### Recent Failed Runs',
+              failedRunsList,
+              '',
+              '### Recommended Actions',
+              '1. Investigate common failure patterns in the above runs',
+              '2. Check for environmental issues (dependencies, system changes)',
+              '3. Review recent code changes that might have introduced instability',
+              '4. Consider adding retry mechanisms for flaky tests',
+              '5. Improve test isolation and cleanup procedures',
+              '',
+              '### Next Steps',
+              '- [ ] Review failed run logs for error patterns',
+              '- [ ] Identify root cause of test instability',
+              '- [ ] Implement fixes for identified issues',
+              '- [ ] Monitor success rate improvement',
+              '',
+              '---',
+              '*This issue was automatically created by the Test Monitoring workflow.*',
+              `*Success rate threshold: 80% | Current: ${stats.success_rate}%*`,
+            ].join('\n');
+
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -221,7 +225,7 @@ jobs:
               body: issueBody,
               labels: ['testing', 'ci-cd', 'automated', 'priority-high']
             });
-        
+
             core.setOutput('issue-created', 'true');
             core.setOutput('issue-title', issueTitle);
           } else {
@@ -371,7 +375,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    uses: ./.github/workflows/generate-priority-issues-reusable.yml
     secrets: inherit
     with:
       source_workflow: 'Test Monitoring and Reporting'

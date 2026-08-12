@@ -23,7 +23,7 @@ UNIT_RESULT=failure E2E_RESULT=failure ARTIFACT_DIR=./ci-artifacts \
 ```
 
 **Wired into workflows** as a final job via
-`.github/workflows/reusable/generate-priority-issues.yml`.
+`.github/workflows/generate-priority-issues-reusable.yml`.
 
 ### `validation/test_nlp_structure.sh` - NLP Module Structure Validation
 Comprehensive validation script for the Natural Language Processing (NLP) module structure, dependencies, and integration.
