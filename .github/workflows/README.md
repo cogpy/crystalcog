@@ -154,6 +154,34 @@ You can pass additional CMake arguments through the reusable workflow:
 
 ## Crystal-Specific Workflows
 
+### Priority Issue Generation (`reusable/generate-priority-issues.yml`)
+
+**Purpose**: Final job shared by CI workflows that opens/updates GitHub issues from:
+
+1. **Failing unit tests** (JUnit XML + Crystal spec logs)
+2. **Failing E2E / integration tests** (job results + report artifacts)
+3. **Incomplete stubs** (`TODO`/`FIXME`, stub markers, disabled requires, missing core specs)
+
+**Callers** (job added at the end of each workflow):
+
+- `ci-e2e.yml`
+- `crystal-comprehensive-ci.yml`
+- `nightly-e2e.yml`
+- `crystal-build.yml`
+- `test-monitoring.yml`
+
+**Script**: `scripts/generate-priority-issues.js`
+
+**Behavior**:
+
+- Deduplicates open issues via fingerprint + `auto-priority` label
+- Maintains a rolling summary issue: `[Priorities] Next CI priorities`
+- Caps new individual issues per run (default 15)
+- Skips issue creation on pull_request events for most callers (scan still available via dry-run)
+- Uploads `priority-findings.json` as an artifact
+
+**Labels**: `auto-priority`, `test-failure`, `unit-test`, `e2e-test`, `incomplete-stub`, `priority-high|medium|low`, component labels
+
 ### Crystal Build and Test (`crystal-build.yml`)
 
 **Purpose**: Automates the Crystal build process with comprehensive error capture and diagnostic reporting.

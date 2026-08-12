@@ -361,3 +361,22 @@ jobs:
         
         echo ""
         echo "Test monitoring completed successfully! 📊"
+
+  # Generate priority issues from incomplete stubs and recent failure signals
+  generate-priority-issues:
+    name: Generate Priority Issues
+    needs: [test-monitoring]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'Test Monitoring and Reporting'
+      unit_result: ${{ needs.test-monitoring.result }}
+      e2e_result: ''
+      integration_result: ''
+      artifact_names: 'test-report'
+      max_issues: '10'

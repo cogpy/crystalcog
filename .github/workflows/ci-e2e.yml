@@ -196,7 +196,8 @@ jobs:
     - name: Run unit tests
       run: |
         echo "Running Crystal specs..."
-        crystal spec --error-trace --verbose --junit_output=test-results.xml || true
+        set -o pipefail
+        crystal spec --error-trace --verbose --junit_output=test-results.xml 2>&1 | tee unit-test.log || true
         
         # Count test results
         if [ -f test-results.xml ]; then
@@ -211,6 +212,7 @@ jobs:
         name: test-results
         path: |
           test-results.xml
+          unit-test.log
           *.log
         retention-days: 7
 
@@ -591,3 +593,23 @@ jobs:
         echo "| E2E Tests | ${{ needs.e2e-tests.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Benchmarks | ${{ needs.benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+
+  # Generate GitHub issues from failing tests and incomplete stubs
+  generate-priority-issues:
+    name: Generate Priority Issues
+    needs: [quick-check, build-and-test, integration-tests, e2e-tests, benchmarks, security-scan, ci-status]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'CrystalCog E2E CI/CD Pipeline'
+      unit_result: ${{ needs.build-and-test.result }}
+      integration_result: ${{ needs.integration-tests.result }}
+      e2e_result: ${{ needs.e2e-tests.result }}
+      artifact_names: 'test-results,e2e-report,integration-report'
+      max_issues: '15'
+      dry_run: ${{ github.event_name == 'pull_request' }}

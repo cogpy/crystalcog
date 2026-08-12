@@ -174,10 +174,11 @@ jobs:
         passed=0
         failed=0
         core_failed=""
+        : > unit-test.log
         for dir in $ALL_DIRS; do
           if [ -d "$dir" ]; then
-            echo "=== Testing $dir ==="
-            if crystal spec "$dir" --error-trace; then
+            echo "=== Testing $dir ===" | tee -a unit-test.log
+            if crystal spec "$dir" --error-trace --junit_output="junit-$(basename "$dir").xml" 2>&1 | tee -a unit-test.log; then
               passed=$((passed + 1))
             else
               failed=$((failed + 1))
@@ -187,38 +188,39 @@ jobs:
             fi
           fi
         done
-        echo "=== Summary: $passed passed, $failed failed ==="
+        echo "=== Summary: $passed passed, $failed failed ===" | tee -a unit-test.log
         if [ -n "$core_failed" ]; then
-          echo "FATAL: Core spec failures in:$core_failed"
+          echo "FATAL: Core spec failures in:$core_failed" | tee -a unit-test.log
           exit 1
         fi
 
     - name: Run integration tests
       run: |
         echo "Running integration tests..."
+        : > integration-test.log
         
         # Run basic functionality tests
         if [ -f "examples/tests/test_basic.cr" ]; then
-          echo "Running test_basic.cr..."
-          crystal run --error-trace examples/tests/test_basic.cr
+          echo "Running test_basic.cr..." | tee -a integration-test.log
+          crystal run --error-trace examples/tests/test_basic.cr 2>&1 | tee -a integration-test.log
         fi
         
         # Run PLN tests
         if [ -f "examples/tests/test_pln.cr" ]; then
-          echo "Running test_pln.cr..."
-          crystal run --error-trace examples/tests/test_pln.cr
+          echo "Running test_pln.cr..." | tee -a integration-test.log
+          crystal run --error-trace examples/tests/test_pln.cr 2>&1 | tee -a integration-test.log
         fi
         
         # Run pattern matching tests
         if [ -f "examples/tests/test_pattern_matching.cr" ]; then
-          echo "Running test_pattern_matching.cr..."
-          crystal run --error-trace examples/tests/test_pattern_matching.cr
+          echo "Running test_pattern_matching.cr..." | tee -a integration-test.log
+          crystal run --error-trace examples/tests/test_pattern_matching.cr 2>&1 | tee -a integration-test.log
         fi
         
         # Run CogServer API tests
         if [ -f "examples/tests/test_cogserver_api.cr" ]; then
-          echo "Running test_cogserver_api.cr..."
-          crystal run --error-trace examples/tests/test_cogserver_api.cr
+          echo "Running test_cogserver_api.cr..." | tee -a integration-test.log
+          crystal run --error-trace examples/tests/test_cogserver_api.cr 2>&1 | tee -a integration-test.log
         fi
 
     - name: Upload test results
@@ -228,6 +230,9 @@ jobs:
         name: test-results-${{ matrix.os }}-${{ matrix.crystal-version }}
         path: |
           test-results.xml
+          junit-*.xml
+          unit-test.log
+          integration-test.log
           *.log
         retention-days: 7
 
@@ -444,3 +449,23 @@ jobs:
         
         echo ""
         echo "Crystal CI/CD Pipeline completed successfully! 🚀"
+
+  # Generate GitHub issues from failing tests and incomplete stubs
+  generate-priority-issues:
+    name: Generate Priority Issues
+    needs: [test-matrix, benchmarks, coverage, security, ci-status]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/reusable/generate-priority-issues.yml
+    secrets: inherit
+    with:
+      source_workflow: 'Comprehensive Crystal CI/CD'
+      unit_result: ${{ needs.test-matrix.result }}
+      e2e_result: ''
+      integration_result: ${{ needs.test-matrix.result }}
+      artifact_names: 'test-results'
+      max_issues: '15'
+      dry_run: ${{ github.event_name == 'pull_request' }}
