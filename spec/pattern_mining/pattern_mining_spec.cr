@@ -115,7 +115,7 @@ describe PatternMining do
       data_atoms = [dog, cat].map(&.as(AtomSpace::Atom))
       valuations = calculator.extract_valuations(pattern, data_atoms)
 
-      valuations.size.should be >= 0 # May be 0 if pattern matching has issues
+      valuations.size.should eq(2) # dog and cat should both match $X
     end
   end
 

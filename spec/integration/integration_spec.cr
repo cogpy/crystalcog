@@ -72,8 +72,9 @@ describe "CrystalCog Integration Scenarios" do
       pln_atoms = pln_engine.reason(5)
       ure_atoms = ure_engine.forward_chain(3)
 
-      # Should have derived additional relationships
-      atomspace.size.should be >= initial_size
+      # Should have derived additional relationships via implication grounding
+      atomspace.size.should be > initial_size
+      (pln_atoms.size + ure_atoms.size).should be > 0
 
       # Should be able to find parent relationships
       parent_facts = atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK)
@@ -82,6 +83,7 @@ describe "CrystalCog Integration Scenarios" do
             link.predicate == parent_of
         }
 
+      parent_facts.size.should be > 0
       puts "Family reasoning: generated #{pln_atoms.size + ure_atoms.size} new facts"
       puts "Found #{parent_facts.size} parent relationships"
     end

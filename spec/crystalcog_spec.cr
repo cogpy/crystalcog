@@ -16,8 +16,9 @@ describe "CrystalCog Main" do
       URE.initialize
       OpenCog.initialize
 
-      # Should not crash
-      true.should be_true
+      # Modules initialized successfully
+      CogUtil::VERSION.should_not be_nil
+      AtomSpace::VERSION.should_not be_nil
     end
   end
 

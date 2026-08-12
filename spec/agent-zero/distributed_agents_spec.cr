@@ -73,8 +73,10 @@ describe AgentZero::AgentNode do
       results = agent.request_collaborative_reasoning("What is consciousness?", 1)
 
       results.should be_a(Array(AgentZero::CollaborativeResult))
-      # With no peers, should return empty results quickly
-      results.size.should eq(0)
+      # With no peers, agent still contributes its own local reasoning
+      results.size.should eq(1)
+      results.first.content.should_not be_empty
+      results.first.confidence.should be > 0.0
 
       agent.stop
       sleep 0.2.seconds # Allow fibers to clean up

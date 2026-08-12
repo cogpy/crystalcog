@@ -141,11 +141,11 @@ describe "OpenCog Full Integration" do
       tv = AtomSpace::SimpleTruthValue.new(0.9, 0.8)
       atomspace.add_inheritance_link(dog, mammal, tv)
 
-      # Run PLN reasoning
+      # Run PLN reasoning — inversion should produce mammal->dog
       new_atoms = pln_engine.reason(3)
 
-      # Should generate inferred knowledge
-      new_atoms.size.should be >= 0
+      # Should generate inferred knowledge (at least inversion)
+      new_atoms.size.should be > 0
     end
 
     it "handles PLN exceptions properly" do
@@ -154,9 +154,9 @@ describe "OpenCog Full Integration" do
       pln_engine = PLN.create_engine(atomspace)
 
       begin
-        # This should complete without raising exceptions
+        # Empty atomspace: no inferences, no exceptions
         new_atoms = pln_engine.reason(1)
-        new_atoms.size.should be >= 0
+        new_atoms.should be_empty
       rescue ex : OpenCog::ReasoningException
         # If reasoning exception occurs, it should be proper type
         ex.should be_a(OpenCog::ReasoningException)
@@ -215,11 +215,11 @@ describe "OpenCog Full Integration" do
       eval1 = atomspace.add_evaluation_link(likes, atomspace.add_list_link([john, mary]), tv)
       eval2 = atomspace.add_evaluation_link(likes, atomspace.add_list_link([mary, john]), tv)
 
-      # Run URE forward chaining
+      # Run URE forward chaining — ConjunctionRule should AND the two evaluations
       new_atoms = ure_engine.forward_chain(3)
 
       # Should generate conjunctions or other derived knowledge
-      new_atoms.size.should be >= 0
+      new_atoms.size.should be > 0
     end
 
     it "handles URE exceptions properly" do
@@ -228,9 +228,9 @@ describe "OpenCog Full Integration" do
       ure_engine = URE.create_engine(atomspace)
 
       begin
-        # This should complete without raising exceptions
+        # Empty atomspace: no inferences, no exceptions
         new_atoms = ure_engine.forward_chain(1)
-        new_atoms.size.should be >= 0
+        new_atoms.should be_empty
       rescue ex : OpenCog::ReasoningException
         # If reasoning exception occurs, it should be proper type
         ex.should be_a(OpenCog::ReasoningException)

@@ -156,128 +156,376 @@ module NLP
       end
     end
 
-    # Main Link Grammar Parser class
+    # Built-in English dictionary of connector disjuncts (subset of Link Grammar).
+    # Enables real connector-based parsing without requiring the C library.
+    class Dictionary
+      getter language : String
+      getter path : String?
+
+      # word (downcase) => array of alternative connector sequences
+      @entries : Hash(String, Array(Array(Connector)))
+
+      ARTICLES     = Set{"a", "an", "the"}
+      PRONOUNS     = Set{"i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them"}
+      PREPOSITIONS = Set{"in", "on", "at", "to", "for", "with", "by", "from", "of", "over", "under", "about", "into", "onto"}
+      AUXILIARIES  = Set{"is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "has", "have", "had", "will", "would", "can", "could", "should", "may", "might"}
+      CONJUNCTIONS = Set{"and", "or", "but"}
+      ADVERBS_HINT = Set{"very", "really", "always", "never", "here", "there", "now", "then"}
+
+      def initialize(@language : String = "en", @path : String? = nil)
+        @entries = Hash(String, Array(Array(Connector))).new
+        load_builtin_english if @language == "en"
+        if path = @path
+          load_from_path(path)
+        end
+      end
+
+      def lookup(word : String) : Array(Array(Connector))
+        key = word.downcase
+        return @entries[key] if @entries.has_key?(key)
+        infer_disjuncts(word)
+      end
+
+      def has_word?(word : String) : Bool
+        @entries.has_key?(word.downcase)
+      end
+
+      private def load_builtin_english
+        # Determiners: D+ links right to a noun
+        %w[a an the this that these those].each do |w|
+          add(w, [Connector.new("D", "+")])
+        end
+
+        # Common adjectives: A+ to noun, optionally A- from prior adj
+        %w[quick brown lazy big small happy sad red blue green old young good bad].each do |w|
+          add(w, [Connector.new("A", "+")])
+          add(w, [Connector.new("A", "-"), Connector.new("A", "+")])
+        end
+
+        # Common nouns: D- from determiner, S+ as subject, O- as object, J- from prep
+        %w[cat dog fox animal animals dogs cats mat floor room house man woman boy girl
+           book table car city world system agent mind memory time day night food water].each do |w|
+          add(w, [Connector.new("D", "-"), Connector.new("S", "+")])
+          add(w, [Connector.new("D", "-"), Connector.new("O", "-")])
+          add(w, [Connector.new("S", "+")])
+          add(w, [Connector.new("O", "-")])
+          add(w, [Connector.new("J", "-")])
+        end
+
+        # Common verbs: S- subject, O+ object, MV+ for modifiers
+        %w[sits sat sit runs run ran jumps jump jumped sleeps sleep sleeps
+           sees see saw likes like likes eats eat ate goes go went
+           makes make made thinks think thought knows know knew].each do |w|
+          add(w, [Connector.new("S", "-")])
+          add(w, [Connector.new("S", "-"), Connector.new("O", "+")])
+          add(w, [Connector.new("S", "-"), Connector.new("MV", "+")])
+          add(w, [Connector.new("S", "-"), Connector.new("O", "+"), Connector.new("MV", "+")])
+        end
+
+        # Copula / auxiliaries
+        AUXILIARIES.each do |w|
+          add(w, [Connector.new("S", "-"), Connector.new("P", "+")]) # predicative
+          add(w, [Connector.new("S", "-"), Connector.new("O", "+")])
+          add(w, [Connector.new("S", "-")])
+        end
+
+        # Prepositions: MV- from verb, J+ to noun object of prep
+        PREPOSITIONS.each do |w|
+          add(w, [Connector.new("MV", "-"), Connector.new("J", "+")])
+          add(w, [Connector.new("J", "+")])
+        end
+
+        # Pronouns as subjects/objects
+        PRONOUNS.each do |w|
+          add(w, [Connector.new("S", "+")])
+          add(w, [Connector.new("O", "-")])
+        end
+
+        # Conjunctions
+        CONJUNCTIONS.each do |w|
+          add(w, [Connector.new("X", "-"), Connector.new("X", "+")])
+        end
+
+        # Adverbs
+        %w[quickly slowly very really always never here there now then].each do |w|
+          add(w, [Connector.new("E", "+")])
+          add(w, [Connector.new("MV", "-")])
+        end
+      end
+
+      private def add(word : String, connectors : Array(Connector))
+        key = word.downcase
+        @entries[key] ||= [] of Array(Connector)
+        @entries[key] << connectors
+      end
+
+      private def infer_disjuncts(word : String) : Array(Array(Connector))
+        w = word.downcase
+        if ARTICLES.includes?(w)
+          [[Connector.new("D", "+")]]
+        elsif PREPOSITIONS.includes?(w)
+          [[Connector.new("MV", "-"), Connector.new("J", "+")]]
+        elsif AUXILIARIES.includes?(w)
+          [[Connector.new("S", "-"), Connector.new("O", "+")], [Connector.new("S", "-")]]
+        elsif w.ends_with?("ly")
+          [[Connector.new("E", "+")], [Connector.new("MV", "-")]]
+        elsif w.ends_with?("ing") || w.ends_with?("ed") || w.ends_with?("s")
+          # Likely verb forms
+          [
+            [Connector.new("S", "-")],
+            [Connector.new("S", "-"), Connector.new("O", "+")],
+            [Connector.new("S", "-"), Connector.new("MV", "+")],
+          ]
+        elsif word[0]?.try(&.uppercase?)
+          # Capitalized words: prefer noun-like subject/object roles (proper nouns)
+          [
+            [Connector.new("S", "+")],
+            [Connector.new("O", "-")],
+            [Connector.new("D", "-"), Connector.new("S", "+")],
+            [Connector.new("J", "-")],
+          ]
+        else
+          # Default open-class noun/verb ambiguity
+          [
+            [Connector.new("D", "-"), Connector.new("S", "+")],
+            [Connector.new("D", "-"), Connector.new("O", "-")],
+            [Connector.new("S", "+")],
+            [Connector.new("O", "-")],
+            [Connector.new("S", "-")],
+            [Connector.new("S", "-"), Connector.new("O", "+")],
+            [Connector.new("J", "-")],
+          ]
+        end
+      end
+
+      private def load_from_path(path : String)
+        return unless File.exists?(path)
+        # Optional simple dictionary format: word: CONN+ CONN- | CONN+
+        File.each_line(path) do |line|
+          line = line.strip
+          next if line.empty? || line.starts_with?("#")
+          parts = line.split(":", 2)
+          next unless parts.size == 2
+          word = parts[0].strip
+          parts[1].split("|").each do |alt|
+            connectors = alt.strip.split(/\s+/).reject(&.empty?).map do |tok|
+              multi = tok.includes?("@")
+              tok = tok.gsub("@", "")
+              dir = tok.ends_with?("+") ? "+" : tok.ends_with?("-") ? "-" : "+"
+              label = tok.rstrip("+-")
+              Connector.new(label, dir, multi)
+            end
+            add(word, connectors) unless connectors.empty?
+          end
+        end
+      rescue ex
+        CogUtil::Logger.warn("Failed to load Link Grammar dictionary from #{path}: #{ex.message}")
+      end
+    end
+
+    # Main Link Grammar Parser class — connector-matching parser
     class Parser
       getter language : String
       getter dictionary_path : String?
+      getter dictionary : Dictionary
 
       def initialize(@language : String = "en", @dictionary_path : String? = nil)
         CogUtil::Logger.info("Initializing Link Grammar Parser for language: #{@language}")
-        # In a full implementation, this would initialize the LG dictionary
+        @dictionary = Dictionary.new(@language, @dictionary_path)
       end
 
-      # Parse a sentence and return all possible linkages
+      # Parse a sentence and return all possible linkages via connector matching
       def parse(sentence : String, max_linkages : Int32 = 10) : Array(Linkage)
         CogUtil::Logger.debug("Parsing sentence: #{sentence}")
 
-        # Tokenize the sentence
         words = tokenize_for_parse(sentence)
+        raise ParserException.new("Empty sentence") if words.empty?
 
-        if words.empty?
-          raise ParserException.new("Empty sentence")
-        end
-
-        # For now, return a mock parse result
-        # In a full implementation, this would call the Link Grammar C library
+        word_options = words.map { |w| @dictionary.lookup(w) }
         linkages = [] of Linkage
 
-        # Create a simple mock linkage
-        links = generate_mock_links(words)
-        disjuncts = generate_mock_disjuncts(words)
+        # Search disjunct assignments (bounded) and collect valid linkages
+        search_linkages(words, word_options, max_linkages) do |chosen_disjuncts, links, cost|
+          disjuncts = chosen_disjuncts.map_with_index do |connectors, idx|
+            Disjunct.new(idx, words[idx], connectors)
+          end
+          linkages << Linkage.new(
+            sentence: sentence,
+            words: words,
+            links: links,
+            disjuncts: disjuncts,
+            cost: cost
+          )
+        end
 
-        linkage = Linkage.new(
-          sentence: sentence,
-          words: words,
-          links: links,
-          disjuncts: disjuncts,
-          cost: 0.0
-        )
-
-        linkages << linkage
+        # Always provide at least a best-effort linkage so callers get structure
+        if linkages.empty?
+          links, disjuncts = greedy_linkage(words)
+          linkages << Linkage.new(sentence: sentence, words: words, links: links, disjuncts: disjuncts, cost: 1.0)
+        end
 
         CogUtil::Logger.debug("Generated #{linkages.size} linkage(s)")
-        linkages
+        linkages.first(max_linkages)
       end
 
-      # Parse sentence and store result in AtomSpace
       def parse_to_atomspace(sentence : String, atomspace : AtomSpace::AtomSpace,
                              max_linkages : Int32 = 1) : Array(AtomSpace::Atom)
         linkages = parse(sentence, max_linkages)
-
         all_atoms = [] of AtomSpace::Atom
-        linkages.each do |linkage|
-          atoms = linkage.to_atomspace(atomspace)
-          all_atoms.concat(atoms)
-        end
-
+        linkages.each { |linkage| all_atoms.concat(linkage.to_atomspace(atomspace)) }
         all_atoms
       end
 
-      # Lookup a word in the dictionary
       def dictionary_lookup(word : String) : Array(Disjunct)
-        # In a full implementation, this would query the LG dictionary
-        # For now, return mock data
-        generate_mock_disjuncts([word])
+        @dictionary.lookup(word).map_with_index do |connectors, idx|
+          Disjunct.new(idx, word, connectors)
+        end
       end
 
       private def tokenize_for_parse(sentence : String) : Array(String)
-        # Simple tokenization - in practice would use LG's tokenizer
-        sentence.gsub(/[.!?]/, "").split(/\s+/).reject(&.empty?)
+        sentence.gsub(/[.!?,;:"]/, "").split(/\s+/).reject(&.empty?)
       end
 
-      private def generate_mock_links(words : Array(String)) : Array(Link)
-        links = [] of Link
+      # Depth-limited assignment of one disjunct per word; validate connectors form links
+      private def search_linkages(words : Array(String),
+                                  word_options : Array(Array(Array(Connector))),
+                                  max_linkages : Int32,
+                                  &block : Array(Array(Connector)), Array(Link), Float64 ->)
+        return if words.empty?
 
-        # Generate simple left-to-right links
-        (0...words.size - 1).each do |i|
-          link = Link.new(
-            left_word: i,
-            right_word: i + 1,
-            label: determine_link_type(words[i], words[i + 1]),
-            left_connector: "S+",
-            right_connector: "S-"
-          )
-          links << link
+        # Cap branching: take top options per word
+        capped = word_options.map { |opts| opts.first(4) }
+        assignment = Array(Array(Connector)).new(words.size) { [] of Connector }
+        count = 0
+
+        search = uninitialized Int32, Float64 -> Nil
+        search = ->(idx : Int32, cost : Float64) do
+          return if count >= max_linkages
+          if idx == words.size
+            links = match_connectors(assignment)
+            if valid_linkage?(assignment, links)
+              count += 1
+              block.call(assignment.map(&.dup), links, cost)
+            end
+            return
+          end
+
+          capped[idx].each_with_index do |connectors, opt_i|
+            assignment[idx] = connectors
+            search.call(idx + 1, cost + opt_i * 0.1)
+            break if count >= max_linkages
+          end
+        end
+
+        search.call(0, 0.0)
+      end
+
+      # Match +connectors to -connectors of the same label across word positions
+      private def match_connectors(assignment : Array(Array(Connector))) : Array(Link)
+        links = [] of Link
+        # Collect unused connectors as (word_index, connector)
+        rights = [] of Tuple(Int32, Connector) # direction +
+        lefts = [] of Tuple(Int32, Connector)  # direction -
+
+        assignment.each_with_index do |connectors, wi|
+          connectors.each do |c|
+            if c.direction == "+"
+              rights << {wi, c}
+            else
+              lefts << {wi, c}
+            end
+          end
+        end
+
+        used_right = Set(Int32).new
+        used_left = Set(Int32).new
+
+        rights.each_with_index do |(r_idx, r_conn), ri|
+          lefts.each_with_index do |(l_idx, l_conn), li|
+            next if used_right.includes?(ri) || used_left.includes?(li)
+            next unless r_conn.label == l_conn.label
+            next unless r_idx < l_idx # + must be on the left of -
+
+            links << Link.new(
+              left_word: r_idx,
+              right_word: l_idx,
+              label: r_conn.label,
+              left_connector: "#{r_conn.label}+",
+              right_connector: "#{l_conn.label}-"
+            )
+            used_right << ri
+            used_left << li
+            break
+          end
         end
 
         links
       end
 
-      private def generate_mock_disjuncts(words : Array(String)) : Array(Disjunct)
+      private def valid_linkage?(assignment : Array(Array(Connector)), links : Array(Link)) : Bool
+        return false if assignment.size > 1 && links.empty?
+
+        # Every non-optional connector should be used; require coverage of all words in multi-word sentences
+        connected = Set(Int32).new
+        links.each do |link|
+          connected << link.left_word
+          connected << link.right_word
+        end
+
+        if assignment.size == 1
+          true
+        else
+          # Prefer fully connected; accept if at least n-1 words participate
+          connected.size >= assignment.size - 1 && links.size >= assignment.size - 1
+        end
+      end
+
+      # Greedy fallback: POS-aware left-to-right links using dictionary labels
+      private def greedy_linkage(words : Array(String)) : Tuple(Array(Link), Array(Disjunct))
+        links = [] of Link
         disjuncts = [] of Disjunct
 
         words.each_with_index do |word, idx|
-          connectors = [] of Connector
-
-          # Add basic connectors based on word position
-          if idx == 0
-            connectors << Connector.new("S", "+", false)
-          elsif idx == words.size - 1
-            connectors << Connector.new("S", "-", false)
-          else
-            connectors << Connector.new("S", "-", false)
-            connectors << Connector.new("S", "+", false)
-          end
-
-          disjunct = Disjunct.new(idx, word, connectors)
-          disjuncts << disjunct
+          options = @dictionary.lookup(word)
+          connectors = options.first? || [Connector.new("X", idx == words.size - 1 ? "-" : "+")]
+          disjuncts << Disjunct.new(idx, word, connectors)
         end
 
-        disjuncts
+        (0...words.size - 1).each do |i|
+          label = determine_link_label(words[i], words[i + 1], i, words)
+          links << Link.new(
+            left_word: i,
+            right_word: i + 1,
+            label: label,
+            left_connector: "#{label}+",
+            right_connector: "#{label}-"
+          )
+        end
+
+        # Add longer-range subject-verb and verb-object links when detectable
+        subject_idx = words.index { |w| !Dictionary::ARTICLES.includes?(w.downcase) && !Dictionary::PREPOSITIONS.includes?(w.downcase) }
+        verb_idx = words.each_index.find do |i|
+          w = words[i].downcase
+          Dictionary::AUXILIARIES.includes?(w) || w.ends_with?("s") || w.ends_with?("ed") || w.ends_with?("ing")
+        end
+        if subject_idx && verb_idx && subject_idx < verb_idx
+          unless links.any? { |l| l.left_word == subject_idx && l.right_word == verb_idx && l.label == "S" }
+            links << Link.new(subject_idx, verb_idx, "S", "S+", "S-")
+          end
+        end
+
+        {links, disjuncts}
       end
 
-      private def determine_link_type(word1 : String, word2 : String) : String
-        # Simple heuristic for link types
-        # In practice, this would come from the LG parser
-        articles = ["a", "an", "the"]
-
-        if articles.includes?(word1.downcase)
-          "D" # Determiner
-        elsif word1.downcase.ends_with?("ly")
-          "E" # Adverb
-        else
-          "S" # Subject-verb or generic
-        end
+      private def determine_link_label(word1 : String, word2 : String, idx : Int32, words : Array(String)) : String
+        w1 = word1.downcase
+        w2 = word2.downcase
+        return "D" if Dictionary::ARTICLES.includes?(w1)
+        return "A" if w1.ends_with?("y") && !Dictionary::ADVERBS_HINT.includes?(w1) && idx + 1 < words.size
+        return "E" if w1.ends_with?("ly")
+        return "J" if Dictionary::PREPOSITIONS.includes?(w1)
+        return "S" if idx == 0 || (idx > 0 && Dictionary::ARTICLES.includes?(words[idx - 1]?.try(&.downcase) || ""))
+        "W"
       end
     end
 

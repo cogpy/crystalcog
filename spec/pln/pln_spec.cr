@@ -184,8 +184,8 @@ describe PLN do
 
       new_atoms = engine.reason(10)
 
-      # Should still try inversion rule
-      new_atoms.size.should be >= 0
+      # Isolated concept with no links — no inferences expected
+      new_atoms.should be_empty
     end
 
     it "performs forward chaining" do
