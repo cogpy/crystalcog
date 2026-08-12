@@ -106,48 +106,156 @@ module PatternMatching
         pattern = @base_patterns[pattern_name]?
         raise PatternCompositionException.new("Pattern '#{pattern_name}' not found") unless pattern
 
+        raise PatternCompositionException.new("max_depth must be non-negative") if max_depth < 0
+
         accumulated_results = [] of MatchResult
+        seen_bindings = Set(String).new
         matcher = PatternMatcher.new(@atomspace)
+        previous_count = -1
 
         (0...max_depth).each do |depth|
           current_results = matcher.match(pattern)
           break if current_results.empty?
 
-          accumulated_results.concat(current_results)
+          # Fixed-point: stop if no new unique bindings appear
+          new_unique = 0
+          current_results.each do |result|
+            key = bindings_key(result)
+            unless seen_bindings.includes?(key)
+              seen_bindings.add(key)
+              accumulated_results << result
+              new_unique += 1
+            end
+          end
+
+          break if new_unique == 0
+          break if accumulated_results.size == previous_count
+          previous_count = accumulated_results.size
 
           # Update atomspace with new facts derived from current matches for next iteration
-          # This would typically involve asserting new atoms based on the pattern results
           current_results.each do |result|
             derive_new_facts(result, pattern)
           end
         end
 
-        @composition_cache[cache_key] = accumulated_results.uniq { |r| r.bindings.to_s }
+        @composition_cache[cache_key] = accumulated_results
         accumulated_results
+      end
+
+      # Nested composition: apply an outer composition operator to the results
+      # of inner named compositions. Handles empty pattern lists and single
+      # patterns as edge cases.
+      def compose_nested(operator : String, pattern_groups : Array(Array(String))) : Array(MatchResult)
+        raise PatternCompositionException.new("operator must be AND or OR") unless operator.in?("AND", "OR")
+        return [] of MatchResult if pattern_groups.empty?
+
+        group_results = pattern_groups.map do |group|
+          next [] of MatchResult if group.empty?
+          case operator
+          when "AND"
+            # Within a group, use AND; empty registration fails softly
+            begin
+              compose_and(group)
+            rescue PatternCompositionException
+              [] of MatchResult
+            end
+          else
+            compose_or(group)
+          end
+        end
+
+        # Between groups, use the opposite-style merge for nested depth:
+        # AND-of-groups intersects; OR-of-groups unions
+        case operator
+        when "AND"
+          intersect_results(group_results)
+        else
+          group_results.flatten.uniq { |r| bindings_key(r) }
+        end
+      end
+
+      # Clear composition cache (invalidate after atomspace mutations)
+      def clear_cache
+        @composition_cache.clear
+      end
+
+      def cache_size : Int32
+        @composition_cache.size
+      end
+
+      # Merge two result sets by unifying compatible bindings
+      def merge_compatible(results_a : Array(MatchResult), results_b : Array(MatchResult)) : Array(MatchResult)
+        merged = [] of MatchResult
+        results_a.each do |a|
+          results_b.each do |b|
+            if compatible_bindings?(a, b)
+              combined = a.bindings.dup
+              b.bindings.each { |k, v| combined[k] = v }
+              combined_atoms = (a.matched_atoms + b.matched_atoms).uniq
+              merged << MatchResult.new(combined, combined_atoms)
+            end
+          end
+        end
+        merged.uniq { |r| bindings_key(r) }
+      end
+
+      private def bindings_key(result : MatchResult) : String
+        result.bindings.map { |var, atom| "#{var.handle}->#{atom.handle}" }.sort!.join("|")
       end
 
       private def intersect_results(all_results : Array(Array(MatchResult))) : Array(MatchResult)
         return [] of MatchResult if all_results.empty?
         return all_results[0] if all_results.size == 1
+        return [] of MatchResult if all_results.any?(&.empty?)
 
-        # Find compatible bindings across all result sets
+        # Find compatible bindings across all result sets and merge them
         intersected = [] of MatchResult
 
         all_results[0].each do |first_result|
-          if all_results[1..].all? { |other_results|
-               other_results.any? { |other_result| compatible_bindings?(first_result, other_result) }
-             }
-            intersected << first_result
+          compatible_sets = all_results[1..].map do |other_results|
+            other_results.select { |other_result| compatible_bindings?(first_result, other_result) }
+          end
+
+          next if compatible_sets.any?(&.empty?)
+
+          # Merge first result with one compatible from each set
+          merged_bindings = first_result.bindings.dup
+          merged_atoms = first_result.matched_atoms.dup
+          compatible = true
+
+          compatible_sets.each do |set|
+            # Prefer the first compatible; unify bindings
+            other = set.first
+            other.bindings.each do |var, atom|
+              if existing = merged_bindings[var]?
+                if existing != atom
+                  compatible = false
+                  break
+                end
+              else
+                merged_bindings[var] = atom
+              end
+            end
+            break unless compatible
+            merged_atoms.concat(other.matched_atoms)
+          end
+
+          if compatible
+            intersected << MatchResult.new(merged_bindings, merged_atoms.uniq)
           end
         end
 
-        intersected
+        intersected.uniq { |r| bindings_key(r) }
       end
 
       private def compatible_bindings?(result1 : MatchResult, result2 : MatchResult) : Bool
         # Check if variable bindings are compatible (same variables bind to same atoms)
+        # Bidirectional: both sides must agree on shared variables
         result1.bindings.all? do |var, atom|
           other_atom = result2.bindings[var]?
+          other_atom.nil? || other_atom == atom
+        end && result2.bindings.all? do |var, atom|
+          other_atom = result1.bindings[var]?
           other_atom.nil? || other_atom == atom
         end
       end
@@ -161,8 +269,15 @@ module PatternMatching
       end
 
       private def derive_new_facts(result : MatchResult, pattern : Pattern)
-        # Placeholder for deriving new facts from pattern matches
-        # In a full implementation, this would apply rules to generate new atoms
+        # Derive EvaluationLinks asserting that bound variables matched,
+        # enabling multi-depth recursive composition to build on prior matches.
+        return if result.bindings.empty?
+
+        matched_pred = @atomspace.add_node(AtomSpace::AtomType::PREDICATE_NODE, "matched_by_#{pattern.template.type}")
+        result.bindings.each do |var, atom|
+          list = @atomspace.add_link(AtomSpace::AtomType::LIST_LINK, [var, atom])
+          @atomspace.add_link(AtomSpace::AtomType::EVALUATION_LINK, [matched_pred, list])
+        end
       end
     end
 
@@ -783,6 +898,131 @@ module PatternMatching
     class StatisticalMatchingException < PatternMatchingException
     end
 
+    # Pattern match cache with TTL and size limits for optimization
+    class PatternMatchCache
+      struct CacheEntry
+        getter results : Array(MatchResult)
+        getter created_at : Time
+        getter hit_count : Int32
+
+        def initialize(@results : Array(MatchResult), @hit_count : Int32 = 0,
+                       @created_at : Time = Time.utc)
+        end
+
+        def touch : CacheEntry
+          CacheEntry.new(@results, @hit_count + 1, @created_at)
+        end
+
+        def age_seconds : Float64
+          (Time.utc - @created_at).total_seconds
+        end
+      end
+
+      getter max_size : Int32
+      getter ttl_seconds : Float64
+
+      @entries : Hash(String, CacheEntry)
+      @hits : Int64
+      @misses : Int64
+
+      def initialize(@max_size : Int32 = 256, @ttl_seconds : Float64 = 60.0)
+        @entries = {} of String => CacheEntry
+        @hits = 0_i64
+        @misses = 0_i64
+      end
+
+      def fetch(key : String) : Array(MatchResult)?
+        entry = @entries[key]?
+        if entry.nil? || entry.age_seconds > @ttl_seconds
+          @entries.delete(key) if entry
+          @misses += 1
+          return nil
+        end
+        @hits += 1
+        touched = entry.touch
+        @entries[key] = touched
+        touched.results
+      end
+
+      def store(key : String, results : Array(MatchResult))
+        evict_if_needed
+        @entries[key] = CacheEntry.new(results)
+      end
+
+      def clear
+        @entries.clear
+        @hits = 0_i64
+        @misses = 0_i64
+      end
+
+      def size : Int32
+        @entries.size
+      end
+
+      def stats : Hash(String, Float64)
+        total = @hits + @misses
+        {
+          "hits"     => @hits.to_f64,
+          "misses"   => @misses.to_f64,
+          "size"     => @entries.size.to_f64,
+          "hit_rate" => total > 0 ? @hits.to_f64 / total : 0.0,
+        }
+      end
+
+      private def evict_if_needed
+        return if @entries.size < @max_size
+
+        # Evict oldest entry
+        oldest_key = @entries.min_by { |_, e| e.created_at }[0]
+        @entries.delete(oldest_key)
+      end
+    end
+
+    # Optimized matcher that caches results and can integrate attention ranking
+    class OptimizedPatternMatcher
+      getter atomspace : AtomSpace::AtomSpace
+      getter cache : PatternMatchCache
+      getter fuzzy_threshold : Float64
+
+      def initialize(@atomspace : AtomSpace::AtomSpace,
+                     @fuzzy_threshold : Float64 = 0.7,
+                     cache_size : Int32 = 256,
+                     cache_ttl : Float64 = 60.0)
+        @cache = PatternMatchCache.new(cache_size, cache_ttl)
+        @matcher = PatternMatcher.new(@atomspace)
+      end
+
+      def match(pattern : Pattern) : Array(MatchResult)
+        key = cache_key(pattern)
+        if cached = @cache.fetch(key)
+          return cached
+        end
+
+        results = @matcher.match(pattern)
+        @cache.store(key, results)
+        results
+      end
+
+      def fuzzy_match(pattern : Pattern, threshold : Float64 = @fuzzy_threshold) : Array(MatchResult)
+        stats = StatisticalMatcher.new(@atomspace, threshold)
+        stats.fuzzy_match(pattern, threshold).map(&.match_result)
+      end
+
+      def clear_cache
+        @cache.clear
+      end
+
+      def cache_stats : Hash(String, Float64)
+        @cache.stats
+      end
+
+      private def cache_key(pattern : Pattern) : String
+        vars = pattern.variables.map(&.hash).sort!.join(",")
+        constraints = pattern.constraints.map(&.to_s).join(";")
+        "#{pattern.template.type}:#{pattern.template.hash}:#{vars}:#{constraints}"
+      end
+    end
+
     # Initialize advanced pattern matching subsystem
     def self.initialize
       CogUtil::Logger.info("Advanced Pattern Matching #{VERSION} initializing")
@@ -793,8 +1033,10 @@ module PatternMatching
       CogUtil::Logger.info("Advanced Pattern Matching #{VERSION} initialized")
       CogUtil::Logger.info("Available features:")
       CogUtil::Logger.info("  - Recursive query composition")
-      CogUtil::Logger.info("  - Temporal pattern matching")
-      CogUtil::Logger.info("  - Pattern learning and optimization")
+      CogUtil::Logger.info("  - Nested composition edge cases")
+      CogUtil::Logger.info("  - Temporal pattern matching and constraints")
+      CogUtil::Logger.info("  - Fuzzy matching with configurable thresholds")
+      CogUtil::Logger.info("  - Pattern learning and optimization/caching")
       CogUtil::Logger.info("  - Statistical/probabilistic matching")
     end
 

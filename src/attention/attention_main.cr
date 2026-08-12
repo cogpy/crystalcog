@@ -5,6 +5,9 @@ require "./attention_bank"
 require "./diffusion"
 require "./rent_collector"
 require "./allocation_engine"
+require "./forgetting"
+require "./normalization"
+require "./query_optimizer"
 
 # Main attention module
 module Attention
@@ -66,5 +69,34 @@ module Attention
                      amount : Int16 = 10_i16)
     bank = AttentionBank.new(atomspace)
     bank.stimulate(handle, amount)
+  end
+
+  # Create a forgetting manager for advanced forgetting algorithms
+  def self.create_forgetting_manager(atomspace : AtomSpace::AtomSpace,
+                                     strategy : ForgettingStrategy = ForgettingStrategy::Hybrid,
+                                     decay_rate : Float64 = 0.1) : ForgettingManager
+    bank = AttentionBank.new(atomspace)
+    ForgettingManager.new(bank, strategy, decay_rate)
+  end
+
+  # Run forgetting (exponential decay / LRU / hybrid) on an atomspace
+  def self.forget(atomspace : AtomSpace::AtomSpace,
+                  strategy : ForgettingStrategy = ForgettingStrategy::Hybrid,
+                  max_lru : Int32 = 10) : Hash(String, Int32)
+    mgr = create_forgetting_manager(atomspace, strategy)
+    mgr.forget(max_lru)
+  end
+
+  # Normalize attention values across the atomspace
+  def self.normalize(atomspace : AtomSpace::AtomSpace) : Hash(String, Int32)
+    bank = AttentionBank.new(atomspace)
+    AttentionNormalizer.new(bank).normalize_all
+  end
+
+  # Create an attention-based query optimizer
+  def self.create_query_optimizer(atomspace : AtomSpace::AtomSpace,
+                                  min_sti : Int16 = 0_i16) : AttentionQueryOptimizer
+    bank = AttentionBank.new(atomspace)
+    AttentionQueryOptimizer.new(bank, min_sti)
   end
 end

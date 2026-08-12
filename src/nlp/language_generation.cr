@@ -222,6 +222,21 @@ module NLP
         sentences[0...max_sentences].join(" ")
       end
 
+      # Discourse-aware multi-sentence generation
+      def generate_discourse(units : Array(NLP::Advanced::DiscourseUnit)) : String
+        NLP::Advanced::DiscoursePlanner.new.plan(units)
+      end
+
+      # Stylistic adaptation of generated text
+      def adapt_style(text : String, style : NLP::Advanced::Style) : String
+        NLP::Advanced::StylisticAdapter.new.adapt(text, style)
+      end
+
+      # Paraphrase then optionally restyle
+      def paraphrase_as(text : String, style : NLP::Advanced::Style) : String
+        adapt_style(paraphrase(text), style)
+      end
+
       private def initialize_default_templates
         @templates["inheritance"] = Template.new(
           "{subject} is a {object}",

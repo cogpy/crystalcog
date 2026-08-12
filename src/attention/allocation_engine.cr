@@ -5,6 +5,8 @@ require "./attention"
 require "./attention_bank"
 require "./diffusion"
 require "./rent_collector"
+require "./forgetting"
+require "./normalization"
 
 module Attention
   # Goal types for attention boosting
@@ -37,6 +39,8 @@ module Attention
     getter bank : AttentionBank
     getter diffusion : AttentionDiffusion
     getter rent_collector : RentCollector
+    getter forgetting_manager : ForgettingManager
+    getter normalizer : AttentionNormalizer
 
     # Current goals and their weights
     getter active_goals : Hash(Goal, Float64)
@@ -45,6 +49,8 @@ module Attention
       @bank = AttentionBank.new(atomspace)
       @diffusion = AttentionDiffusion.new(@bank)
       @rent_collector = RentCollector.new(@bank)
+      @forgetting_manager = ForgettingManager.new(@bank)
+      @normalizer = AttentionNormalizer.new(@bank)
       @active_goals = Hash(Goal, Float64).new
 
       # Default goal weights
@@ -78,13 +84,24 @@ module Attention
         # 4. Adjust LTI-based benefits
         @rent_collector.lti_rent_adjustment
 
-        # 5. Calculate priority scores for all atoms
+        # 5. Apply forgetting to free attention resources
+        forget_results = @forgetting_manager.forget
+        @forgetting_manager.prune_attentional_focus
+
+        # 6. Normalize attention values periodically
+        if (cycle + 1) % 3 == 0
+          @normalizer.normalize_sti
+        end
+
+        # 7. Calculate priority scores for all atoms
         priority_results = calculate_priorities
 
         # Collect metrics for this cycle
         results["cycle_#{cycle + 1}_goal_boosts"] = goal_boost_results["total_boosts"]
         results["cycle_#{cycle + 1}_rent_collected"] = rent_collected.to_f64
         results["cycle_#{cycle + 1}_avg_priority"] = priority_results["average_priority"]
+        results["cycle_#{cycle + 1}_decay_reclaimed"] = forget_results["decay_reclaimed"].to_f64
+        results["cycle_#{cycle + 1}_lru_forgotten"] = forget_results["lru_forgotten"].to_f64
       end
 
       # Final statistics
