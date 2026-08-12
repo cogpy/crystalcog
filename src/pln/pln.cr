@@ -85,10 +85,18 @@ module PLN
 
       # Create inverted truth value
       tv = premise.truth_value
-      inverted_strength = 1.0 / (1.0 + (1.0 - tv.strength) / tv.strength)
+      # When strength is 0, inversion is undefined; treat as zero strength
+      inverted_strength = if tv.strength <= 0.0
+                            0.0
+                          else
+                            1.0 / (1.0 + (1.0 - tv.strength) / tv.strength)
+                          end
       inverted_confidence = tv.confidence * 0.8 # Discount for inversion
 
-      inverted_tv = AtomSpace::SimpleTruthValue.new(inverted_strength, inverted_confidence)
+      inverted_tv = AtomSpace::SimpleTruthValue.new(
+        inverted_strength.clamp(0.0, 1.0),
+        inverted_confidence.clamp(0.0, 1.0)
+      )
 
       # Create B->A link
       atomspace.add_link(
@@ -203,10 +211,15 @@ module PLN
 
           # Simplified abduction strength calculation
           # This is a basic version - the full OpenCog formula is more complex
-          new_strength = (s_ab * s_cb) / (s_ab * s_cb + (1 - s_ab) * (1 - s_cb))
+          # Guard against 0/0 when both strengths are extreme (e.g. 1.0 and 0.0)
+          denom = s_ab * s_cb + (1 - s_ab) * (1 - s_cb)
+          new_strength = denom > 0.0 ? (s_ab * s_cb) / denom : 0.0
           new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
 
-          new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
+          new_tv = AtomSpace::SimpleTruthValue.new(
+            new_strength.clamp(0.0, 1.0),
+            new_confidence.clamp(0.0, 1.0)
+          )
 
           # Create A->C link (avoid creating A->A)
           if a != c
