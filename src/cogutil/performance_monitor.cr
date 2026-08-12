@@ -58,8 +58,10 @@ module CogUtil
       end
     end
 
-    # Active alert instance
-    struct ActiveAlert
+    # Active alert instance.
+    # Class (not struct) so in-place updates to current_value/acknowledged
+    # via Array#find / #each remain visible on the stored instance.
+    class ActiveAlert
       property rule : AlertRule
       property triggered_at : Time
       property current_value : Float64
