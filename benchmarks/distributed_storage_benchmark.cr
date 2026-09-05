@@ -22,7 +22,6 @@ def create_test_atoms(count : Int32) : Array(AtomSpace::Atom)
   atoms = [] of AtomSpace::Atom
   count.times do |i|
     atom = AtomSpace::ConceptNode.new("test_concept_#{i}")
-    atom.handle = AtomSpace::Handle.new(i.to_u64)
     atoms << atom
   end
   atoms
@@ -149,7 +148,7 @@ partition_lookup_count = 10000
 # Without cache
 no_partition_cache_time = Benchmark.measure do
   partition_lookup_count.times do |i|
-    handle = AtomSpace::Handle.new(i.to_u64)
+    handle = (i.to_u64)
     # Simulate hash calculation overhead
     hash_value = handle.hash.abs.to_u64
     partition = "node_#{hash_value % 10}"
@@ -159,8 +158,8 @@ end
 # With cache
 with_partition_cache_time = Benchmark.measure do
   partition_lookup_count.times do |i|
-    handle = AtomSpace::Handle.new(i.to_u64)
-    
+    handle = (i.to_u64)
+
     cached_info = partition_cache.get(handle.to_s)
     unless cached_info
       partition = "node_#{handle % 10}"

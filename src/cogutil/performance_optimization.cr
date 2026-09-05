@@ -99,7 +99,7 @@ module CogUtil
 
         # Calculate block index
         offset = ptr - pool_start
-        block_index = offset // BLOCK_SIZE
+        block_index = (offset // BLOCK_SIZE).to_i32
 
         if @allocated_blocks.includes?(block_index)
           @allocated_blocks.delete(block_index)
