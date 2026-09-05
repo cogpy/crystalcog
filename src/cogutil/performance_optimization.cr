@@ -99,7 +99,7 @@ module CogUtil
 
         # Calculate block index
         offset = ptr - pool_start
-        block_index = offset // BLOCK_SIZE
+        block_index = (offset // BLOCK_SIZE).to_i32
 
         if @allocated_blocks.includes?(block_index)
           @allocated_blocks.delete(block_index)
@@ -313,8 +313,8 @@ module CogUtil
     end
 
     private def hash_key(key : K) : UInt32
-      # Use Crystal's built-in hash for type safety
-      key.hash.to_u32
+      # Use Crystal's built-in hash; truncate without overflow checks
+      key.hash.to_u32!
     end
 
     private def resize_if_needed

@@ -939,7 +939,7 @@ module AtomSpace
     end
 
     def get_stats : Hash(String, String | Int32 | Int64)
-      {"type" => "SQLiteStorage", "status" => "disabled"}
+      Hash(String, String | Int32 | Int64){"type" => "SQLiteStorage", "status" => "disabled"}
     end
   end
   {% end %}
@@ -1492,7 +1492,7 @@ module AtomSpace
     end
 
     def get_stats : Hash(String, String | Int32 | Int64)
-      {"type" => "PostgreSQLStorage", "status" => "disabled"}
+      Hash(String, String | Int32 | Int64){"type" => "PostgreSQLStorage", "status" => "disabled"}
     end
   end
   {% end %}
@@ -1903,14 +1903,21 @@ module AtomSpace
         metadata = load_hypergraph_metadata
         return nil unless metadata
 
-        # Reconstruct hypergraph state
+        # Reconstruct hypergraph state from JSON metadata
+        op_json = metadata["cognitive_operation"]?
+        cognitive_operation = if op_json && !op_json.raw.nil?
+                                op_json.as_s
+                              else
+                                nil
+                              end
+
         state = HypergraphState.new(
           atomspace: target_atomspace,
-          tensor_shape: metadata["tensor_shape"].as(Array(Int32)),
-          attention: metadata["attention"].as(Float64),
-          meta_level: metadata["meta_level"].as(Int32),
-          cognitive_operation: metadata["cognitive_operation"]?.as(String?),
-          timestamp: Time.unix(metadata["timestamp"].as(Int64))
+          tensor_shape: metadata["tensor_shape"].as_a.map(&.as_i),
+          attention: metadata["attention"].as_f,
+          meta_level: metadata["meta_level"].as_i,
+          cognitive_operation: cognitive_operation,
+          timestamp: Time.unix(metadata["timestamp"].as_i64)
         )
 
         log_info("Loaded hypergraph state: tensor_shape=#{state.tensor_shape}, attention=#{state.attention}")
@@ -1970,10 +1977,14 @@ module AtomSpace
 
     private def serialize_hypergraph_state(state : HypergraphState) : Hash(String, JSON::Any)
       data = Hash(String, JSON::Any).new
-      data["tensor_shape"] = JSON::Any.new(state.tensor_shape.map(&.as(JSON::Any)))
+      data["tensor_shape"] = JSON::Any.new(state.tensor_shape.map { |n| JSON::Any.new(n.to_i64) })
       data["attention"] = JSON::Any.new(state.attention)
-      data["meta_level"] = JSON::Any.new(state.meta_level)
-      data["cognitive_operation"] = JSON::Any.new(state.cognitive_operation)
+      data["meta_level"] = JSON::Any.new(state.meta_level.to_i64)
+      data["cognitive_operation"] = if op = state.cognitive_operation
+                                     JSON::Any.new(op)
+                                   else
+                                     JSON::Any.new(nil)
+                                   end
       data["timestamp"] = JSON::Any.new(state.timestamp.to_unix)
       data["atomspace_size"] = JSON::Any.new(state.atomspace.size.to_i64)
       data
