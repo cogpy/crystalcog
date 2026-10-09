@@ -105,7 +105,7 @@ jobs:
 
     - name: Run AtomSpace persistence tests
       run: |
-        cat > /tmp/atomspace_persistence_test.cr << 'EOF'
+        cat > ./atomspace_persistence_test.cr << 'EOF'
         require "./src/atomspace/atomspace"
         require "./src/atomspace/storage"
         
@@ -144,8 +144,9 @@ jobs:
         puts "\n✓ Persistence tests passed!"
         EOF
         
-        # Run from repository root so relative paths work
-        timeout 300 crystal run --error-trace /tmp/atomspace_persistence_test.cr || echo "Persistence test skipped (implementation pending)"
+        # Require paths are relative to the source file, so the script must live in the repo.
+        timeout 300 crystal run --error-trace ./atomspace_persistence_test.cr || echo "Persistence test skipped (implementation pending)"
+        rm -f ./atomspace_persistence_test.cr
 
     - name: Upload AtomSpace test results
       uses: actions/upload-artifact@v4
@@ -186,35 +187,11 @@ jobs:
         crystal build --error-trace src/cogserver/cogserver_main.cr -o cogserver_bin || echo "CogServer build skipped"
 
     - name: Run CogServer load tests
+      timeout-minutes: 5
       run: |
-        if [ -f "cogserver_bin" ]; then
-          echo "Starting CogServer..."
-          ./cogserver_bin &
-          COGSERVER_PID=$!
-          
-          # Wait for server
-          sleep 5
-          
-          # Load test
-          echo "Running load test..."
-          for i in {1..100}; do
-            curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
-              -d "{\"type\":\"ConceptNode\",\"name\":\"load_test_$i\"}" \
-              http://localhost:18080/atom &
-          done
-          
-          wait
-          
-          # Check status
-          curl -s --max-time 5 http://localhost:18080/summary | jq .
-          
-          # Cleanup
-          kill $COGSERVER_PID
-          
-          echo "✓ CogServer load test completed"
-        else
-          echo "CogServer binary not available, skipping load test"
-        fi
+        # Do not use a bare `wait` here. It also waits for cogserver_bin, which
+        # never exits, and previously cancelled this job at the 30-minute timeout.
+        bash scripts/e2e/cogserver_load_test.sh ./cogserver_bin
 
     - name: Upload CogServer test results
       uses: actions/upload-artifact@v4
@@ -261,45 +238,9 @@ jobs:
 
     - name: Run multi-node simulation
       run: |
-        cat > /tmp/multi_node_test.cr << 'EOF'
-        require "./src/atomspace/distributed_storage"
-        
-        puts "Multi-Node Simulation Test"
-        puts "=========================="
-        
-        # Simulate 3 nodes
-        nodes = (1..3).map do |i|
-          {
-            id: "node_#{i}",
-            cache: AtomSpace::LRUCache.new(100),
-            partition: i
-          }
-        end
-        
-        puts "✓ Simulated 3 nodes"
-        
-        # Test distributed operations
-        puts "\nTest: Distributed atom storage..."
-        1000.times do |i|
-          node = nodes[i % 3]
-          atom = AtomSpace::ConceptNode.new("distributed_atom_#{i}")
-          atom.handle = AtomSpace::Handle.new(i.to_u64)
-          node[:cache].put(atom)
-        end
-        
-        puts "✓ Distributed 1000 atoms across 3 nodes"
-        
-        # Check cache statistics
-        nodes.each_with_index do |node, idx|
-          stats = node[:cache].stats
-          puts "  Node #{idx + 1}: #{stats["size"]} atoms cached"
-        end
-        
-        puts "\n✓ Multi-node simulation completed!"
-        EOF
-        
-        # Run from repository root so relative paths work
-        timeout 300 crystal run --error-trace /tmp/multi_node_test.cr
+        # Require paths are relative to the source file. The previous /tmp
+        # script could not find ./src and also assigned a read-only handle.
+        timeout 300 crystal run --error-trace scripts/e2e/multi_node_simulation.cr
 
     - name: Upload distributed test results
       uses: actions/upload-artifact@v4
@@ -478,16 +419,18 @@ jobs:
       run: |
         echo "Checking E2E test results..."
         
-        if [ "${{ needs.atomspace-e2e.result }}" == "failure" ] || \
-           [ "${{ needs.cogserver-e2e.result }}" == "failure" ] || \
-           [ "${{ needs.distributed-e2e.result }}" == "failure" ] || \
-           [ "${{ needs.performance-e2e.result }}" == "failure" ] || \
-           [ "${{ needs.websocket-e2e.result }}" == "failure" ]; then
-          echo "⚠️  Some E2E tests failed"
-          exit 1
-        else
-          echo "✅ All E2E tests passed or were skipped"
-        fi
+        # cancelled covers job timeouts (for example a hung CogServer load test).
+        results="${{ needs.atomspace-e2e.result }} ${{ needs.cogserver-e2e.result }} ${{ needs.distributed-e2e.result }} ${{ needs.performance-e2e.result }} ${{ needs.websocket-e2e.result }}"
+        echo "Results: ${results}"
+        case " ${results} " in
+          *" failure "*|*" cancelled "*)
+            echo "⚠️  Some E2E tests failed or were cancelled"
+            exit 1
+            ;;
+          *)
+            echo "✅ All E2E tests passed or were skipped"
+            ;;
+        esac
 
   # Generate GitHub issues from failing E2E tests and incomplete stubs
   generate-priority-issues:
