@@ -40,7 +40,7 @@ jobs:
     - name: Set up reporting environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y jq curl
+        sudo apt-get install -y jq curl bc
         
     - name: Fetch recent workflow runs
       id: fetch-runs
@@ -80,7 +80,7 @@ jobs:
             successful,
             failed,
             cancelled,
-            success_rate: (successful / recent.length * 100).toFixed(1),
+            success_rate: (recent.length ? successful / recent.length * 100 : 0).toFixed(1),
             recent_runs: recent.slice(0, 5).map(run => ({
               id: run.id,
               conclusion: run.conclusion,

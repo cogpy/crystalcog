@@ -1,0 +1,139 @@
+# CrystalCog Integration Configuration
+# This file contains configuration settings for all integration components
+# including external repository integrations (Galatea, Paphos) with cognitive agency
+
+# CogPy Bridge Configuration
+cogpy:
+  host: "localhost"
+  port: 5000
+  timeout: 30
+  # auth_token: "your-token-here"  # Optional authentication token
+
+# PyG (PyTorch Geometric) Adapter Configuration
+pyg:
+  backend_url: "http://localhost:8000"
+  batch_size: 32
+  embedding_dim: 128
+  use_gpu: false  # Set to true if GPU is available
+
+# Pygmalion Agent Configuration
+pygmalion:
+  api_url: "https://api.pygmalion.chat"
+  model_name: "pygmalion-13b"
+  max_context_length: 2048
+  temperature: 0.7
+  echo_state_enabled: true
+
+  # Echo State Network Configuration
+  echo_state:
+    reservoir_size: 1000
+    spectral_radius: 0.95
+    sparsity: 0.1
+    tensor_signatures: true
+
+# Galatea Frontend Configuration (github.com/9cog/galatea-frontend)
+# React/TypeScript frontend with cognitive agency integration
+galatea:
+  host: "0.0.0.0"
+  port: 3000
+  websocket_port: 3001
+  cors_enabled: true
+  max_connections: 100
+
+  # External repository connection
+  external_api_url: "http://localhost:3000"
+  auth_provider: "internal"  # firebase, supabase, or internal
+  # auth_token: "your-auth-token"  # Optional for external auth
+  # aphrodite_endpoint: "http://localhost:2242"  # Optional PygmalionAI/Aphrodite
+
+  # Cognitive Agency Settings for Optimal Grip
+  cognitive_agency:
+    mode: "autonomous"  # passive, active, autonomous
+    grip_strength: 8    # 1-10 cognitive grip intensity
+    stream_cognitive_state: true
+    react_bridge_enabled: true
+
+# Paphos Backend Configuration (github.com/9cog/paphos-backend)
+# Crystal/Lucky framework backend with PostgreSQL
+paphos:
+  backend_url: "http://localhost:3000"
+  # api_key: "your-api-key-here"  # Required for production
+  timeout: 30
+  retry_attempts: 3
+  enable_caching: true
+
+  # Lucky Framework API Settings
+  lucky_api_prefix: "/api/v1"
+  postgresql_compatible: true
+
+  # Cognitive Agency Coordination
+  cognitive_agency:
+    sync_enabled: true
+    coordination_mode: "peer"  # leader, follower, peer
+    state_sync_interval: 5     # seconds
+    event_streaming_enabled: true
+    batch_operations: true
+
+# Unified Cognitive Agency Configuration
+# Central controller for cognitive grip across all integrations
+cognitive_agency:
+  # Default grip settings
+  default_grip_strength: 8
+  default_mode: "active"  # passive, active, autonomous, coordinated
+
+  # Attention mechanism
+  attention:
+    decay_rate: 0.95
+    max_focus_items: 100
+
+  # Thought stream
+  thought_stream:
+    capacity: 500
+    processing_enabled: true
+
+  # Grip controller
+  grip:
+    auto_adjust: true
+    adjustment_sensitivity: 0.1
+
+  # Optimal agency thresholds
+  optimal_coherence_threshold: 0.85
+  sync_interval_ms: 100
+
+# Crystal Acceleration Engine Configuration
+accelerator:
+  enable_parallel_processing: true
+  thread_pool_size: 4
+  cache_size: 10000
+  optimization_level: 2  # 0=none, 1=basic, 2=standard, 3=aggressive
+  profile_performance: false  # Set to true for performance monitoring
+
+# Integration Options
+integration:
+  # Which integrations to enable on startup
+  enable_on_startup:
+    - cogpy
+    - pyg
+    - pygmalion
+    - galatea
+    - paphos
+    - accelerator
+    - cognitive_agency  # Unified agency controller
+
+  # Auto-reconnect on connection loss
+  auto_reconnect: true
+  reconnect_delay: 5  # seconds
+
+  # Logging level for integrations
+  log_level: "info"  # debug, info, warn, error
+
+  # External repository tracking
+  external_repos:
+    galatea_frontend: "https://github.com/9cog/galatea-frontend"
+    paphos_backend: "https://github.com/9cog/paphos-backend"
+
+  # Cognitive agency coordination
+  cognitive_coordination:
+    enabled: true
+    distributed_mode: "peer"
+    consensus_threshold: 0.7

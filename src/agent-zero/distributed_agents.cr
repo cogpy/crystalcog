@@ -578,12 +578,19 @@ module AgentZero
       CogUtil::Logger.debug("Integrated shared knowledge: #{knowledge.type} - #{knowledge.content}")
     end
 
+    # Ports handed out to nodes in this process. A probed port is only bound
+    # later in #start, so without this two nodes created back to back would
+    # both pick the same free port.
+    @@assigned_ports = Set(Int32).new
+
     private def find_available_port : Int32
       # Find an available port starting from 20000
       (20000..21000).each do |port|
+        next if @@assigned_ports.includes?(port)
         begin
           server = TCPServer.new(@host, port)
           server.close
+          @@assigned_ports << port
           return port
         rescue
           # Port is in use, try next one

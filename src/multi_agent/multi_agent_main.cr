@@ -2,9 +2,10 @@
 
 require "./communication"
 require "./coordination"
+require "../multiagent/coordination"
 
 module MultiAgent
-  VERSION = "0.1.0"
+  # VERSION is defined in ../multiagent/coordination.cr
 
   # Initialize Multi-Agent subsystem
   def self.initialize

@@ -41,7 +41,7 @@ echo ""
 echo "✅ Checking CogServer build compatibility..."
 if [ ! -f "cogserver_bin" ]; then
     echo "   • Building CogServer..."
-    DISABLE_ROCKSDB=1 crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
+    DISABLE_ROCKSDB=1 crystal build src/bin/cogserver.cr -o cogserver_bin
     echo "   • CogServer built successfully"
 else
     echo "   • CogServer binary exists"

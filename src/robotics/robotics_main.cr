@@ -2,11 +2,12 @@
 
 require "./spatial_reasoning"
 require "./navigation"
-require "./sensory_motor"
+require "./sensory_motor_control"
 require "./goal_planning"
+require "./ros_integration"
 
 module Robotics
-  VERSION = "0.1.0"
+  # VERSION is defined in ros_integration.cr
 
   # Initialize Robotics subsystem
   def self.initialize

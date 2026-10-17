@@ -448,3 +448,14 @@ crystalcog_new
 *.log
 *.tmp
 test_output.log
+
+# Source entry points are not generated binaries.
+!/src/bin/
+!/src/bin/*.cr
+/test-results.xml
+
+# Binary basename patterns must never hide source or regression-test directories.
+!/src/**/
+!/src/**/*.cr
+!/spec/**/
+!/spec/**/*.cr

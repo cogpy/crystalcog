@@ -1,9 +1,9 @@
 require "spec"
 require "../../src/explanation/explanation"
 
-describe Explanation::ConfidenceCalibrator do
+describe ReasoningExplanation::ConfidenceCalibrator do
   it "tracks reliability and ECE" do
-    cal = Explanation::ConfidenceCalibrator.new(5)
+    cal = ReasoningExplanation::ConfidenceCalibrator.new(5)
     10.times { cal.observe(0.9, true) }
     10.times { cal.observe(0.2, false) }
     cal.ece.should be >= 0.0
@@ -14,14 +14,14 @@ describe Explanation::ConfidenceCalibrator do
   end
 end
 
-describe Explanation::ExplanationTrace do
+describe ReasoningExplanation::ExplanationTrace do
   it "exports visualization and graph edges" do
-    trace = Explanation::ExplanationTrace.new("C")
-    trace.add_step(Explanation::ReasoningStep.new(
-      Explanation::StepType::DEDUCTION, "A", "B", 0.9, "r1"
+    trace = ReasoningExplanation::ExplanationTrace.new("C")
+    trace.add_step(ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::DEDUCTION, "A", "B", 0.9, "r1"
     ))
-    trace.add_step(Explanation::ReasoningStep.new(
-      Explanation::StepType::DEDUCTION, "B", "C", 0.8, "r2"
+    trace.add_step(ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::DEDUCTION, "B", "C", 0.8, "r2"
     ))
     viz = trace.to_visualization
     viz["conclusion"].as_s.should eq("C")
@@ -32,18 +32,18 @@ describe Explanation::ExplanationTrace do
   end
 end
 
-describe Explanation::ExplanationGenerator do
+describe ReasoningExplanation::ExplanationGenerator do
   it "renders templates and calibrated explanations" do
     atomspace = AtomSpace::AtomSpace.new
-    gen = Explanation::ExplanationGenerator.new(atomspace)
-    gen.record_step("flies", Explanation::ReasoningStep.new(
-      Explanation::StepType::DEDUCTION, "bird", "flies", 0.85, "Inheritance"
+    gen = ReasoningExplanation::ExplanationGenerator.new(atomspace)
+    gen.record_step("flies", ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::DEDUCTION, "bird", "flies", 0.85, "Inheritance"
     ))
     gen.calibrator.observe(0.85, true)
     gen.calibrator.observe(0.85, true)
 
-    step = Explanation::ReasoningStep.new(
-      Explanation::StepType::LOOKUP, "", "sky is blue", 1.0
+    step = ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::LOOKUP, "", "sky is blue", 1.0
     )
     gen.render_step_template(step).should contain("Retrieved")
 
@@ -57,12 +57,12 @@ describe Explanation::ExplanationGenerator do
 
   it "includes calibration in contrastive explanations" do
     atomspace = AtomSpace::AtomSpace.new
-    gen = Explanation::ExplanationGenerator.new(atomspace)
-    gen.record_step("A", Explanation::ReasoningStep.new(
-      Explanation::StepType::DEDUCTION, "p", "A", 0.9
+    gen = ReasoningExplanation::ExplanationGenerator.new(atomspace)
+    gen.record_step("A", ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::DEDUCTION, "p", "A", 0.9
     ))
-    gen.record_step("B", Explanation::ReasoningStep.new(
-      Explanation::StepType::DEDUCTION, "q", "B", 0.4
+    gen.record_step("B", ReasoningExplanation::ReasoningStep.new(
+      ReasoningExplanation::StepType::DEDUCTION, "q", "B", 0.4
     ))
     text = gen.contrastive_explanation("A", "B")
     text.should contain("rather than")

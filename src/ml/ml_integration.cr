@@ -159,7 +159,8 @@ module ML
 
       # Decode atom type (simplified — map to the nearest valid enum member)
       atom_type_idx = prediction[0].to_i
-      atom_type = AtomSpace::AtomType.from_value?(atom_type_idx) || AtomSpace::AtomType::CONCEPT_NODE
+      atom_type = AtomSpace::AtomType.from_value?(atom_type_idx)
+      atom_type = AtomSpace::AtomType::CONCEPT_NODE unless atom_type && atom_type.node?
 
       # Decode truth value
       strength = prediction[1].clamp(0.0, 1.0)

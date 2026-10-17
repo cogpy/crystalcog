@@ -184,7 +184,7 @@ jobs:
 
     - name: Build CogServer
       run: |
-        crystal build --error-trace src/cogserver/cogserver_main.cr -o cogserver_bin || echo "CogServer build skipped"
+        crystal build --error-trace src/bin/cogserver.cr -o cogserver_bin || echo "CogServer build skipped"
 
     - name: Run CogServer load tests
       timeout-minutes: 5

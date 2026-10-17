@@ -1,21 +1,21 @@
 require "spec"
 require "../../src/temporal/temporal_reasoning"
 
-describe Temporal::TemporalPlanner do
+describe TemporalReasoning::TemporalPlanner do
   it "plans actions when preconditions hold" do
-    timeline = Temporal::Timeline.new
+    timeline = TemporalReasoning::Timeline.new
     # Initial fluent: door_closed holds from 0
-    door = Temporal::Fluent.new("door_open", "true")
+    door = TemporalReasoning::Fluent.new("door_open", "true")
     # Don't initiate yet — start closed
-    closed = Temporal::Fluent.new("door_closed", "true")
-    closed.initiate(Temporal::Interval.new(0.0, 100.0))
+    closed = TemporalReasoning::Fluent.new("door_closed", "true")
+    closed.initiate(TemporalReasoning::Interval.new(0.0, 100.0))
     timeline.add_fluent(closed)
 
-    planner = Temporal::TemporalPlanner.new(timeline)
+    planner = TemporalReasoning::TemporalPlanner.new(timeline)
 
-    open_door = Temporal::PlanStep.new(
+    open_door = TemporalReasoning::PlanStep.new(
       "open_door",
-      Temporal::Interval.new(1.0, 2.0),
+      TemporalReasoning::Interval.new(1.0, 2.0),
       ["door_closed"],
       ["door_open"]
     )
@@ -27,12 +27,12 @@ describe Temporal::TemporalPlanner do
   end
 
   it "skips actions with unmet preconditions" do
-    timeline = Temporal::Timeline.new
-    planner = Temporal::TemporalPlanner.new(timeline)
+    timeline = TemporalReasoning::Timeline.new
+    planner = TemporalReasoning::TemporalPlanner.new(timeline)
 
-    step = Temporal::PlanStep.new(
+    step = TemporalReasoning::PlanStep.new(
       "fly",
-      Temporal::Interval.new(0.0, 1.0),
+      TemporalReasoning::Interval.new(0.0, 1.0),
       ["has_wings"],
       ["airborne"]
     )
@@ -42,62 +42,62 @@ describe Temporal::TemporalPlanner do
   end
 
   it "finds causal plans from timeline events" do
-    timeline = Temporal::Timeline.new
-    e1 = Temporal::Event.new("start", Temporal::Interval.new(0.0, 1.0))
-    e2 = Temporal::Event.new("middle", Temporal::Interval.new(1.0, 2.0))
-    e3 = Temporal::Event.new("goal", Temporal::Interval.new(2.0, 3.0))
+    timeline = TemporalReasoning::Timeline.new
+    e1 = TemporalReasoning::Event.new("start", TemporalReasoning::Interval.new(0.0, 1.0))
+    e2 = TemporalReasoning::Event.new("middle", TemporalReasoning::Interval.new(1.0, 2.0))
+    e3 = TemporalReasoning::Event.new("goal", TemporalReasoning::Interval.new(2.0, 3.0))
     timeline.add_event(e1)
     timeline.add_event(e2)
     timeline.add_event(e3)
 
-    planner = Temporal::TemporalPlanner.new(timeline)
+    planner = TemporalReasoning::TemporalPlanner.new(timeline)
     chain = planner.find_causal_plan("goal")
     chain.should_not be_empty
     chain.last.name.should eq("goal")
   end
 end
 
-describe Temporal::TemporalQueryEngine do
+describe TemporalReasoning::TemporalQueryEngine do
   it "indexes events by name" do
-    timeline = Temporal::Timeline.new
-    timeline.add_event(Temporal::Event.new("a", Temporal::Interval.new(0.0, 1.0)))
-    timeline.add_event(Temporal::Event.new("a", Temporal::Interval.new(2.0, 3.0)))
-    timeline.add_event(Temporal::Event.new("b", Temporal::Interval.new(1.0, 2.0)))
+    timeline = TemporalReasoning::Timeline.new
+    timeline.add_event(TemporalReasoning::Event.new("a", TemporalReasoning::Interval.new(0.0, 1.0)))
+    timeline.add_event(TemporalReasoning::Event.new("a", TemporalReasoning::Interval.new(2.0, 3.0)))
+    timeline.add_event(TemporalReasoning::Event.new("b", TemporalReasoning::Interval.new(1.0, 2.0)))
 
-    engine = Temporal::TemporalQueryEngine.new(timeline)
+    engine = TemporalReasoning::TemporalQueryEngine.new(timeline)
     engine.events_named("a").size.should eq(2)
     engine.events_named("b").size.should eq(1)
   end
 
   it "queries events starting in a range" do
-    timeline = Temporal::Timeline.new
-    timeline.add_event(Temporal::Event.new("early", Temporal::Interval.new(0.0, 1.0)))
-    timeline.add_event(Temporal::Event.new("mid", Temporal::Interval.new(5.0, 6.0)))
-    timeline.add_event(Temporal::Event.new("late", Temporal::Interval.new(10.0, 11.0)))
+    timeline = TemporalReasoning::Timeline.new
+    timeline.add_event(TemporalReasoning::Event.new("early", TemporalReasoning::Interval.new(0.0, 1.0)))
+    timeline.add_event(TemporalReasoning::Event.new("mid", TemporalReasoning::Interval.new(5.0, 6.0)))
+    timeline.add_event(TemporalReasoning::Event.new("late", TemporalReasoning::Interval.new(10.0, 11.0)))
 
-    engine = Temporal::TemporalQueryEngine.new(timeline)
+    engine = TemporalReasoning::TemporalQueryEngine.new(timeline)
     mid = engine.events_starting_between(4.0, 6.0)
     mid.size.should eq(1)
     mid.first.name.should eq("mid")
   end
 
   it "finds pairs with a given Allen relation" do
-    timeline = Temporal::Timeline.new
-    timeline.add_event(Temporal::Event.new("a", Temporal::Interval.new(0.0, 1.0)))
-    timeline.add_event(Temporal::Event.new("b", Temporal::Interval.new(1.0, 2.0)))
+    timeline = TemporalReasoning::Timeline.new
+    timeline.add_event(TemporalReasoning::Event.new("a", TemporalReasoning::Interval.new(0.0, 1.0)))
+    timeline.add_event(TemporalReasoning::Event.new("b", TemporalReasoning::Interval.new(1.0, 2.0)))
 
-    engine = Temporal::TemporalQueryEngine.new(timeline)
-    meets = engine.pairs_with_relation(Temporal::IntervalRelation::MEETS)
+    engine = TemporalReasoning::TemporalQueryEngine.new(timeline)
+    meets = engine.pairs_with_relation(TemporalReasoning::IntervalRelation::MEETS)
     meets.size.should eq(1)
   end
 
   it "queries fluents at a time" do
-    timeline = Temporal::Timeline.new
-    f = Temporal::Fluent.new("raining", "true")
-    f.initiate(Temporal::Interval.new(0.0, 5.0))
+    timeline = TemporalReasoning::Timeline.new
+    f = TemporalReasoning::Fluent.new("raining", "true")
+    f.initiate(TemporalReasoning::Interval.new(0.0, 5.0))
     timeline.add_fluent(f)
 
-    engine = Temporal::TemporalQueryEngine.new(timeline)
+    engine = TemporalReasoning::TemporalQueryEngine.new(timeline)
     engine.fluents_at(2.0).size.should eq(1)
     engine.fluents_at(10.0).should be_empty
   end
@@ -105,16 +105,16 @@ end
 
 describe "Allen composition completeness" do
   it "composes BEFORE with BEFORE as BEFORE" do
-    result = Temporal.compose_relations(
-      Temporal::IntervalRelation::BEFORE,
-      Temporal::IntervalRelation::BEFORE
+    result = TemporalReasoning.compose_relations(
+      TemporalReasoning::IntervalRelation::BEFORE,
+      TemporalReasoning::IntervalRelation::BEFORE
     )
-    result.should eq([Temporal::IntervalRelation::BEFORE])
+    result.should eq([TemporalReasoning::IntervalRelation::BEFORE])
   end
 
   it "inverse of inverse is identity for all relations" do
-    Temporal::IntervalRelation.values.each do |rel|
-      Temporal.inverse_relation(Temporal.inverse_relation(rel)).should eq(rel)
+    TemporalReasoning::IntervalRelation.values.each do |rel|
+      TemporalReasoning.inverse_relation(TemporalReasoning.inverse_relation(rel)).should eq(rel)
     end
   end
 end

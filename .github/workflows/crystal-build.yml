@@ -121,7 +121,7 @@ jobs:
       id: build
       run: |
         echo "Building Crystal project..."
-        crystal build --error-trace src/crystalcog.cr 2>&1 | tee build.log
+        crystal build --error-trace src/bin/crystalcog.cr 2>&1 | tee build.log
       continue-on-error: true
 
     - name: Check build results

@@ -6,9 +6,9 @@
 module NLP
   module Tokenizer
     # Basic tokenization patterns
-    WORD_PATTERN        = /[a-zA-Z]+/
-    NUMBER_PATTERN      = /\d+(\.\d+)?/
-    PUNCTUATION_PATTERN = /[.!?,:;]/
+    WORD_PATTERN        = /\A[a-zA-Z]+\z/
+    NUMBER_PATTERN      = /\A\d+(\.\d+)?\z/
+    PUNCTUATION_PATTERN = /\A[.!?,:;]\z/
     WHITESPACE_PATTERN  = /\s+/
 
     # Tokenize text into an array of tokens
@@ -54,12 +54,12 @@ module NLP
 
     # Check if a token is a word (contains only letters)
     def self.is_word?(token : String) : Bool
-      !!(token.match(/^[a-zA-Z]+$/))
+      !!token.match(WORD_PATTERN)
     end
 
     # Check if a token is a number
     def self.is_number?(token : String) : Bool
-      !!(token.match(/^\d+(\.\d+)?$/))
+      !!token.match(NUMBER_PATTERN)
     end
 
     # Check if a token is punctuation

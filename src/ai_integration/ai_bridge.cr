@@ -143,9 +143,9 @@ module AIIntegration
 
     def infer(model_name : String, request : InferenceRequest) : InferenceResponse
       unless is_model_loaded?(model_name)
-        return InferenceResponse.new("", request.session_id, success: false).tap do |response|
-          response.error_message = "Model #{model_name} is not loaded"
-        end
+        response = InferenceResponse.new("", request.session_id, success: false)
+        response.error_message = "Model #{model_name} is not loaded"
+        return response
       end
 
       unless has_session?(request.session_id)
@@ -161,11 +161,12 @@ module AIIntegration
       end_time = Time.instant
       inference_time = (end_time - start_time).total_milliseconds.to_u64
 
-      InferenceResponse.new(response_text, request.session_id, success: true).tap do |response|
-        response.tokens_generated = response_text.split.size.to_u32
-        response.confidence_score = 0.85_f32
-        response.inference_time_ms = inference_time
-      end
+      # InferenceResponse is a struct: a tap block receives a value copy.
+      response = InferenceResponse.new(response_text, request.session_id, success: true)
+      response.tokens_generated = response_text.split.size.to_u32
+      response.confidence_score = 0.85_f32
+      response.inference_time_ms = inference_time
+      response
     end
 
     def infer_simple(model_name : String, prompt : String, session_id : String) : InferenceResponse

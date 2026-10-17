@@ -7,13 +7,14 @@ module CogUtil
   # Reduces GC pressure and improves cache locality
   class AtomMemoryPool
     # Pool configuration
-    POOL_SIZE  = 10000
-    BLOCK_SIZE =   128 # bytes per block
+    POOL_SIZE  =   10000
+    BLOCK_SIZE =     128 # bytes per block
+    TOTAL_SIZE = 1280000 # POOL_SIZE * BLOCK_SIZE
 
-    # Use heap-allocated memory instead of StaticArray to avoid compiler crashes
-    # with large static allocations
-    @blocks : Pointer(UInt8)
-    @blocks_size : Int32
+    # A large StaticArray is returned/copied by value during initialization,
+    # triggering LLVM SelectionDAG failures. Bytes owns a contiguous GC-backed
+    # buffer and keeps its address stable without giant stack/SSA aggregates.
+    @blocks : Bytes
     @free_blocks : Array(Int32)
     @allocated_blocks : Set(Int32)
     @mutex : Mutex
@@ -49,9 +50,7 @@ module CogUtil
     end
 
     def initialize
-      @blocks_size = POOL_SIZE * BLOCK_SIZE
-      @blocks = Pointer(UInt8).malloc(@blocks_size)
-      @blocks.clear(@blocks_size)
+      @blocks = Bytes.new(TOTAL_SIZE, 0_u8)
       @free_blocks = Array(Int32).new(POOL_SIZE) { |i| i }
       @allocated_blocks = Set(Int32).new
       @mutex = Mutex.new
@@ -80,7 +79,7 @@ module CogUtil
         end
 
         # Return pointer to block
-        @blocks + (block_index * BLOCK_SIZE)
+        @blocks.to_unsafe + (block_index * BLOCK_SIZE)
       end
     end
 
@@ -88,8 +87,8 @@ module CogUtil
     def deallocate(ptr : Pointer(UInt8)) : Bool
       @mutex.synchronize do
         # Check if pointer is within our pool range
-        pool_start = @blocks
-        pool_end = pool_start + @blocks_size
+        pool_start = @blocks.to_unsafe
+        pool_end = pool_start + (POOL_SIZE * BLOCK_SIZE)
 
         if ptr < pool_start || ptr >= pool_end
           # This was allocated outside the pool
@@ -99,6 +98,7 @@ module CogUtil
 
         # Calculate block index
         offset = ptr - pool_start
+        return false unless offset % BLOCK_SIZE == 0
         block_index = (offset // BLOCK_SIZE).to_i32
 
         if @allocated_blocks.includes?(block_index)
@@ -142,9 +142,6 @@ module CogUtil
         "fragmentation_low"   => @free_blocks.size + @allocated_blocks.size == POOL_SIZE,
       }
     end
-
-    # Note: Memory allocated with Pointer.malloc is managed by Crystal's GC
-    # (via GC.malloc_atomic under the hood), so no explicit cleanup is needed.
 
     private def memset(ptr : Pointer(UInt8), value : UInt8, size : Int32)
       size.times { |i| ptr[i] = value }

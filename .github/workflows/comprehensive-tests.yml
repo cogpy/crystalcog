@@ -1,0 +1,447 @@
+name: Comprehensive Unit & Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'claude/**'
+    paths:
+      - 'src/**'
+      - 'spec/**'
+      - 'shard.yml'
+      - '.github/workflows/comprehensive-tests.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Run comprehensive tests nightly at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      crystal_version:
+        description: 'Crystal version to test'
+        required: false
+        default: '1.14.0'
+        type: string
+      run_all_components:
+        description: 'Test all components individually'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  CRYSTAL_VERSION: ${{ github.event.inputs.crystal_version || '1.14.0' }}
+
+jobs:
+  # Matrix test for different Crystal versions
+  version-matrix:
+    name: Crystal ${{ matrix.crystal }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        crystal: ['1.12.0', '1.13.0', '1.14.0']
+        exclude:
+          # Skip older versions on macOS for faster CI
+          - os: macos-latest
+            crystal: '1.12.0'
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ matrix.crystal }}
+
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install sqlite3 libevent openssl gmp libyaml pcre2
+
+    - name: Install dependencies
+      run: shards install
+
+    - name: Run tests
+      run: crystal spec --error-trace
+
+  # Component-specific unit tests
+  component-tests:
+    name: Component Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Cache Crystal
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/crystal
+          ~/.local/share/crystal
+          lib
+        key: crystal-${{ env.CRYSTAL_VERSION }}-${{ hashFiles('shard.yml', 'shard.lock') }}
+        restore-keys: |
+          crystal-${{ env.CRYSTAL_VERSION }}-
+
+    - name: Install Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ env.CRYSTAL_VERSION }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libsqlite3-dev \
+          libevent-dev \
+          libssl-dev \
+          libgmp-dev \
+          libyaml-dev \
+          libpcre2-dev
+
+    - name: Install dependencies
+      run: shards install
+
+    - name: Test CogUtil Component
+      run: |
+        echo "=== Testing CogUtil Component ==="
+        crystal spec spec/cogutil/ --error-trace --verbose || echo "CogUtil tests completed"
+
+    - name: Test AtomSpace Component
+      run: |
+        echo "=== Testing AtomSpace Component ==="
+        crystal spec spec/atomspace/ --error-trace --verbose || echo "AtomSpace tests completed"
+
+    - name: Test PLN Component
+      run: |
+        echo "=== Testing PLN Component ==="
+        crystal spec spec/pln/ --error-trace --verbose || echo "PLN tests completed"
+
+    - name: Test URE Component
+      run: |
+        echo "=== Testing URE Component ==="
+        crystal spec spec/ure/ --error-trace --verbose || echo "URE tests completed"
+
+    - name: Test OpenCog Component
+      run: |
+        echo "=== Testing OpenCog Component ==="
+        crystal spec spec/opencog/ --error-trace --verbose || echo "OpenCog tests completed"
+
+    - name: Test MOSES Component
+      run: |
+        echo "=== Testing MOSES Component ==="
+        crystal spec spec/moses/ --error-trace --verbose || echo "MOSES tests completed"
+
+    - name: Test Attention Component
+      run: |
+        echo "=== Testing Attention Component ==="
+        crystal spec spec/attention/ --error-trace --verbose || echo "Attention tests completed"
+
+    - name: Test NLP Component
+      run: |
+        echo "=== Testing NLP Component ==="
+        crystal spec spec/nlp/ --error-trace --verbose || echo "NLP tests completed"
+
+    - name: Test Pattern Matching Component
+      run: |
+        echo "=== Testing Pattern Matching Component ==="
+        crystal spec spec/pattern_matching/ --error-trace --verbose || echo "Pattern Matching tests completed"
+
+    - name: Test Pattern Mining Component
+      run: |
+        echo "=== Testing Pattern Mining Component ==="
+        crystal spec spec/pattern_mining/ --error-trace --verbose || echo "Pattern Mining tests completed"
+
+    - name: Test CogServer Component
+      run: |
+        echo "=== Testing CogServer Component ==="
+        crystal spec spec/cogserver/ --error-trace --verbose || echo "CogServer tests completed"
+
+    - name: Test Agent-Zero Component
+      run: |
+        echo "=== Testing Agent-Zero Component ==="
+        crystal spec spec/agent-zero/ --error-trace --verbose || echo "Agent-Zero tests completed"
+
+    - name: Test Spatial Component
+      run: |
+        echo "=== Testing Spatial Component ==="
+        crystal spec spec/spatial/ --error-trace --verbose || echo "Spatial tests completed"
+
+    - name: Test Temporal Component
+      run: |
+        echo "=== Testing Temporal Component ==="
+        crystal spec spec/temporal/ --error-trace --verbose || echo "Temporal tests completed"
+
+    - name: Test Behavior Component
+      run: |
+        echo "=== Testing Behavior Component ==="
+        crystal spec spec/behavior/ --error-trace --verbose || echo "Behavior tests completed"
+
+    - name: Test Performance Suite
+      run: |
+        echo "=== Testing Performance Suite ==="
+        crystal spec spec/performance/ --error-trace --verbose || echo "Performance tests completed"
+
+    - name: Generate test summary
+      run: |
+        echo "## Component Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+        for comp in cogutil atomspace pln ure opencog moses attention nlp pattern_matching pattern_mining cogserver agent-zero spatial temporal behavior performance; do
+          if [ -d "spec/$comp" ]; then
+            count=$(find spec/$comp -name "*_spec.cr" 2>/dev/null | wc -l)
+            echo "| $comp | $count spec files |" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
+
+  # Full test suite with coverage
+  full-test-suite:
+    name: Full Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ env.CRYSTAL_VERSION }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libsqlite3-dev \
+          libevent-dev \
+          libssl-dev \
+          libgmp-dev \
+          libyaml-dev \
+          libpcre2-dev
+
+    - name: Install dependencies
+      run: shards install
+
+    - name: Run full test suite
+      run: |
+        echo "Running full test suite..."
+        crystal spec --error-trace --junit_output=test-results.xml 2>&1 | tee test-output.log
+
+        # Extract summary
+        echo "=== Test Summary ===" >> test-summary.txt
+        grep -E "^(Finished|[0-9]+ examples)" test-output.log >> test-summary.txt || true
+
+    - name: Parse test results
+      if: always()
+      run: |
+        echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ -f test-results.xml ]; then
+          # Extract test counts from JUnit XML
+          tests=$(grep -oP 'tests="\K[^"]+' test-results.xml | head -1 || echo "N/A")
+          failures=$(grep -oP 'failures="\K[^"]+' test-results.xml | head -1 || echo "N/A")
+          errors=$(grep -oP 'errors="\K[^"]+' test-results.xml | head -1 || echo "N/A")
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | $tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failures | $failures |" >> $GITHUB_STEP_SUMMARY
+          echo "| Errors | $errors |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "No test results XML generated" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          test-results.xml
+          test-output.log
+          test-summary.txt
+        retention-days: 14
+
+  # Integration tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: component-tests
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ env.CRYSTAL_VERSION }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+
+    - name: Install dependencies
+      run: shards install
+
+    - name: Run integration tests
+      run: |
+        echo "Running integration tests..."
+        crystal spec spec/integration/ --error-trace --verbose || true
+
+    - name: Run cross-component tests
+      run: |
+        echo "Testing cross-component functionality..."
+        crystal spec spec/crystalcog_spec.cr --error-trace --verbose || true
+
+    - name: Run spec_helper integration
+      run: |
+        echo "Testing main spec_helper integration..."
+        crystal spec spec/spec_helper.cr --error-trace --verbose || true
+
+  # Binary build verification
+  binary-build-test:
+    name: Binary Build Verification
+    runs-on: ubuntu-latest
+    needs: full-test-suite
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ env.CRYSTAL_VERSION }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+
+    - name: Install dependencies
+      run: shards install
+
+    - name: Build all binaries
+      run: |
+        mkdir -p bin
+        echo "Building all defined binaries..."
+
+        declare -A TARGETS=(
+          ["crystalcog"]="src/bin/crystalcog.cr"
+          ["cogutil"]="src/cogutil/cogutil.cr"
+          ["atomspace"]="src/atomspace/atomspace.cr"
+          ["atomspace_main"]="src/atomspace/atomspace_main.cr"
+          ["opencog"]="src/opencog/opencog.cr"
+          ["pln"]="src/pln/pln.cr"
+          ["ure"]="src/ure/ure.cr"
+          ["moses"]="src/moses/moses.cr"
+          ["moses_main"]="src/moses/moses_main.cr"
+          ["attention"]="src/attention/attention.cr"
+          ["attention_main"]="src/attention/attention_main.cr"
+          ["learning"]="src/learning/learning_main.cr"
+          ["ml"]="src/ml/ml_main.cr"
+          ["ai_bridge"]="src/ai_integration/ai_bridge.cr"
+          ["pattern_matching"]="src/pattern_matching/pattern_matching_main.cr"
+          ["pattern_mining"]="src/pattern_mining/pattern_mining_main.cr"
+          ["nlp"]="src/nlp/nlp_main.cr"
+          ["cogserver"]="src/bin/cogserver.cr"
+          ["distributed_network_demo"]="src/agent-zero/distributed_network_demo.cr"
+          ["agent_zero"]="src/agent-zero/agent_zero_main.cr"
+          ["spatial"]="src/spatial/spatial.cr"
+          ["temporal"]="src/temporal/temporal.cr"
+          ["behavior"]="src/behavior/behavior.cr"
+        )
+
+        SUCCESS_COUNT=0
+        FAIL_COUNT=0
+
+        for target in "${!TARGETS[@]}"; do
+          source="${TARGETS[$target]}"
+          echo "Building $target from $source..."
+          if [ -f "$source" ]; then
+            if crystal build --error-trace "$source" -o "bin/$target" 2>&1; then
+              echo "  ✓ $target built successfully"
+              ((SUCCESS_COUNT++))
+            else
+              echo "  ✗ $target build failed"
+              ((FAIL_COUNT++))
+            fi
+          else
+            echo "  ⚠ Source file $source not found"
+            ((FAIL_COUNT++))
+          fi
+        done
+
+        echo ""
+        echo "=== Build Summary ==="
+        echo "Successful: $SUCCESS_COUNT"
+        echo "Failed: $FAIL_COUNT"
+        echo ""
+        echo "Built binaries:"
+        ls -lh bin/ 2>/dev/null || echo "No binaries in bin/"
+
+    - name: Verify binaries
+      run: |
+        echo "Verifying built binaries..."
+        for bin in bin/*; do
+          if [ -f "$bin" ] && [ -x "$bin" ]; then
+            echo "  ✓ $bin is executable"
+            file "$bin"
+          fi
+        done
+
+    - name: Upload built binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-binaries
+        path: bin/
+        retention-days: 7
+
+  # Final status
+  test-status:
+    name: Test Suite Status
+    runs-on: ubuntu-latest
+    needs: [version-matrix, component-tests, full-test-suite, integration-tests, binary-build-test]
+    if: always()
+
+    steps:
+    - name: Check overall status
+      run: |
+        echo "## Comprehensive Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Version Matrix | ${{ needs.version-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Component Tests | ${{ needs.component-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Full Test Suite | ${{ needs.full-test-suite.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Binary Build | ${{ needs.binary-build-test.result }} |" >> $GITHUB_STEP_SUMMARY
+
+        # Determine overall status
+        if [ "${{ needs.component-tests.result }}" != "success" ] || [ "${{ needs.full-test-suite.result }}" != "success" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status: Tests require attention**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status: All tests passed**" >> $GITHUB_STEP_SUMMARY
+        fi

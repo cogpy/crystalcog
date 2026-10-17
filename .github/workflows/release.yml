@@ -56,7 +56,7 @@ jobs:
     - name: Build release binary
       run: |
         echo "Building release binary for ${{ matrix.os }}..."
-        crystal build --release --static --no-debug src/crystalcog.cr -o ${{ matrix.binary_path }}
+        crystal build --release --no-debug src/bin/crystalcog.cr -o ${{ matrix.binary_path }}
         
         # Verify binary
         ls -lh ${{ matrix.binary_path }}
@@ -216,7 +216,7 @@ jobs:
   notify:
     name: Deployment Notification
     runs-on: ubuntu-latest
-    needs: [create-release, docker-build, publish-packages]
+    needs: [build-release, create-release, docker-build, publish-packages]
     if: always()
     
     steps:

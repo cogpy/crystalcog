@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: crystallang/crystal
+      image: crystallang/crystal:1.14.0
       options: --memory=4g --cpus=2
 
     steps:
@@ -23,13 +23,15 @@ jobs:
     - name: Install system dependencies
       run: |
         apt-get update
-        apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev || true
+        apt-get install -y libsqlite3-dev libpq-dev librocksdb-dev libevent-dev libssl-dev
     
     - name: Install dependencies
-      run: shards install
+      run: shards install --frozen
     
     - name: Run tests with error handling
+      shell: bash
       run: |
+        set -o pipefail
         echo "Running Crystal specs..."
         
         # Try normal execution first

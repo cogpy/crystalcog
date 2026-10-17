@@ -226,13 +226,19 @@ module AtomSpace
 
   # Link class - atoms that connect other atoms
   class Link < Atom
-    getter outgoing : Array(Atom)
+    @outgoing : Array(Atom)
 
-    def initialize(type : AtomType, @outgoing : Array(Atom), truth_value : TruthValue = TruthValue::DEFAULT_TV)
+    def initialize(type : AtomType, outgoing : Array(Atom), truth_value : TruthValue = TruthValue::DEFAULT_TV)
       unless type.link?
         raise ArgumentError.new("Link type expected, got #{type}")
       end
+      @outgoing = outgoing.dup
       super(type, truth_value)
+    end
+
+    # Link topology is fixed after construction; return a detached view.
+    def outgoing : Array(Atom)
+      @outgoing.dup
     end
 
     def name : String
@@ -240,84 +246,46 @@ module AtomSpace
     end
 
     def arity : Int32
-      outgoing.size
+      @outgoing.size
     end
 
-    # Cycle detection for clone — safe with cooperative concurrency (no yield
-    # points in pure computation). For -Dpreview_mt, would need fiber-local storage.
-    @@clone_visited = Set(UInt64).new
-
     def clone : Atom
-      if @@clone_visited.includes?(@handle)
-        return Link.new(type, [] of Atom, truth_value.clone)
-      end
-      @@clone_visited.add(@handle)
-      begin
-        cloned_outgoing = outgoing.map(&.clone)
-        Link.new(type, cloned_outgoing, truth_value.clone)
-      ensure
-        @@clone_visited.delete(@handle)
-      end
+      cloned_outgoing = @outgoing.map(&.clone)
+      Link.new(type, cloned_outgoing, truth_value.clone)
     end
 
     def to_s(io : IO) : Nil
-      to_s_impl(io, Set(UInt64).new)
-    end
-
-    protected def to_s_impl(io : IO, visited : Set(UInt64)) : Nil
-      if visited.includes?(@handle)
-        io << "(#{type} ...)"
-        return
-      end
-      visited.add(@handle)
       io << "(#{type}"
-      outgoing.each do |atom|
+      @outgoing.each do |atom|
         io << " "
-        if atom.is_a?(Link)
-          atom.to_s_impl(io, visited)
-        else
-          atom.to_s(io)
-        end
+        atom.to_s(io)
       end
       io << ")"
     end
 
-    # Cycle detection for content_equals? — uses Tuple to avoid hash collisions.
-    # Safe with cooperative concurrency (no yield points in pure computation).
-    @@eq_visited = Set(Tuple(UInt64, UInt64)).new
-
     def content_equals?(other : Atom) : Bool
       return false unless other.is_a?(Link)
-      return false unless outgoing.size == other.outgoing.size
+      return false unless arity == other.arity
 
-      pair_key = {self.handle, other.handle}
-      if @@eq_visited.includes?(pair_key)
-        return true
+      @outgoing.zip(other.outgoing) do |a, b|
+        return false unless a == b
       end
-      @@eq_visited.add(pair_key)
-      begin
-        outgoing.zip(other.outgoing) do |a, b|
-          return false unless a == b
-        end
-        true
-      ensure
-        @@eq_visited.delete(pair_key)
-      end
+      true
     end
 
     # Get atom at specific position
     def [](index : Int32) : Atom
-      outgoing[index]
+      @outgoing[index]
     end
 
     # Get first atom (common in binary links)
     def first : Atom
-      outgoing[0]
+      @outgoing[0]
     end
 
     # Get last atom
     def last : Atom
-      outgoing[-1]
+      @outgoing[-1]
     end
   end
 
@@ -350,6 +318,13 @@ module AtomSpace
     def initialize(value : Int32, truth_value : TruthValue = TruthValue::DEFAULT_TV)
       @value = value.to_f64
       super(AtomType::NUMBER_NODE, value.to_s, truth_value)
+    end
+
+    # Persistence must preserve the exact label: NumberNode(42) is named "42",
+    # while NumberNode(42.0) is named "42.0", despite equal numeric values.
+    def initialize(name : String, truth_value : TruthValue = TruthValue::DEFAULT_TV)
+      @value = name.to_f64
+      super(AtomType::NUMBER_NODE, name, truth_value)
     end
   end
 
@@ -439,12 +414,13 @@ module AtomSpace
     @loaded : Bool = false
     @mutex : Mutex
 
-    def initialize(type : AtomType, @outgoing_handles : Array(Handle),
+    def initialize(type : AtomType, outgoing_handles : Array(Handle),
                    truth_value : TruthValue = TruthValue::DEFAULT_TV,
                    @resolver : AtomResolver? = nil)
       unless type.link?
         raise ArgumentError.new("Link type expected, got #{type}")
       end
+      @outgoing_handles = outgoing_handles.dup
       super(type, truth_value)
       @mutex = Mutex.new
     end
@@ -456,7 +432,7 @@ module AtomSpace
 
     # Get handles without loading atoms (for serialization)
     def outgoing_handles : Array(Handle)
-      @outgoing_handles
+      @outgoing_handles.dup
     end
 
     # Check if outgoing atoms have been loaded
@@ -480,7 +456,7 @@ module AtomSpace
           load_outgoing_atoms unless @loaded
         end
       end
-      @outgoing_cache || [] of Atom
+      @outgoing_cache.try(&.dup) || [] of Atom
     end
 
     def name : String

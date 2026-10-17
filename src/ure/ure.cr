@@ -298,12 +298,14 @@ module URE
   class ForwardChainer
     @rules : Array(Rule)
     @max_iterations : Int32
-    @seen_results : Set(String)
+    # Handles of conclusions already produced. Results come back canonical from
+    # the AtomSpace, so the handle identifies the conclusion without rendering it.
+    @seen_results : Set(AtomSpace::Handle)
     MAX_APPLICATIONS_PER_RULE = 500
 
     def initialize(@atomspace : AtomSpace::AtomSpace, @max_iterations = 100)
       @rules = [] of Rule
-      @seen_results = Set(String).new
+      @seen_results = Set(AtomSpace::Handle).new
     end
 
     def add_rule(rule : Rule)
@@ -321,12 +323,12 @@ module URE
       add_rule(EvaluationTransitivityRule.new)
     end
 
-    def run : Array(AtomSpace::Atom)
+    def run(max_iterations : Int32 = @max_iterations) : Array(AtomSpace::Atom)
       @seen_results.clear
       new_atoms = [] of AtomSpace::Atom
       iterations = 0
 
-      while iterations < @max_iterations
+      while iterations < max_iterations
         step_atoms = step_forward
         break if step_atoms.empty?
 
@@ -356,15 +358,12 @@ module URE
           size_before = @atomspace.size
           result = rule.apply(premises, @atomspace)
           if result && @atomspace.size > size_before
-            key = "#{result.type}:#{result.to_s}"
-            next if @seen_results.includes?(key)
-            @seen_results.add(key)
+            next unless @seen_results.add?(result.handle)
             step_atoms << result
             CogUtil::Logger.debug("URE: Applied #{rule.name}, fitness: #{fitness}")
           elsif result
             # Already-present conclusion — mark seen so we do not reapply forever
-            key = "#{result.type}:#{result.to_s}"
-            @seen_results.add(key)
+            @seen_results.add(result.handle)
           end
         end
       end
@@ -1175,7 +1174,7 @@ module URE
     end
 
     def forward_chain(steps : Int32 = 10) : Array(AtomSpace::Atom)
-      @forward_chainer.run
+      @forward_chainer.run(steps)
     end
 
     def backward_chain(goal : AtomSpace::Atom) : Bool

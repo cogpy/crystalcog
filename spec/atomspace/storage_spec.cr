@@ -133,13 +133,13 @@ describe AtomSpace::FileStorageNode do
       storage.fetch_atom(link.handle).should eq(link)
 
       content = File.read(path)
-      content.should contain("CONCEPT_NODE")
+      content.should contain("CONCEPTNODE")
       content.should contain("\"dog\"")
-      content.should contain("INHERITANCE_LINK")
+      content.should contain("INHERITANCELINK")
 
       storage.remove_atom(link).should be_true
       storage.fetch_atom(link.handle).should be_nil
-      File.read(path).should_not contain("INHERITANCE_LINK")
+      File.read(path).should_not contain("INHERITANCELINK")
 
       stats = storage.get_stats
       stats["type"].should eq("FileStorage")

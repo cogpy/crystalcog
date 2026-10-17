@@ -32,7 +32,7 @@ development_dependencies:
 
 targets:
   crystalcog:
-    main: src/crystalcog.cr
+    main: src/bin/crystalcog.cr
 
   # Core library components
   cogutil_bin:
@@ -79,16 +79,26 @@ targets:
     
   # Server applications
   cogserver:
-    main: src/cogserver/cogserver_main.cr
+    main: src/bin/cogserver.cr
     
   # Agent-Zero distributed networks
   distributed_network_demo:
     main: src/agent-zero/distributed_network_demo.cr
     
+  # Spatial and temporal reasoning (Phase 6-7)
+  spatial:
+    main: src/spatial/spatial.cr
+
+  temporal:
+    main: src/temporal/temporal.cr
+
+  behavior:
+    main: src/behavior/behavior.cr
+
   # Command line tools
   cogshell:
-    main: src/tools/cogshell.cr
-    
+    main: src/bin/cogshell.cr
+
   profiler:
     main: tools/profiler.cr
 
@@ -97,7 +107,7 @@ targets:
     main: src/genetic_programming/genetic_programming_main.cr
 
 scripts:
-  build: crystal build src/crystalcog.cr
+  build: crystal build src/bin/crystalcog.cr
   test: crystal spec
   docs: crystal docs
-  benchmark: crystal run --release benchmarks/benchmark.cr
+  benchmark: crystal run --release benchmarks/atomspace_benchmark.cr

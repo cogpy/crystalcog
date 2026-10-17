@@ -177,7 +177,7 @@ check_crystal() {
 install_dependencies() {
     print_status "Installing Crystal dependencies..."
     if [ -f "shard.yml" ]; then
-        shards install
+        shards install --frozen
         print_success "Dependencies installed successfully"
     else
         print_warning "No shard.yml found, skipping dependency installation"
@@ -197,7 +197,7 @@ run_lint() {
     
     # Static analysis (basic)
     print_status "Running static analysis..."
-    if crystal build --no-codegen --warnings-as-errors src/crystalcog.cr 2>/dev/null; then
+    if crystal build --no-codegen --warnings-as-errors src/bin/crystalcog.cr 2>/dev/null; then
         print_success "Static analysis passed"
     else
         print_warning "Static analysis found potential issues"
@@ -211,9 +211,9 @@ build_targets() {
     # Main executable
     print_status "Building main executable..."
     # Try building with RocksDB first, fallback to disabled version
-    if ! crystal build --error-trace src/crystalcog.cr 2>/dev/null; then
+    if ! crystal build --error-trace src/bin/crystalcog.cr 2>/dev/null; then
         print_warning "Build failed, trying without RocksDB..."
-        DISABLE_ROCKSDB=1 crystal build --error-trace src/crystalcog.cr || print_error "Main build failed"
+        DISABLE_ROCKSDB=1 crystal build --error-trace src/bin/crystalcog.cr || print_error "Main build failed"
     fi
     
     # Component libraries - use new target names to avoid directory conflicts
@@ -259,21 +259,21 @@ run_unit_tests() {
         local passed=0
         
         # Find all spec files
-        for spec_file in $(find spec/ -name "*.cr" -type f | sort); do
+        for spec_file in $(find spec/ -name "*_spec.cr" -type f | sort); do
             print_status "Running: $spec_file"
             if crystal spec $spec_args --error-trace "$spec_file" 2>&1; then
                 print_success "✓ $spec_file"
-                ((passed++))
+                passed=$((passed + 1))
             else
-                print_warning "✗ $spec_file (skipped due to syntax or dependency issues)"
-                ((failed++))
+                print_error "✗ $spec_file failed"
+                failed=$((failed + 1))
             fi
         done
         
         print_status "Test results: $passed passed, $failed failed"
         
-        if [ $failed -gt $passed ]; then
-            print_error "More tests failed than passed"
+        if [ $failed -gt 0 ]; then
+            print_error "One or more spec files failed"
             return 1
         fi
     fi

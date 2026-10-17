@@ -118,12 +118,12 @@ jobs:
       run: |
         echo "Running static analysis..."
         # Check for unused variables and other issues
-        crystal build --no-codegen src/crystalcog.cr || true
+        crystal build --no-codegen src/bin/crystalcog.cr || true
 
     - name: Build main executable
       run: |
         echo "Building main Crystal executable..."
-        crystal build --error-trace src/crystalcog.cr
+        crystal build --error-trace src/bin/crystalcog.cr
 
     - name: Build all components
       run: |
@@ -149,7 +149,7 @@ jobs:
         echo "-----------------"
         
         crystal build --error-trace src/atomspace/atomspace_main.cr -o bin/atomspace_main || echo "⚠️  atomspace_main skipped"
-        crystal build --error-trace src/cogserver/cogserver_main.cr -o bin/cogserver || echo "⚠️  cogserver skipped"
+        crystal build --error-trace src/bin/cogserver.cr -o bin/cogserver || echo "⚠️  cogserver skipped"
         crystal build --error-trace src/attention/attention_main.cr -o bin/attention || echo "⚠️  attention skipped"
         crystal build --error-trace src/pattern_matching/pattern_matching_main.cr -o bin/pattern_matching || echo "⚠️  pattern_matching skipped"
         crystal build --error-trace src/pattern_mining/pattern_mining_main.cr -o bin/pattern_mining || echo "⚠️  pattern_mining skipped"

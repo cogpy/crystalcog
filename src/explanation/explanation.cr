@@ -1,4 +1,4 @@
-# Explanation Generation for CrystalCog
+# ReasoningExplanation Generation for CrystalCog
 #
 # This module implements interpretability and explanation features,
 # enabling the system to generate human-readable justifications for
@@ -12,7 +12,7 @@ require "json"
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 
-module Explanation
+module ReasoningExplanation
   VERSION = "0.1.0"
 
   class ExplanationException < Exception
@@ -118,19 +118,19 @@ module Explanation
     def to_visualization : Hash(String, JSON::Any)
       steps_json = @steps.map_with_index do |step, i|
         JSON::Any.new({
-          "id"          => JSON::Any.new(i.to_i64),
-          "type"        => JSON::Any.new(step.step_type.to_s),
-          "premise"     => JSON::Any.new(step.premise),
-          "conclusion"  => JSON::Any.new(step.conclusion),
-          "confidence"  => JSON::Any.new(step.confidence),
-          "rule"        => JSON::Any.new(step.rule_applied),
+          "id"         => JSON::Any.new(i.to_i64),
+          "type"       => JSON::Any.new(step.step_type.to_s),
+          "premise"    => JSON::Any.new(step.premise),
+          "conclusion" => JSON::Any.new(step.conclusion),
+          "confidence" => JSON::Any.new(step.confidence),
+          "rule"       => JSON::Any.new(step.rule_applied),
         } of String => JSON::Any)
       end
       {
-        "conclusion"          => JSON::Any.new(@conclusion),
-        "overall_confidence"  => JSON::Any.new(@overall_confidence),
-        "depth"               => JSON::Any.new(@steps.size.to_i64),
-        "steps"               => JSON::Any.new(steps_json),
+        "conclusion"         => JSON::Any.new(@conclusion),
+        "overall_confidence" => JSON::Any.new(@overall_confidence),
+        "depth"              => JSON::Any.new(@steps.size.to_i64),
+        "steps"              => JSON::Any.new(steps_json),
       } of String => JSON::Any
     end
 
@@ -201,8 +201,8 @@ module Explanation
                     "well-calibrated"
                   end
       "Predicted confidence #{(conf * 100).round(1)}% is #{direction}: " \
-        "historical accuracy in this range is #{(accuracy * 100).round(1)}% " \
-        "(n=#{total}, ECE=#{(ece * 100).round(2)}%)."
+      "historical accuracy in this range is #{(accuracy * 100).round(1)}% " \
+      "(n=#{total}, ECE=#{(ece * 100).round(2)}%)."
     end
 
     private def find_bin(conf : Float64) : Int32
@@ -353,9 +353,9 @@ module Explanation
     end
   end
 
-  # Initialize Explanation subsystem
+  # Initialize ReasoningExplanation subsystem
   def self.initialize
-    CogUtil::Logger.info("Initializing Explanation subsystem...")
-    CogUtil::Logger.info("Explanation subsystem initialized successfully")
+    CogUtil::Logger.info("Initializing ReasoningExplanation subsystem...")
+    CogUtil::Logger.info("ReasoningExplanation subsystem initialized successfully")
   end
 end

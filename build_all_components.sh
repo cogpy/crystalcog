@@ -44,7 +44,7 @@ build_component() {
 # Build main application
 echo "Main Application:"
 echo "-----------------"
-build_component "src/crystalcog.cr" "crystalcog" "crystalcog"
+build_component "src/bin/crystalcog.cr" "crystalcog" "crystalcog"
 echo ""
 
 # Build core libraries
@@ -61,7 +61,7 @@ echo ""
 echo "Main Executables:"
 echo "-----------------"
 build_component "src/atomspace/atomspace_main.cr" "bin/atomspace_main" "atomspace_main"
-build_component "src/cogserver/cogserver_main.cr" "bin/cogserver" "cogserver"
+build_component "src/bin/cogserver.cr" "bin/cogserver" "cogserver"
 build_component "src/attention/attention_main.cr" "bin/attention" "attention"
 build_component "src/pattern_matching/pattern_matching_main.cr" "bin/pattern_matching" "pattern_matching"
 build_component "src/pattern_mining/pattern_mining_main.cr" "bin/pattern_mining" "pattern_mining"

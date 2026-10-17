@@ -12,6 +12,7 @@
 
 require "./atom"
 require "./truthvalue"
+require "./scheme_storage_parser"
 require "../cogutil/cogutil"
 require "../rocksdb"
 
@@ -211,11 +212,11 @@ module AtomSpace
         # Test write access
         File.touch(@file_path) unless File.exists?(@file_path)
 
-        @connected = true
-
-        # Build index from existing file
+        # Validate the entire document before exposing a connected store. A bad
+        # file must not leave a silently partial in-memory index behind.
         rebuild_index
 
+        @connected = true
         log_info("Opened file storage: #{@file_path}")
         true
       rescue ex
@@ -240,11 +241,16 @@ module AtomSpace
       return false unless @connected
 
       begin
-        File.open(@file_path, "a") do |file|
-          file.puts(atom_to_scheme(atom))
-        end
+        # Appending a revision would leave conflicting copies on reopening.
+        # Replace the logical atom in a complete, validated persistence image.
+        topology_key = atom_topology_key(atom)
+        atoms = @atom_index.values.reject { |stored| atom_topology_key(stored) == topology_key }
+        atoms << atom
+        validate_snapshot_consistency(atoms)
+        write_atoms(atoms)
 
         # Update index
+        @atom_index.reject! { |_, stored| atom_topology_key(stored) == topology_key }
         @atom_index[atom.handle] = atom
 
         log_debug("Stored atom: #{atom}")
@@ -266,13 +272,9 @@ module AtomSpace
       return false unless @connected
 
       begin
-        # Remove from index
+        remaining = @atom_index.values.reject { |stored| stored.handle == atom.handle }
+        write_atoms(remaining)
         @atom_index.delete(atom.handle)
-
-        # Rewrite file with remaining atoms
-        File.open(@file_path, "w") do |file|
-          @atom_index.each_value { |a| file.puts(atom_to_scheme(a)) }
-        end
 
         log_debug("Removed atom: #{atom}")
         true
@@ -286,15 +288,12 @@ module AtomSpace
       return false unless @connected
 
       begin
-        # Clear and rebuild index
+        atoms = atomspace.get_all_atoms
+        # Render before replacing the current file so unsupported metadata cannot
+        # turn a failed store into a truncated persistence file.
+        write_atoms(atoms)
         @atom_index.clear
-
-        File.open(@file_path, "w") do |file|
-          atomspace.get_all_atoms.each do |atom|
-            file.puts(atom_to_scheme(atom))
-            @atom_index[atom.handle] = atom
-          end
-        end
+        atoms.each { |atom| @atom_index[atom.handle] = atom }
 
         log_info("Stored AtomSpace (#{atomspace.size} atoms) to: #{@file_path}")
         true
@@ -308,21 +307,20 @@ module AtomSpace
       return false unless @connected
 
       begin
-        return true unless File.exists?(@file_path)
+        # Parsing is a complete, detached phase. Do not call AtomSpace#add_atom
+        # until every expression has been validated, avoiding partial mutation on
+        # malformed input.
+        parsed_atoms = parse_file
+        validate_snapshot_consistency(parsed_atoms)
+        canonical_atoms = Hash(String, Atom).new
+        loaded_atoms = parsed_atoms.map { |atom| canonicalize_atom(atom, atomspace, canonical_atoms) }
 
-        count = 0
-        File.each_line(@file_path) do |line|
-          line = line.strip
-          next if line.empty? || line.starts_with?(';')
+        # `fetch_atom` should return the canonical instances made visible by this
+        # load, not the transient parser graph.
+        @atom_index.clear
+        canonical_atoms.each_value { |atom| @atom_index[atom.handle] = atom }
 
-          atom = scheme_to_atom(line)
-          if atom
-            atomspace.add_atom(atom)
-            count += 1
-          end
-        end
-
-        log_info("Loaded #{count} atoms from: #{@file_path}")
+        log_info("Loaded #{loaded_atoms.size} root atoms from: #{@file_path}")
         true
       rescue ex
         log_error("Failed to load AtomSpace: #{ex.message}")
@@ -347,96 +345,207 @@ module AtomSpace
       stats
     end
 
-    # Convert atom to Scheme s-expression format
-    private def atom_to_scheme(atom : Atom) : String
-      case atom
-      when Node
-        tv_str = atom.truth_value == TruthValue::DEFAULT_TV ? "" : " #{atom.truth_value}"
-        "(#{atom.type.to_s} \"#{atom.name}\"#{tv_str})"
-      when Link
-        outgoing_str = atom.outgoing.map { |a| atom_to_scheme(a) }.join(" ")
-        tv_str = atom.truth_value == TruthValue::DEFAULT_TV ? "" : " #{atom.truth_value}"
-        "(#{atom.type.to_s} #{outgoing_str}#{tv_str})"
+    # Serialize a complete recursive atom expression. Each top-level AtomSpace
+    # atom is also written independently, so a reader can rebuild an index while
+    # nested expressions retain graph topology for a standalone round trip.
+    private def atom_to_scheme(atom : Atom, depth : Int32 = 1) : String
+      if depth > SchemeStorageParser::MAX_NESTING
+        raise ArgumentError.new("FileStorage atom nesting exceeds #{SchemeStorageParser::MAX_NESTING}")
+      end
+
+      if atom.is_a?(Node)
+        if atom.type == AtomType::NUMBER_NODE
+          number = atom.name.to_f64?
+          unless number && number.finite?
+            raise ArgumentError.new("FileStorage NumberNode must contain a finite number")
+          end
+        end
+        "(#{atom.type} \"#{escape_scheme_string(atom.name)}\"#{atom_metadata_to_scheme(atom)})"
+      elsif atom.link?
+        outgoing = atom.outgoing.map { |child| atom_to_scheme(child, depth + 1) }.join(" ")
+        body = outgoing.empty? ? atom.type.to_s : "#{atom.type} #{outgoing}"
+        "(#{body}#{atom_metadata_to_scheme(atom)})"
       else
-        atom.to_s
+        raise ArgumentError.new("FileStorage cannot serialize unsupported atom #{atom}")
       end
     end
 
-    # Convert Scheme s-expression to atom (simplified parser)
-    private def scheme_to_atom(scheme : String) : Atom?
-      # This is a simplified parser - in practice, we'd use a proper S-expression parser
-      scheme = scheme.strip
-      return nil unless scheme.starts_with?('(') && scheme.ends_with?(')')
+    private def atom_metadata_to_scheme(atom : Atom) : String
+      metadata = [] of String
+      truth_value = atom.truth_value
+      metadata << truth_value_to_scheme(truth_value) unless default_simple_truth_value?(truth_value)
 
-      # Remove outer parentheses
-      content = scheme[1..-2].strip
+      if attention = atom.attention_value
+        metadata << "(av #{attention.sti} #{attention.lti} #{attention.vlti})"
+      end
 
-      # Split on first space to get type
-      parts = content.split(' ', 2)
-      return nil if parts.empty?
+      metadata.empty? ? "" : " #{metadata.join(" ")}"
+    end
 
-      begin
-        type = AtomType.parse(parts[0])
+    # Do not rely on TruthValue#== here: some subclasses carry fields beyond
+    # strength/confidence. Omitting their tag would silently erase that metadata.
+    private def default_simple_truth_value?(truth_value : TruthValue) : Bool
+      truth_value.is_a?(SimpleTruthValue) && !truth_value.is_a?(FuzzyTruthValue) &&
+        truth_value.strength == 1.0 && truth_value.confidence == 0.0
+    end
 
-        if type.node?
-          # Parse node: (TYPE "name" [truth_value])
-          if parts.size >= 2
-            name_part = parts[1].strip
-            # <<<<<<< copilot/fix-56
-            if name_part.starts_with?('"') && name_part[1..].includes?('"')
-              # =======
-              #            if name_part.starts_with?('"') && name_part[1..].includes?("\"")
-              # >>>>>>> main
-              quote_end = name_part.index('"', 1)
-              if quote_end
-                name = name_part[1...quote_end]
-                return Node.new(type, name)
-              end
+    private def truth_value_to_scheme(truth_value : TruthValue) : String
+      if (truth_value.is_a?(CountTruthValue) && !truth_value.count.finite?) ||
+         (truth_value.is_a?(FuzzyTruthValue) && !truth_value.uncertainty.finite?)
+        raise ArgumentError.new("FileStorage truth metadata must contain finite numbers")
+      end
+
+      case truth_value
+      when FuzzyTruthValue
+        "(tv FuzzyTruthValue #{truth_value.strength} #{truth_value.confidence} #{truth_value.uncertainty})"
+      when CountTruthValue
+        "(tv CountTruthValue #{truth_value.strength} #{truth_value.confidence} #{truth_value.count})"
+      when IndefiniteTruthValue
+        "(tv IndefiniteTruthValue #{truth_value.lower} #{truth_value.upper} #{truth_value.confidence})"
+      when SimpleTruthValue
+        "(tv SimpleTruthValue #{truth_value.strength} #{truth_value.confidence})"
+      else
+        raise ArgumentError.new("FileStorage cannot serialize truth value #{truth_value.type_name}")
+      end
+    end
+
+    private def escape_scheme_string(value : String) : String
+      String.build do |io|
+        value.each_char do |char|
+          case char
+          when '"'
+            io << "\\\""
+          when '\\'
+            io << "\\\\"
+          when '\n'
+            io << "\\n"
+          when '\r'
+            io << "\\r"
+          when '\t'
+            io << "\\t"
+          when '\b'
+            io << "\\b"
+          when '\f'
+            io << "\\f"
+          else
+            if char.ord < 0x20
+              io << "\\u" << char.ord.to_s(16).rjust(4, '0')
+            else
+              io << char
             end
           end
-        else
-          # Parse link: (TYPE atom1 atom2 ... [truth_value])
-          # This would require recursive parsing - simplified for now
-          return Link.new(type, [] of Atom)
         end
-      rescue
-        return nil
       end
-
-      nil
     end
 
-    # Load all atoms from file
-    private def load_all_atoms : Array(Atom)
-      atoms = [] of Atom
-      return atoms unless File.exists?(@file_path)
-
-      File.each_line(@file_path) do |line|
-        line = line.strip
-        next if line.empty? || line.starts_with?(';')
-
-        atom = scheme_to_atom(line)
-        atoms << atom if atom
+    # Parse first and only then insert. The parser creates detached Atom objects;
+    # this method recursively replaces every child with AtomSpace#add_atom's
+    # canonical object, preserving sharing, outgoing order, and incoming indexes.
+    # A snapshot writes both a top-level atom and nested copies of that atom, so
+    # cache by topology to guarantee its persisted truth value is inserted once.
+    private def canonicalize_atom(atom : Atom, atomspace : AtomSpace,
+                                  canonical_atoms : Hash(String, Atom)) : Atom
+      topology_key = atom_topology_key(atom)
+      if cached = canonical_atoms[topology_key]?
+        return cached
       end
 
-      atoms
+      case atom
+      when Node
+        canonical = atomspace.add_atom(atom)
+        canonical.attention_value = atom.attention_value if atom.attention_value
+        canonical_atoms[topology_key] = canonical
+        canonical
+      when Link
+        outgoing = atom.outgoing.map { |child| canonicalize_atom(child, atomspace, canonical_atoms) }
+        candidate = Link.new(atom.type, outgoing, atom.truth_value)
+        candidate.attention_value = atom.attention_value
+        canonical = atomspace.add_atom(candidate)
+        canonical.attention_value = atom.attention_value if atom.attention_value
+        canonical_atoms[topology_key] = canonical
+        canonical
+      else
+        raise ArgumentError.new("FileStorage cannot load unsupported atom #{atom}")
+      end
     end
 
-    # Rebuild the in-memory index from file
+    # A well-formed AtomSpace snapshot may repeat a topology recursively, but it
+    # must repeat its metadata exactly. Reject conflicts before insertion instead
+    # of passing two values through AtomSpace's merge policy and changing either.
+    private def validate_snapshot_consistency(atoms : Array(Atom))
+      metadata_by_topology = Hash(String, String).new
+      atoms.each { |atom| validate_atom_metadata(atom, metadata_by_topology) }
+    end
+
+    private def validate_atom_metadata(atom : Atom, metadata_by_topology : Hash(String, String))
+      topology_key = atom_topology_key(atom)
+      metadata = atom_metadata_to_scheme(atom)
+
+      if existing_metadata = metadata_by_topology[topology_key]?
+        unless existing_metadata == metadata
+          raise SchemeStorageParseError.new("conflicting metadata for persisted #{atom.type}")
+        end
+      else
+        metadata_by_topology[topology_key] = metadata
+      end
+
+      atom.outgoing.each { |child| validate_atom_metadata(child, metadata_by_topology) } if atom.link?
+    end
+
+    private def atom_topology_key(atom : Atom, depth : Int32 = 1) : String
+      if depth > SchemeStorageParser::MAX_NESTING
+        raise ArgumentError.new("FileStorage atom nesting exceeds #{SchemeStorageParser::MAX_NESTING}")
+      end
+
+      if atom.is_a?(Node)
+        name = atom.name
+        "node:#{atom.type}:#{name.bytesize}:#{name}"
+      elsif atom.link?
+        String.build do |io|
+          io << "link:" << atom.type << ':'
+          atom.outgoing.each do |child|
+            key = atom_topology_key(child, depth + 1)
+            io << key.bytesize << ':' << key
+          end
+        end
+      else
+        raise ArgumentError.new("FileStorage cannot key unsupported atom #{atom}")
+      end
+    end
+
+    private def parse_file : Array(Atom)
+      return [] of Atom unless File.exists?(@file_path)
+      SchemeStorageParser.new(File.read(@file_path)).parse_document
+    end
+
+    # Render all expressions before swapping the file, so failed serialization
+    # leaves the previous persistence image intact.
+    private def write_atoms(atoms : Array(Atom))
+      validate_snapshot_consistency(atoms)
+      lines = atoms.map { |atom| atom_to_scheme(atom) }
+      temporary_path = "#{@file_path}.tmp-#{Process.pid}"
+      content = lines.join("\n")
+      content += "\n" unless content.empty?
+
+      begin
+        File.write(temporary_path, content)
+        File.rename(temporary_path, @file_path)
+      ensure
+        File.delete(temporary_path) if File.exists?(temporary_path)
+      end
+    end
+
+    # Rebuild the storage-local index from a validated complete document. Handles
+    # are process-local, so these entries are suitable for this open instance;
+    # `load_atomspace` refreshes the index with target AtomSpace canonical atoms.
     private def rebuild_index
+      atoms = parse_file
+      validate_snapshot_consistency(atoms)
+      transient_space = AtomSpace.new
+      canonical_atoms = Hash(String, Atom).new
+      atoms.each { |atom| canonicalize_atom(atom, transient_space, canonical_atoms) }
       @atom_index.clear
-      return unless File.exists?(@file_path)
-
-      File.each_line(@file_path) do |line|
-        line = line.strip
-        next if line.empty? || line.starts_with?(';')
-
-        atom = scheme_to_atom(line)
-        if atom
-          @atom_index[atom.handle] = atom
-        end
-      end
-
+      canonical_atoms.each_value { |atom| @atom_index[atom.handle] = atom }
       log_debug("Rebuilt index with #{@atom_index.size} atoms")
     end
   end

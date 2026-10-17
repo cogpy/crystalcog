@@ -1,4 +1,4 @@
-# Temporal Reasoning for CrystalCog
+# TemporalReasoning Reasoning for CrystalCog
 #
 # This module implements temporal logic and event processing,
 # enabling agents to reason about time, sequences, and causal relationships.
@@ -10,7 +10,7 @@
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 
-module Temporal
+module TemporalReasoning
   VERSION = "0.1.0"
 
   class TemporalException < Exception
@@ -406,7 +406,7 @@ module Temporal
         chain = [event]
         remaining = @events[(i + 1)..]
         remaining.each do |next_event|
-          rel = Temporal.allen_relation(chain.last.interval, next_event.interval)
+          rel = TemporalReasoning.allen_relation(chain.last.interval, next_event.interval)
           # Include MEETS (direct adjacency) and BEFORE (temporal sequence)
           if rel == IntervalRelation::MEETS || rel == IntervalRelation::BEFORE
             chain << next_event
@@ -444,7 +444,7 @@ module Temporal
 
       @events.each_with_index do |e1, i|
         @events[(i + 1)..].each do |e2|
-          rel = Temporal.allen_relation(e1.interval, e2.interval)
+          rel = TemporalReasoning.allen_relation(e1.interval, e2.interval)
           if rel == IntervalRelation::BEFORE || rel == IntervalRelation::MEETS
             pair_counts[{e1.name, e2.name}] += 1
           end
@@ -480,7 +480,7 @@ module Temporal
       # Add temporal relations between consecutive events
       @events.each_with_index do |e1, i|
         (@events[(i + 1)..]).each do |e2|
-          rel = Temporal.allen_relation(e1.interval, e2.interval)
+          rel = TemporalReasoning.allen_relation(e1.interval, e2.interval)
           n1 = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, "event_#{e1.name}")
           n2 = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, "event_#{e2.name}")
           pred = atomspace.add_node(AtomSpace::AtomType::PREDICATE_NODE, rel.to_s.downcase)
@@ -504,7 +504,7 @@ module Temporal
     end
   end
 
-  # Temporal planner using Allen relations and event-calculus fluents
+  # TemporalReasoning planner using Allen relations and event-calculus fluents
   class TemporalPlanner
     getter timeline : Timeline
     getter actions : Hash(String, PlanStep)
@@ -550,7 +550,7 @@ module Temporal
       candidates.each do |step|
         # Skip if overlaps an already selected step incompatibly
         conflicts = selected.any? do |prev|
-          rel = Temporal.allen_relation(prev.interval, step.interval)
+          rel = TemporalReasoning.allen_relation(prev.interval, step.interval)
           rel == IntervalRelation::OVERLAPS ||
             rel == IntervalRelation::OVERLAPPED_BY ||
             rel == IntervalRelation::CONTAINS ||
@@ -625,7 +625,7 @@ module Temporal
           e1 = @sorted_events[i]
           e2 = @sorted_events[j]
           # Early exit: if e1 is fully before e2 start with gap and we want non-before, skip deeper when sorted
-          if Temporal.allen_relation(e1.interval, e2.interval) == rel
+          if TemporalReasoning.allen_relation(e1.interval, e2.interval) == rel
             pairs << {e1, e2}
           end
         end
@@ -639,9 +639,9 @@ module Temporal
     end
   end
 
-  # Initialize Temporal subsystem
+  # Initialize TemporalReasoning subsystem
   def self.initialize
-    CogUtil::Logger.info("Initializing Temporal subsystem...")
-    CogUtil::Logger.info("Temporal subsystem initialized successfully")
+    CogUtil::Logger.info("Initializing TemporalReasoning subsystem...")
+    CogUtil::Logger.info("TemporalReasoning subsystem initialized successfully")
   end
 end

@@ -117,11 +117,20 @@ describe PLN::HigherOrderRule do
 end
 
 describe "PLNEngine with advanced rules" do
-  it "includes advanced rules by default" do
+  it "reasons with the opt-in advanced rule set" do
     atomspace = AtomSpace::AtomSpace.new
-    engine = PLN.create_engine(atomspace)
-    # Smoke test: reason without crashing
+    a = atomspace.add_concept_node("a")
+    b = atomspace.add_concept_node("b")
+    c = atomspace.add_concept_node("c")
+    ab = atomspace.add_inheritance_link(a, b)
+    bc = atomspace.add_inheritance_link(b, c)
+    atomspace.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [ab, bc],
+      AtomSpace::SimpleTruthValue.new(0.8, 0.8))
+    engine = PLN.create_advanced_engine(atomspace)
     results = engine.reason(2)
     results.should be_a(Array(AtomSpace::Atom))
+    atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK).any? do |link|
+      link.as(AtomSpace::Link).outgoing == [a, c]
+    end.should be_true
   end
 end

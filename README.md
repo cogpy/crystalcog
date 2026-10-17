@@ -99,7 +99,7 @@ The test runner script provides comprehensive testing capabilities with automati
 
 ```bash
 # Build main executable
-crystal build src/crystalcog.cr
+crystal build src/bin/crystalcog.cr
 
 # Build specific components
 crystal build src/cogutil/cogutil.cr
@@ -146,7 +146,7 @@ The CogServer includes a comprehensive integration test that validates all netwo
 
 ```bash
 # Build the CogServer
-crystal build src/cogserver/cogserver_main.cr -o cogserver_bin
+crystal build src/bin/cogserver.cr -o cogserver_bin
 
 # Start CogServer for testing
 crystal run examples/tests/start_test_cogserver.cr &
@@ -426,7 +426,7 @@ export DISABLE_ROCKSDB=1
 
 # Or for individual commands:
 DISABLE_ROCKSDB=1 crystal spec spec/atomspace/
-DISABLE_ROCKSDB=1 crystal build src/crystalcog.cr
+DISABLE_ROCKSDB=1 crystal build src/bin/crystalcog.cr
 ```
 
 RocksDB is an optional high-performance storage backend. The system will use SQLite and PostgreSQL backends when RocksDB is disabled.

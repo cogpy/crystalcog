@@ -575,6 +575,9 @@ describe "CrystalCog Integration Scenarios" do
       }.to_a
 
       puts "Large operation: created #{atomspace.size} atoms"
+      # Insertion returns existing canonical atoms for duplicate relationships.
+      expected_handles = large_set.map(&.handle).to_set
+      atomspace.size.should eq(expected_handles.size)
 
       # Verify all atoms are accessible
       all_atoms = atomspace.get_all_atoms
@@ -603,7 +606,8 @@ describe "CrystalCog Integration Scenarios" do
       puts "Large-scale reasoning: #{new_atoms.size} new atoms in #{duration.total_seconds.round(2)}s"
 
       # Should complete without corruption
-      atomspace.size.should be >= 700
+      expected_handles.each { |handle| atomspace.get_atom(handle).should_not be_nil }
+      atomspace.size.should be >= expected_handles.size
     end
   end
 

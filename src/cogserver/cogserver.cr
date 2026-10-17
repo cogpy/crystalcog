@@ -167,7 +167,7 @@ module CogServer
       when "atomspace"
         "AtomSpace: #{@atomspace.size} atoms (#{@atomspace.node_count} nodes, #{@atomspace.link_count} links)"
       when "list"
-        atoms = @atomspace.get_atoms_by_type(AtomSpace::AtomType::ATOM)
+        atoms = @atomspace.get_all_atoms
         if atoms.empty?
           "AtomSpace is empty"
         else
@@ -321,7 +321,7 @@ module CogServer
     private def handle_atomspace_request(context)
       case context.request.method
       when "GET"
-        atoms = @atomspace.get_atoms_by_type(AtomSpace::AtomType::ATOM)
+        atoms = @atomspace.get_all_atoms
         response = {
           "size"  => @atomspace.size,
           "nodes" => @atomspace.node_count,
@@ -351,16 +351,17 @@ module CogServer
                     [] of AtomSpace::Atom
                   end
                 else
-                  @atomspace.get_atoms_by_type(AtomSpace::AtomType::ATOM)
+                  @atomspace.get_all_atoms
                 end
 
         response = {
           "count" => atoms.size,
           "atoms" => atoms.map { |atom|
             {
+              "handle"      => atom.handle,
               "type"        => atom.type.to_s,
-              "name"        => atom.responds_to?(:name) ? atom.name : nil,
-              "outgoing"    => atom.responds_to?(:outgoing) ? atom.outgoing.map(&.to_s) : nil,
+              "name"        => atom.node? ? atom.name : nil,
+              "outgoing"    => atom.link? ? atom.outgoing.map(&.handle) : nil,
               "truth_value" => {
                 "strength"   => atom.truth_value.strength,
                 "confidence" => atom.truth_value.confidence,
@@ -393,17 +394,25 @@ module CogServer
         if atom_type.node?
           name = data["name"].as_s
           atom = @atomspace.add_node(atom_type, name)
-        else
+        elsif atom_type.link?
           outgoing_data = data["outgoing"].as_a
-          # This is simplified - would need proper atom resolution
-          outgoing = [] of AtomSpace::Atom
+          # Resolve every target before mutating the graph. Invalid handles must
+          # not silently turn a submitted relationship into an empty link.
+          outgoing = outgoing_data.map do |value|
+            handle = value.as_i64.to_u64
+            @atomspace.get_atom(handle) || raise ArgumentError.new("Unknown outgoing handle: #{handle}")
+          end
           atom = @atomspace.add_link(atom_type, outgoing)
+        else
+          raise ArgumentError.new("Expected a concrete node or link type")
         end
 
         response = {
           "success" => true,
           "atom"    => {
+            "handle" => atom.handle,
             "type"   => atom.type.to_s,
+            "name"   => atom.name,
             "string" => atom.to_s,
           },
         }

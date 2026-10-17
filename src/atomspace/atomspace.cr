@@ -7,6 +7,7 @@ require "./truthvalue"
 require "./atom"
 require "./storage"
 require "../cogutil/cogutil"
+require "deque"
 
 module AtomSpace
   # Events emitted by AtomSpace for observers
@@ -27,9 +28,12 @@ module AtomSpace
     @atoms_by_type : Hash(AtomType, Set(Atom))
     @atoms_by_name : Hash(String, Set(Atom))            # For nodes
     @atoms_by_outgoing : Hash(Array(Handle), Set(Atom)) # For links
+    @incoming_by_handle : Hash(Handle, Set(Handle))     # Reverse adjacency
 
     # Event system
     @observers : Array(AtomSpaceSignal)
+    @event_queue : Deque(Tuple(AtomSpaceEvent, Atom, Array(AtomSpaceSignal)))
+    @dispatching_events : Bool = false
 
     # Thread safety
     @mutex : Mutex
@@ -47,7 +51,9 @@ module AtomSpace
       @atoms_by_type = Hash(AtomType, Set(Atom)).new
       @atoms_by_name = Hash(String, Set(Atom)).new
       @atoms_by_outgoing = Hash(Array(Handle), Set(Atom)).new
+      @incoming_by_handle = Hash(Handle, Set(Handle)).new
       @observers = Array(AtomSpaceSignal).new
+      @event_queue = Deque(Tuple(AtomSpaceEvent, Atom, Array(AtomSpaceSignal))).new
       @mutex = Mutex.new
       @atom_count = 0_u64
       @node_count = 0_u64
@@ -59,7 +65,7 @@ module AtomSpace
 
     # Add an atom to the AtomSpace
     def add_atom(atom : Atom) : Atom
-      @mutex.synchronize do
+      result = @mutex.synchronize do
         # Check if atom already exists
         existing = find_existing_atom(atom)
         if existing
@@ -67,45 +73,55 @@ module AtomSpace
           if existing.truth_value != atom.truth_value
             merged_tv = existing.truth_value.merge(atom.truth_value)
             existing.truth_value = merged_tv
-            emit_event(AtomSpaceEvent::TRUTH_VALUE_CHANGED, existing)
+            enqueue_event(AtomSpaceEvent::TRUTH_VALUE_CHANGED, existing)
           end
-          return existing
-        end
-
-        # Add new atom
-        @atoms_by_handle[atom.handle] = atom
-
-        # Index by type
-        type_set = @atoms_by_type[atom.type]? || Set(Atom).new
-        type_set.add(atom)
-        @atoms_by_type[atom.type] = type_set
-
-        # Index nodes by name
-        if atom.is_a?(Node)
-          name_set = @atoms_by_name[atom.name]? || Set(Atom).new
-          name_set.add(atom)
-          @atoms_by_name[atom.name] = name_set
-        end
-
-        # Index links by outgoing set
-        if atom.is_a?(Link)
-          outgoing_handles = atom.outgoing.map(&.handle)
-          outgoing_set = @atoms_by_outgoing[outgoing_handles]? || Set(Atom).new
-          outgoing_set.add(atom)
-          @atoms_by_outgoing[outgoing_handles] = outgoing_set
-        end
-
-        # Update statistics
-        @atom_count += 1
-        if atom.node?
-          @node_count += 1
+          existing
         else
-          @link_count += 1
-        end
+          # Add new atom
+          @atoms_by_handle[atom.handle] = atom
 
-        emit_event(AtomSpaceEvent::ATOM_ADDED, atom)
-        atom
+          # Index by type
+          type_set = @atoms_by_type[atom.type]? || Set(Atom).new
+          type_set.add(atom)
+          @atoms_by_type[atom.type] = type_set
+
+          # Index nodes by name
+          if atom.is_a?(Node)
+            name_set = @atoms_by_name[atom.name]? || Set(Atom).new
+            name_set.add(atom)
+            @atoms_by_name[atom.name] = name_set
+          end
+
+          # Lazy links are indexed by handles without resolving their targets.
+          if atom.link?
+            outgoing_handles = link_handles(atom)
+            outgoing_set = @atoms_by_outgoing[outgoing_handles]? || Set(Atom).new
+            outgoing_set.add(atom)
+            @atoms_by_outgoing[outgoing_handles] = outgoing_set
+            outgoing_handles.each do |handle|
+              incoming = @incoming_by_handle[handle] ||= Set(Handle).new
+              incoming.add(atom.handle)
+            end
+          end
+
+          # Update statistics
+          @atom_count += 1
+          if atom.node?
+            @node_count += 1
+          else
+            @link_count += 1
+          end
+
+          enqueue_event(AtomSpaceEvent::ATOM_ADDED, atom)
+          atom
+        end
       end
+      dispatch_events
+      result
+    end
+
+    private def link_handles(atom : Atom) : Array(Handle)
+      atom.is_a?(LazyLink) ? atom.outgoing_handles.dup : atom.outgoing.map(&.handle)
     end
 
     # Find existing atom with same content
@@ -116,8 +132,8 @@ module AtomSpace
         return nil unless name_set
 
         name_set.find { |existing| existing.type == atom.type }
-      when Link
-        outgoing_handles = atom.outgoing.map(&.handle)
+      when Link, LazyLink
+        outgoing_handles = link_handles(atom)
         outgoing_set = @atoms_by_outgoing[outgoing_handles]?
         return nil unless outgoing_set
 
@@ -129,7 +145,7 @@ module AtomSpace
 
     # Remove atom from AtomSpace
     def remove_atom(atom : Atom) : Bool
-      @mutex.synchronize do
+      removed = @mutex.synchronize do
         return false unless @atoms_by_handle.has_key?(atom.handle)
 
         # Check if atom has incoming links
@@ -153,11 +169,17 @@ module AtomSpace
           end
         end
 
-        if atom.is_a?(Link)
-          outgoing_handles = atom.outgoing.map(&.handle)
+        if atom.link?
+          outgoing_handles = link_handles(atom)
           if outgoing_set = @atoms_by_outgoing[outgoing_handles]?
             outgoing_set.delete(atom)
             @atoms_by_outgoing.delete(outgoing_handles) if outgoing_set.empty?
+          end
+          outgoing_handles.each do |handle|
+            if incoming = @incoming_by_handle[handle]?
+              incoming.delete(atom.handle)
+              @incoming_by_handle.delete(handle) if incoming.empty?
+            end
           end
         end
 
@@ -169,17 +191,16 @@ module AtomSpace
           @link_count -= 1
         end
 
-        emit_event(AtomSpaceEvent::ATOM_REMOVED, atom)
+        enqueue_event(AtomSpaceEvent::ATOM_REMOVED, atom)
         true
       end
+      dispatch_events if removed
+      removed
     end
 
     # Check if atom has incoming links
     private def has_incoming_links?(atom : Atom) : Bool
-      @atoms_by_outgoing.each do |outgoing_handles, link_set|
-        return true if outgoing_handles.includes?(atom.handle)
-      end
-      false
+      @incoming_by_handle.has_key?(atom.handle)
     end
 
     # Get atom by handle
@@ -260,6 +281,7 @@ module AtomSpace
         @atoms_by_type.clear
         @atoms_by_name.clear
         @atoms_by_outgoing.clear
+        @incoming_by_handle.clear
         @atom_count = 0_u64
         @node_count = 0_u64
         @link_count = 0_u64
@@ -275,8 +297,26 @@ module AtomSpace
     end
 
     def add_link(type : AtomType, outgoing : Array(Atom), tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
-      link = Link.new(type, outgoing, tv)
-      add_atom(link)
+      # Reasoning often proposes an existing relationship. Reuse it before
+      # allocating a Link/handle, but preserve add_atom's exact merge semantics.
+      existing = @mutex.synchronize do
+        outgoing_set = @atoms_by_outgoing[outgoing.map(&.handle)]?
+        canonical = outgoing_set.try(&.find { |atom| atom.type == type })
+        if canonical && canonical.truth_value != tv
+          canonical.truth_value = canonical.truth_value.merge(tv)
+          enqueue_event(AtomSpaceEvent::TRUTH_VALUE_CHANGED, canonical)
+        end
+        canonical
+      end
+
+      if existing
+        dispatch_events
+        existing
+      else
+        # A concurrent insertion after the lookup is still deduplicated by
+        # add_atom under its mutation lock.
+        add_atom(Link.new(type, outgoing, tv))
+      end
     end
 
     # Specific atom creation methods
@@ -349,34 +389,56 @@ module AtomSpace
 
     # Event system
     def add_observer(observer : AtomSpaceSignal)
-      @observers << observer
+      @mutex.synchronize { @observers << observer }
     end
 
     def remove_observer(observer : AtomSpaceSignal)
-      @observers.delete(observer)
+      @mutex.synchronize { @observers.delete(observer) }
     end
 
-    private def emit_event(event : AtomSpaceEvent, atom : Atom)
-      @observers.each do |observer|
-        begin
-          observer.call(event, atom)
-        rescue ex
-          CogUtil::Logger.error("Error in AtomSpace observer: #{ex}")
+    # Called under the mutation lock, preserving commit order and registration.
+    private def enqueue_event(event : AtomSpaceEvent, atom : Atom)
+      @event_queue << {event, atom, @observers.dup} unless @observers.empty?
+    end
+
+    private def dispatch_events
+      should_dispatch = @mutex.synchronize do
+        if @dispatching_events
+          false
+        else
+          @dispatching_events = true
+          true
+        end
+      end
+      return unless should_dispatch
+
+      loop do
+        notification = @mutex.synchronize do
+          if @event_queue.empty?
+            @dispatching_events = false
+            nil
+          else
+            @event_queue.shift
+          end
+        end
+        break unless notification
+        event, atom, observers = notification
+        observers.each do |observer|
+          begin
+            observer.call(event, atom)
+          rescue ex
+            CogUtil::Logger.error("Error in AtomSpace observer: #{ex}")
+          end
         end
       end
     end
 
     # Pattern matching support
     def get_incoming(atom : Atom) : Array(Atom)
-      incoming = [] of Atom
       @mutex.synchronize do
-        @atoms_by_outgoing.each do |outgoing_handles, link_set|
-          if outgoing_handles.includes?(atom.handle)
-            incoming.concat(link_set.to_a)
-          end
-        end
+        handles = @incoming_by_handle[atom.handle]?
+        handles ? handles.compact_map { |handle| @atoms_by_handle[handle]? } : [] of Atom
       end
-      incoming
     end
 
     # Find atoms matching a pattern

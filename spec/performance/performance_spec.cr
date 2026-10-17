@@ -609,8 +609,8 @@ describe "CrystalCog Performance Tests" do
       OpenCog.initialize
       pln_engine = PLN.create_engine(atomspace)
       ure_engine = URE.create_engine(atomspace)
-
-      initial_memory = GC.stats.heap_size
+      
+      initial_memory = GC.stats.heap_size.to_i64
 
       # Create substantial knowledge base
       num_concepts = 1000
@@ -636,7 +636,7 @@ describe "CrystalCog Performance Tests" do
         atomspace.add_evaluation_link(pred, atomspace.add_list_link([c1, c2]), tv)
       end
 
-      before_reasoning_memory = GC.stats.heap_size
+      before_reasoning_memory = GC.stats.heap_size.to_i64
       atoms_before = atomspace.size
 
       # Run reasoning
@@ -645,7 +645,7 @@ describe "CrystalCog Performance Tests" do
 
       GC.collect # Force cleanup
 
-      after_reasoning_memory = GC.stats.heap_size
+      after_reasoning_memory = GC.stats.heap_size.to_i64
       atoms_after = atomspace.size
 
       # Calculate memory metrics (use Int64 to avoid UInt64 underflow when GC reclaims memory)
