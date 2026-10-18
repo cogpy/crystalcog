@@ -32,12 +32,12 @@ run_test() {
     # Use timeout to prevent hanging and better error handling
     if timeout 10 bash -c "$test_command" >/dev/null 2>&1; then
         echo -e "${GREEN}✅ PASS${NC}"
-        ((tests_passed++))
+        tests_passed=$((tests_passed + 1))
         return 0
     else
         echo -e "${RED}❌ FAIL${NC}"
         echo "     Command: $test_command"
-        ((tests_failed++))
+        tests_failed=$((tests_failed + 1))
         return 1
     fi
 }
@@ -51,7 +51,7 @@ run_optional_test() {
     # Use timeout to prevent hanging and better error handling
     if timeout 10 bash -c "$test_command" >/dev/null 2>&1; then
         echo -e "${GREEN}✅ PASS${NC}"
-        ((tests_passed++))
+        tests_passed=$((tests_passed + 1))
         return 0
     else
         echo -e "${YELLOW}⚠️  SKIP${NC} (dependency not available)"

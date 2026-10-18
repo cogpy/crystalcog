@@ -116,7 +116,6 @@ done
 # Run the integration test
 echo "   • Executing integration test script..."
 if bash scripts/validation/test_cogserver_integration.sh > /tmp/test_output.log 2>&1; then
-if ./scripts/validation/test_cogserver_integration.sh > /tmp/test_output.log 2>&1; then
     echo "   • Integration test PASSED ✓"
     
     # Check for success indicators in output

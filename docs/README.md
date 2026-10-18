@@ -63,7 +63,7 @@ docs/
 - [Agent-Zero Integration](agent-zero/AGENT-ZERO-INTEGRATION.md)
 
 ### Development
-- [Development Roadmap](roadmap/DEVELOPMENT-ROADMAP.md)
+- [Development Roadmap](DEVELOPMENT-ROADMAP.md)
 - [CI/CD Pipeline](CI-CD-PIPELINE.md)
 - [Performance Profiling](PERFORMANCE_PROFILING_GUIDE.md)
 

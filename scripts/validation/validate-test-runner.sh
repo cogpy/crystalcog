@@ -38,20 +38,20 @@ print_test() {
 
 print_pass() {
     echo -e "${GREEN}[PASS]${NC} $1"
-    ((PASSED_TESTS++))
-    ((TOTAL_TESTS++))
+    PASSED_TESTS=$((PASSED_TESTS + 1))
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
 }
 
 print_fail() {
     echo -e "${RED}[FAIL]${NC} $1"
-    ((FAILED_TESTS++))
-    ((TOTAL_TESTS++))
+    FAILED_TESTS=$((FAILED_TESTS + 1))
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
 }
 
 print_skip() {
     echo -e "${YELLOW}[SKIP]${NC} $1"
-    ((SKIPPED_TESTS++))
-    ((TOTAL_TESTS++))
+    SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
 }
 
 print_info() {

@@ -574,6 +574,11 @@ module CogUtil
     end
 
     private def setup_signal_handlers
+      # Windows has no POSIX signals (Signal#trap raises NotImplementedError)
+      {% if flag?(:win32) %}
+        return
+      {% end %}
+
       Signal::INT.trap do
         puts "\n🛑 Profiling interrupted by user".colorize(:yellow)
 

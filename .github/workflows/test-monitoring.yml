@@ -28,6 +28,11 @@ permissions:
   pull-requests: write
   issues: write
 
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   test-monitoring:
     name: Test Result Monitoring
@@ -266,7 +271,7 @@ jobs:
         1. **Unit Tests** (`spec/` directory)
            - Test individual functions and classes
            - Use Crystal's built-in `spec` framework
-           - Run with: `crystal spec`
+           - Run with: `crystal spec --stats -v`
         
         2. **Integration Tests** (`examples/tests/` directory)
            - Test component interactions

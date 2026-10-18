@@ -26,6 +26,15 @@ env:
 
 # Define all binaries to build
 # This list matches shard.yml targets
+# Least-privilege token by default; jobs that write declare their own permissions.
+permissions:
+  contents: read
+
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   # Build matrix for all binaries on Linux x86_64
   build-linux-x64:
@@ -55,6 +64,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           libsqlite3-dev \
+          librocksdb-dev \
           libevent-dev \
           libssl-dev \
           libgmp-dev \
@@ -64,7 +74,7 @@ jobs:
           musl-dev
 
     - name: Install dependencies
-      run: shards install --production
+      run: shards install --verbose --production
 
     - name: Build all binaries
       run: |
@@ -132,12 +142,12 @@ jobs:
           echo "Building $target from $source..."
 
           if [ -f "$source" ]; then
-            if crystal build $BUILD_FLAGS "$source" -o "$output" 2>&1; then
+            if crystal build --verbose --stats $BUILD_FLAGS "$source" -o "$output" 2>&1; then
               echo "  ✓ $target built successfully"
-              ((SUCCESS++))
+              SUCCESS=$((SUCCESS + 1))
             else
               echo "  ✗ $target build failed"
-              ((FAILED++))
+              FAILED=$((FAILED + 1))
             fi
           else
             echo "  ⚠ Source file $source not found, skipping"
@@ -191,7 +201,7 @@ jobs:
           sh -c '
             apk add --no-cache sqlite-dev libevent-dev openssl-dev yaml-dev pcre2-dev gmp-dev
 
-            shards install --production
+            shards install --verbose --production
 
             mkdir -p dist/linux-arm64
 
@@ -217,7 +227,7 @@ jobs:
 
               if [ -f "$src" ]; then
                 echo "Building $target..."
-                crystal build --release --no-debug "$src" -o "dist/linux-arm64/$target" || echo "Failed: $target"
+                crystal build --verbose --stats --release --no-debug "$src" -o "dist/linux-arm64/$target" || echo "Failed: $target"
               fi
             done
 
@@ -256,10 +266,12 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        brew install sqlite3 libevent openssl gmp libyaml pcre2
+        brew install sqlite3 rocksdb libevent openssl gmp libyaml pcre2
+        # Homebrew libraries are not on the default linker path on Apple Silicon
+        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install --production
+      run: shards install --verbose --production
 
     - name: Build all binaries
       run: |
@@ -297,7 +309,7 @@ jobs:
           source="${TARGETS[$target]}"
           if [ -f "$source" ]; then
             echo "Building $target..."
-            crystal build $BUILD_FLAGS "$source" -o "dist/macos-x64/$target" 2>&1 || echo "Failed: $target"
+            crystal build --verbose --stats $BUILD_FLAGS "$source" -o "dist/macos-x64/$target" 2>&1 || echo "Failed: $target"
           fi
         done
 
@@ -335,10 +347,12 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        brew install sqlite3 libevent openssl gmp libyaml pcre2
+        brew install sqlite3 rocksdb libevent openssl gmp libyaml pcre2
+        # Homebrew libraries are not on the default linker path on Apple Silicon
+        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install --production
+      run: shards install --verbose --production
 
     - name: Build all binaries
       run: |
@@ -376,7 +390,7 @@ jobs:
           source="${TARGETS[$target]}"
           if [ -f "$source" ]; then
             echo "Building $target..."
-            crystal build $BUILD_FLAGS "$source" -o "dist/macos-arm64/$target" 2>&1 || echo "Failed: $target"
+            crystal build --verbose --stats $BUILD_FLAGS "$source" -o "dist/macos-arm64/$target" 2>&1 || echo "Failed: $target"
           fi
         done
 

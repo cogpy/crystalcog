@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Trace every command and print every response so CI logs show what ran.
+set -x
 cd "$(dirname "$0")/.."
 
 bin_dir="${BIN_DIR:-bin}"
-"$bin_dir/crystalcog" test | grep -q 'AtomSpace size: 3'
-printf 'add smoke concept\nstats\nquit\n' | "$bin_dir/cogshell" | grep -q 'Atoms: 1, nodes: 1, links: 0'
+"$bin_dir/crystalcog" test | grep 'AtomSpace size: 3'
+printf 'add smoke concept\nstats\nquit\n' | "$bin_dir/cogshell" | grep 'Atoms: 1, nodes: 1, links: 0'
 
 http_port="${SMOKE_HTTP_PORT:-18080}"
 telnet_port="${SMOKE_TELNET_PORT:-17001}"
@@ -19,7 +21,7 @@ for _ in $(seq 1 30); do
     echo 'CogServer exited before becoming ready' >&2
     exit 1
   fi
-  if curl --fail --silent --max-time 2 "$base/status" > /dev/null; then
+  if curl --fail --silent --show-error --max-time 2 "$base/status"; then
     ready=true
     break
   fi
@@ -30,9 +32,9 @@ if [[ "$ready" != true ]]; then
   echo 'CogServer readiness timeout' >&2
   exit 1
 fi
-curl --fail --silent --max-time 5 "$base/status" | jq -e '.running == true' > /dev/null
-curl --fail --silent --max-time 5 -H 'Content-Type: application/json' \
-  -d '{"type":"CONCEPT_NODE","name":"ci_smoke"}' "$base/atoms" | jq -e '.success == true and .atom.handle > 0' > /dev/null
-curl --fail --silent --max-time 5 "$base/atoms" | jq -e '.count >= 1 and any(.atoms[]; .name == "ci_smoke")' > /dev/null
-curl --fail --silent --max-time 5 "$base/atomspace" | jq -e '.size >= 1 and (.atoms | length) >= 1' > /dev/null
+curl --fail --silent --show-error --max-time 5 "$base/status" | jq -e '.running == true'
+curl --fail --silent --show-error --max-time 5 -H 'Content-Type: application/json' \
+  -d '{"type":"CONCEPT_NODE","name":"ci_smoke"}' "$base/atoms" | jq -e '.success == true and .atom.handle > 0'
+curl --fail --silent --show-error --max-time 5 "$base/atoms" | jq -e '.count >= 1 and any(.atoms[]; .name == "ci_smoke")'
+curl --fail --silent --show-error --max-time 5 "$base/atomspace" | jq -e '.size >= 1 and (.atoms | length) >= 1'
 printf 'Compiled CLI, shell, and CogServer HTTP smoke checks passed.\n'

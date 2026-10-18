@@ -281,3 +281,20 @@ describe AtomSpace::CognitiveKernel do
     end
   end
 end
+
+describe AtomSpace::CognitiveKernelManager do
+  it "creates kernels and allocates attention by goal" do
+    manager = AtomSpace::CognitiveKernelManager.new
+    reasoning = manager.create_kernel([128, 64], 0.9)
+    manager.create_kernel([64, 32], 0.7)
+    manager.size.should eq(2)
+    manager.kernels.first.should be(reasoning)
+
+    allocations = manager.adaptive_attention_allocation(["reasoning"])
+    allocations.size.should eq(2)
+    allocations[0][:goal].should eq("reasoning")
+    allocations[0][:attention_score].should eq(0.9)
+    allocations[1][:goal].should eq("default")
+    allocations[1][:activation_priority].should be_close(0.6, 1e-9)
+  end
+end

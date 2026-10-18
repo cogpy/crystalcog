@@ -74,7 +74,7 @@ validate_crystal_installation_script() {
     for dep in "${deps[@]}"; do
         if ! apt-cache show "$dep" &>/dev/null; then
             print_warning "Missing dependency: $dep"
-            ((missing_count++))
+            missing_count=$((missing_count + 1))
         fi
     done
     

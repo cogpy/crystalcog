@@ -597,7 +597,10 @@ describe "CrystalCog Performance Tests" do
       last_duration = 0.0
       results.each do |result|
         if last_duration > 0
-          max_acceptable = last_duration * (result[:scale_factor] ** 2) * 4
+          # Sub-millisecond baselines are below what a shared runner can time
+          # reliably; extrapolate growth from at least 10ms.
+          baseline = Math.max(last_duration, 0.01)
+          max_acceptable = baseline * (result[:scale_factor] ** 2) * 4
           result[:duration].should be < max_acceptable
         end
         last_duration = result[:duration]

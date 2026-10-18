@@ -16,6 +16,11 @@ module CogUtil
       def initialize(@rss_kb, @vsize_kb, @heap_size, @heap_used, @total_allocations, @free_bytes)
       end
 
+      # Bytes held by live objects (meaningful right after a collection)
+      def live_bytes : Int64
+        heap_size - free_bytes
+      end
+
       def memory_efficiency
         return 0.0 if heap_size == 0
         (heap_used.to_f / heap_size.to_f) * 100.0
@@ -46,8 +51,12 @@ module CogUtil
       property memory_efficiency : Float64
 
       def initialize(@operation, @initial_memory, @final_memory, @atom_count, @duration_ms)
+        # Per-atom cost is the growth in live GC heap across the operation.
+        # Both snapshots are taken after a collection, so this is what the
+        # operation retained; process RSS also moves with page granularity,
+        # heap expansion and other fibers, which made it too noisy to compare.
         @memory_per_atom = if @atom_count > 0
-                             (@final_memory.rss_kb - @initial_memory.rss_kb).to_f * 1024.0 / @atom_count.to_f
+                             (@final_memory.live_bytes - @initial_memory.live_bytes).to_f / @atom_count.to_f
                            else
                              0.0
                            end

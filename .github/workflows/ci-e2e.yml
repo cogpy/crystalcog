@@ -31,6 +31,11 @@ env:
   CRYSTAL_VERSION: '1.14.0'
   CRYSTAL_WORKERS: '1'
 
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   build-and-test:
     name: Locked build and full test suite
@@ -52,15 +57,15 @@ jobs:
             ~/.cache/crystal
           key: crystal-${{ runner.os }}-${{ env.CRYSTAL_VERSION }}-${{ hashFiles('shard.yml', 'shard.lock') }}
       - name: Install exact locked dependencies
-        run: shards install --frozen && shards check
+        run: shards install --verbose --frozen && shards check
       - name: Validate test-runner failure propagation
         run: bash scripts/validation/test_test_runner_exit.sh
       - name: Build every declared target
-        run: shards build --error-trace
+        run: shards build --verbose --error-trace
       - name: Run full test suite
         run: |
           set -o pipefail
-          crystal spec --error-trace --no-color --junit_output=test-results.xml 2>&1 | tee test-output.log
+          crystal spec --stats -v --error-trace --no-color --junit_output=test-results.xml 2>&1 | tee test-output.log
       - name: Exercise compiled CLI and HTTP API
         run: bash scripts/ci-smoke.sh
       - uses: actions/upload-artifact@v4
@@ -90,7 +95,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsqlite3-dev libpq-dev librocksdb-dev libevent-dev
-      - run: shards install --frozen
+      - run: shards install --verbose --frozen
       - name: Measure indexed and scan queries
         run: |
           set -o pipefail

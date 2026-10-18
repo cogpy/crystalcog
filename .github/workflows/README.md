@@ -21,11 +21,6 @@ This directory contains GitHub Actions workflows for building, testing, and depl
    - Better parallelization of independent components
    - Includes integration testing phase
 
-4. **multi-platform-build.yml** - Cross-platform build matrix
-   - Tests on Ubuntu 22.04 and 24.04
-   - Builds in both Release and Debug modes
-   - Includes sanitizer builds (AddressSanitizer, ThreadSanitizer, UBSan)
-   - Code quality checks with clang-format and cppcheck
 
 ### Reusable Workflows
 

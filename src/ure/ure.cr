@@ -523,7 +523,17 @@ module URE
     end
 
     private def termination_criteria_met? : Bool
-      @current_iteration >= @max_iterations || all_nodes_exhausted?
+      @current_iteration >= @max_iterations || all_nodes_exhausted? || root_satisfied?
+    end
+
+    # The goal is proven once it is in the AtomSpace; expanding further only
+    # rebuilds premises for a target that is already established.
+    private def root_satisfied? : Bool
+      if root = @root_bit
+        @atomspace.contains?(root.target)
+      else
+        false
+      end
     end
 
     private def all_nodes_exhausted? : Bool

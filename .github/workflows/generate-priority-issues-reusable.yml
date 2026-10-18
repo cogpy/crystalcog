@@ -47,6 +47,11 @@ permissions:
   issues: write
   actions: read
 
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   generate-priority-issues:
     name: Generate issues from failures & stubs
@@ -78,7 +83,7 @@ jobs:
           # Some callers upload multiple artifacts; download-artifact above
           # already merges when possible. List what we have for debugging.
           echo "Artifact tree:"
-          find ci-artifacts -type f 2>/dev/null | head -100 || true
+          find ci-artifacts -type f || true
           ls -la ci-artifacts 2>/dev/null || true
 
       - name: Scan and generate priority issues

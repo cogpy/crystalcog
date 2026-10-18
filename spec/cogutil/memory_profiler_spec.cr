@@ -20,6 +20,7 @@ describe CogUtil::MemoryProfiler do
       info.heap_size.should eq(500)
       info.heap_used.should eq(250)
       info.memory_efficiency.should eq(50.0)
+      info.live_bytes.should eq(250)
     end
 
     it "returns zero efficiency when heap size is zero" do
@@ -46,8 +47,9 @@ describe CogUtil::MemoryProfiler do
       initial = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
         1000_i64, 2000_i64, 100_i64, 80_i64, 80_i64, 20_i64
       )
+      # Live heap grows from 80 to 2128 bytes
       final = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
-        1002_i64, 2000_i64, 100_i64, 90_i64, 90_i64, 10_i64
+        1002_i64, 2000_i64, 2200_i64, 90_i64, 90_i64, 72_i64
       )
 
       result = CogUtil::MemoryProfiler::MemoryBenchmarkResult.new(
@@ -62,7 +64,7 @@ describe CogUtil::MemoryProfiler do
       result.atom_count.should eq(2)
       result.duration_ms.should eq(12.5)
       result.memory_increase_kb.should eq(2)
-      # (2 KB * 1024) / 2 atoms = 1024 bytes/atom
+      # 2048 live bytes / 2 atoms = 1024 bytes/atom
       result.memory_per_atom.should eq(1024.0)
       result.memory_efficiency.should eq(final.memory_efficiency)
     end
@@ -192,9 +194,9 @@ describe CogUtil::MemoryProfiler do
       initial = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
         1000_i64, 2000_i64, 100_i64, 80_i64, 80_i64, 20_i64
       )
-      # 4 KB increase for 2 atoms => 2048 bytes/atom (under 8192 small-batch limit)
+      # 4096 live bytes for 2 atoms => 2048 bytes/atom (under 8192 small-batch limit)
       final = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
-        1004_i64, 2000_i64, 100_i64, 90_i64, 90_i64, 10_i64
+        1004_i64, 2000_i64, 4200_i64, 90_i64, 90_i64, 24_i64
       )
       result = CogUtil::MemoryProfiler::MemoryBenchmarkResult.new(
         "small_batch", initial, final, 2, 5.0

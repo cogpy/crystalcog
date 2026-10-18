@@ -1,4 +1,4 @@
-# This CI job installs Crystal and shard dependencies, then executes `crystal spec` to run the test suite
+# This CI job installs Crystal and shard dependencies, then executes `crystal spec --stats -v` to run the test suite
 # More configuration options are available at https://crystal-lang.github.io/install-crystal/configurator.html
 #
 # Database dependencies can be disabled at compile time using environment variables:
@@ -12,6 +12,15 @@ on:
     branches: [main]
   schedule:
     - cron: '0 6 * * 6'  # Every Saturday 6 AM
+# Least-privilege token by default; jobs that write declare their own permissions.
+permissions:
+  contents: read
+
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   test:
     strategy:
@@ -49,12 +58,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libpq-dev
       - name: Install shards
-        run: shards update --ignore-crystal-version
+        run: shards update --verbose --ignore-crystal-version
       - name: Run tests
-        shell: bash
+        shell: bash --noprofile --norc -x -eo pipefail {0}
         run: |
           # Run tests with error handling for compiler crashes
-          crystal spec --order=random --error-trace --no-color || {
+          crystal spec --stats -v --order=random --error-trace --no-color || {
             echo "Test run failed, retrying with single-threaded execution..."
-            CRYSTAL_WORKERS=1 crystal spec --order=random --error-trace --no-color
+            CRYSTAL_WORKERS=1 crystal spec --stats -v --order=random --error-trace --no-color
           }

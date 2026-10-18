@@ -40,6 +40,15 @@ env:
   COGSERVER_PORT: 18080
   COGSERVER_TIMEOUT: 60
 
+# Least-privilege token by default; jobs that write declare their own permissions.
+permissions:
+  contents: read
+
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   # Build all required binaries first
   build-binaries:
@@ -67,32 +76,32 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Build E2E binaries
       run: |
         mkdir -p bin
 
         echo "Building main application..."
-        crystal build --error-trace src/bin/crystalcog.cr -o bin/crystalcog
+        crystal build --verbose --stats --error-trace src/bin/crystalcog.cr -o bin/crystalcog
 
         echo "Building CogServer..."
-        crystal build --error-trace src/bin/cogserver.cr -o bin/cogserver
+        crystal build --verbose --stats --error-trace src/bin/cogserver.cr -o bin/cogserver
 
         echo "Building Agent-Zero demo..."
-        crystal build --error-trace src/agent-zero/distributed_network_demo.cr -o bin/distributed_demo || true
+        crystal build --verbose --stats --error-trace src/agent-zero/distributed_network_demo.cr -o bin/distributed_demo || true
 
         echo "Building NLP module..."
-        crystal build --error-trace src/nlp/nlp_main.cr -o bin/nlp || true
+        crystal build --verbose --stats --error-trace src/nlp/nlp_main.cr -o bin/nlp || true
 
         echo "Building Pattern Matching..."
-        crystal build --error-trace src/pattern_matching/pattern_matching_main.cr -o bin/pattern_matching || true
+        crystal build --verbose --stats --error-trace src/pattern_matching/pattern_matching_main.cr -o bin/pattern_matching || true
 
         echo "Building MOSES..."
-        crystal build --error-trace src/moses/moses_main.cr -o bin/moses || true
+        crystal build --verbose --stats --error-trace src/moses/moses_main.cr -o bin/moses || true
 
         ls -lh bin/
 
@@ -118,7 +127,8 @@ jobs:
     - name: Install test dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y curl jq netcat-openbsd
+        # The downloaded binaries link these libraries dynamically
+        sudo apt-get install -y curl jq netcat-openbsd libsqlite3-dev librocksdb-dev libevent-dev libyaml-dev libpcre2-dev libssl-dev
 
     - name: Download binaries
       uses: actions/download-artifact@v4
@@ -132,21 +142,29 @@ jobs:
     - name: Start CogServer
       run: |
         echo "Starting CogServer on port ${{ env.COGSERVER_PORT }}..."
-        ./bin/cogserver &
+        ldd ./bin/cogserver
+        ./bin/cogserver --ws-port ${{ env.COGSERVER_PORT }} > cogserver.log 2>&1 &
         echo $! > cogserver.pid
-        sleep 5
 
     - name: Wait for CogServer
       run: |
         echo "Waiting for CogServer to be ready..."
         for i in {1..30}; do
-          if curl -s http://localhost:${{ env.COGSERVER_PORT }}/status > /dev/null 2>&1; then
+          if ! kill -0 "$(cat cogserver.pid)"; then
+            echo "CogServer exited before becoming ready:"
+            cat cogserver.log
+            exit 1
+          fi
+          if curl -sS http://localhost:${{ env.COGSERVER_PORT }}/status; then
             echo "CogServer is ready after $i attempts"
-            break
+            exit 0
           fi
           echo "Waiting... ($i/30)"
           sleep 2
         done
+        echo "CogServer not ready after 30 attempts:"
+        cat cogserver.log
+        exit 1
 
     - name: Test Health Endpoints
       run: |
@@ -250,6 +268,10 @@ jobs:
           kill $(cat cogserver.pid) || true
           rm cogserver.pid
         fi
+        if [ -f cogserver.log ]; then
+          echo "=== CogServer log ==="
+          cat cogserver.log
+        fi
 
     - name: Generate E2E Report
       if: always()
@@ -287,8 +309,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev
-        shards install
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+        shards install --verbose
 
     - name: Download binaries
       uses: actions/download-artifact@v4
@@ -302,12 +324,12 @@ jobs:
     - name: Run Agent-Zero E2E Tests
       run: |
         echo "=== Running Agent-Zero E2E Tests ==="
-        crystal spec spec/agent-zero/agent_zero_e2e_spec.cr --error-trace --verbose || echo "Agent-Zero E2E tests completed"
+        crystal spec --stats -v spec/agent-zero/agent_zero_e2e_spec.cr --error-trace --verbose || echo "Agent-Zero E2E tests completed"
 
     - name: Run Distributed Cluster Tests
       run: |
         echo "=== Running Distributed Cluster Tests ==="
-        crystal spec spec/atomspace/distributed_cluster_spec.cr --error-trace --verbose || echo "Distributed cluster tests completed"
+        crystal spec --stats -v spec/atomspace/distributed_cluster_spec.cr --error-trace --verbose || echo "Distributed cluster tests completed"
 
     - name: Test Multi-Node Scenarios
       run: |
@@ -339,8 +361,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev
-        shards install
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+        shards install --verbose
 
     - name: Download binaries
       uses: actions/download-artifact@v4
@@ -354,7 +376,7 @@ jobs:
     - name: Run NLP Unit Tests
       run: |
         echo "=== Running NLP Unit Tests ==="
-        crystal spec spec/nlp/ --error-trace --verbose
+        crystal spec --stats -v spec/nlp/ --error-trace --verbose
 
     - name: Test NLP Processing Pipeline
       run: |
@@ -375,23 +397,23 @@ jobs:
           cat /tmp/nlp_test_input.txt | timeout 30 ./bin/nlp --process || echo "NLP processing completed"
         else
           echo "NLP binary not available, running spec tests..."
-          crystal spec spec/nlp/text_processor_spec.cr --error-trace
+          crystal spec --stats -v spec/nlp/text_processor_spec.cr --error-trace
         fi
 
     - name: Test Tokenizer
       run: |
         echo "=== Testing Tokenizer ==="
-        crystal spec spec/nlp/tokenizer_spec.cr --error-trace --verbose
+        crystal spec --stats -v spec/nlp/tokenizer_spec.cr --error-trace --verbose
 
     - name: Test Link Grammar
       run: |
         echo "=== Testing Link Grammar ==="
-        crystal spec spec/nlp/link_grammar_spec.cr --error-trace --verbose
+        crystal spec --stats -v spec/nlp/link_grammar_spec.cr --error-trace --verbose
 
     - name: Test Semantic Understanding
       run: |
         echo "=== Testing Semantic Understanding ==="
-        crystal spec spec/nlp/language_processing_capabilities_spec.cr --error-trace --verbose
+        crystal spec --stats -v spec/nlp/language_processing_capabilities_spec.cr --error-trace --verbose
 
   # Reasoning Engine E2E Tests
   reasoning-e2e:
@@ -413,44 +435,44 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev
-        shards install
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+        shards install --verbose
 
     - name: Test PLN Reasoning
       run: |
         echo "=== Testing PLN Reasoning ==="
-        crystal spec spec/pln/pln_spec.cr --error-trace --verbose
+        crystal spec --stats -v spec/pln/pln_spec.cr --error-trace --verbose
 
     - name: Test URE Forward Chaining
       run: |
         echo "=== Testing URE Forward Chaining ==="
-        crystal spec spec/ure/ure_spec.cr --error-trace --verbose
+        crystal spec --stats -v spec/ure/ure_spec.cr --error-trace --verbose
 
     - name: Test Advanced Reasoning
       run: |
         echo "=== Testing Advanced Reasoning ==="
-        crystal spec spec/ure/advanced_reasoning_spec.cr --error-trace --verbose || true
+        crystal spec --stats -v spec/ure/advanced_reasoning_spec.cr --error-trace --verbose || true
 
     - name: Test Pattern Matching
       run: |
         echo "=== Testing Pattern Matching ==="
-        crystal spec spec/pattern_matching/ --error-trace --verbose
+        crystal spec --stats -v spec/pattern_matching/ --error-trace --verbose
 
     - name: Test Pattern Mining
       run: |
         echo "=== Testing Pattern Mining ==="
-        crystal spec spec/pattern_mining/ --error-trace --verbose
+        crystal spec --stats -v spec/pattern_mining/ --error-trace --verbose
 
     - name: Test MOSES Optimization
       run: |
         echo "=== Testing MOSES Optimization ==="
-        crystal spec spec/moses/ --error-trace --verbose
+        crystal spec --stats -v spec/moses/ --error-trace --verbose
 
     - name: Test Reasoning Integration
       run: |
         echo "=== Testing Reasoning Integration ==="
         # Create integration test
-        cat > /tmp/reasoning_integration.cr << 'EOF'
+        cat > ci_reasoning_integration.cr << 'EOF'
         require "./src/crystalcog"
 
         puts "=== Reasoning Integration Test ==="
@@ -490,7 +512,7 @@ jobs:
         puts "=== Integration Test Passed ==="
         EOF
 
-        timeout 60 crystal run /tmp/reasoning_integration.cr || echo "Reasoning integration test completed"
+        timeout 60 crystal run ci_reasoning_integration.cr
 
   # Persistence E2E Tests
   persistence-e2e:
@@ -511,53 +533,85 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libpq-dev
-        shards install
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libpq-dev
+        shards install --verbose
 
     - name: Test SQLite Storage
       run: |
         echo "=== Testing SQLite Storage ==="
 
-        cat > /tmp/sqlite_test.cr << 'EOF'
+        cat > ci_sqlite_test.cr << 'EOF'
+
         require "./src/atomspace/atomspace"
+
         require "./src/atomspace/storage"
+
 
         puts "Testing SQLite persistence..."
 
+
         atomspace = AtomSpace::AtomSpace.new
 
+
         # Create some atoms
+
         dog = atomspace.add_concept_node("dog")
+
         animal = atomspace.add_concept_node("animal")
+
         atomspace.add_inheritance_link(dog, animal)
+
 
         puts "Created #{atomspace.size} atoms"
 
+
         # Test storage operations
-        storage = AtomSpace::Storage.new("/tmp/test_atomspace.db")
-        storage.save(atomspace)
+
+        db_path = "/tmp/test_atomspace_#{Process.pid}.db"
+
+        storage = AtomSpace::SQLiteStorageNode.new("ci-sqlite", db_path)
+
+        raise "could not open #{db_path}" unless storage.open
+
+        raise "store_atomspace failed" unless storage.store_atomspace(atomspace)
+
         puts "Saved atomspace to SQLite"
 
+
         # Load into new atomspace
+
         atomspace2 = AtomSpace::AtomSpace.new
-        storage.load(atomspace2)
+
+        raise "load_atomspace failed" unless storage.load_atomspace(atomspace2)
+
+        storage.close
+
+        File.delete(db_path) if File.exists?(db_path)
+
         puts "Loaded #{atomspace2.size} atoms from SQLite"
 
+
         # Verify
+
         if atomspace.size == atomspace2.size
+
           puts "SQLite storage test PASSED"
+
         else
+
           puts "SQLite storage test FAILED"
+
           exit 1
+
         end
         EOF
 
-        timeout 30 crystal run /tmp/sqlite_test.cr || echo "SQLite test completed with issues"
+        timeout 60 crystal run ci_sqlite_test.cr
 
     - name: Test Distributed Storage
       run: |
         echo "=== Testing Distributed Storage ==="
-        crystal spec spec/atomspace/distributed_cluster_spec.cr --error-trace || true
+        crystal spec --stats -v spec/atomspace/distributed_cluster_spec.cr --error-trace || true
 
   # Performance E2E Tests
   performance-e2e:
@@ -578,24 +632,24 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev
-        shards install
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev
+        shards install --verbose
 
     - name: Run Performance Specs
       run: |
         echo "=== Running Performance Specs ==="
-        crystal spec spec/performance/ --error-trace --verbose
+        crystal spec --stats -v spec/performance/ --error-trace --verbose
 
     - name: Run Memory Comparison Tests
       run: |
         echo "=== Running Memory Comparison Tests ==="
-        crystal spec spec/performance/memory_comparison_spec.cr --error-trace || true
+        crystal spec --stats -v spec/performance/memory_comparison_spec.cr --error-trace || true
 
     - name: Run Benchmarks
       run: |
         echo "=== Running Benchmarks ==="
 
-        cat > /tmp/benchmark.cr << 'EOF'
+        cat > ci_benchmark.cr << 'EOF'
         require "./src/atomspace/atomspace"
         require "benchmark"
 
@@ -633,8 +687,8 @@ jobs:
         puts "Rate: #{(10000 / duration.total_seconds).round(0)} nodes/second"
         EOF
 
-        timeout 120 crystal run --release /tmp/benchmark.cr > benchmark_results.txt 2>&1
-        cat benchmark_results.txt
+        set -o pipefail
+        timeout 120 crystal run --release ci_benchmark.cr 2>&1 | tee benchmark_results.txt
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@v4
@@ -672,7 +726,7 @@ jobs:
 
         for result in "${{ needs.cogserver-e2e.result }}" "${{ needs.distributed-e2e.result }}" "${{ needs.nlp-e2e.result }}" "${{ needs.reasoning-e2e.result }}" "${{ needs.persistence-e2e.result }}" "${{ needs.performance-e2e.result }}"; do
           if [ "$result" = "success" ]; then
-            ((SUCCESS_COUNT++))
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
           fi
         done
 

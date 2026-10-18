@@ -462,68 +462,67 @@ module AtomSpace
     end
   end
 
-  # Manager for multiple cognitive kernels - temporarily disabled for build
-  # class CognitiveKernelManager
-  #   @kernels : Array(CognitiveKernel)
-  #
-  #   def initialize
-  #     @kernels = [] of CognitiveKernel
-  #   end
-  #
-  #   def create_kernel(tensor_shape : Array(Int32), attention_weight : Float64 = 0.5) : CognitiveKernel
-  #     kernel = CognitiveKernel.new(tensor_shape, attention_weight)
-  #     @kernels << kernel
-  #     kernel
-  #   end
+  # Manager for multiple cognitive kernels
+  class CognitiveKernelManager
+    @kernels : Array(CognitiveKernel)
 
-  #
-  #   def adaptive_attention_allocation(goals : Array(String)) : Array(NamedTuple(kernel: CognitiveKernel, attention_score: Float64, activation_priority: Float64, goal: String))
-  #     allocations = [] of NamedTuple(kernel: CognitiveKernel, attention_score: Float64, activation_priority: Float64, goal: String)
-  #
-  #     @kernels.each_with_index do |kernel, i|
-  #       goal = i < goals.size ? goals[i] : "default"
-  #       score = calculate_attention_score(goal)
-  #       priority = calculate_priority(score)
-  #
-  #       allocations << {
-  #         kernel:              kernel,
-  #         attention_score:     score,
-  #         activation_priority: priority,
-  #         goal:                goal,
-  #       }
-  #     end
-  #
-  #     allocations
-  #   end
-  #
-  #   private def calculate_attention_score(goal : String) : Float64
-  #     case goal.downcase
-  #     when "reasoning"
-  #       0.9
-  #     when "learning"
-  #       0.7
-  #     when "attention"
-  #       0.8
-  #     when "memory"
-  #       0.6
-  #     when "adaptation"
-  #       0.75
-  #     else
-  #       0.5
-  #     end
-  #   end
-  #
-  #   private def calculate_priority(score : Float64) : Float64
-  #     # Simple priority calculation based on attention score
-  #     score * 0.8 + 0.2 # Ensure minimum priority
-  #   end
+    def initialize
+      @kernels = [] of CognitiveKernel
+    end
 
-  #   def kernels : Array(CognitiveKernel)
-  #     @kernels
-  #   end
-  #
-  #   def size : Int32
-  #     @kernels.size
-  #   end
-  # end
+    def create_kernel(tensor_shape : Array(Int32), attention_weight : Float64 = 0.5) : CognitiveKernel
+      kernel = CognitiveKernel.new(tensor_shape, attention_weight)
+      @kernels << kernel
+      kernel
+    end
+
+    def adaptive_attention_allocation(goals : Array(String)) : Array(NamedTuple(kernel: CognitiveKernel, attention_score: Float64, activation_priority: Float64, goal: String))
+      allocations = [] of NamedTuple(kernel: CognitiveKernel, attention_score: Float64, activation_priority: Float64, goal: String)
+
+      @kernels.each_with_index do |kernel, i|
+        goal = i < goals.size ? goals[i] : "default"
+        score = calculate_attention_score(goal)
+        priority = calculate_priority(score)
+
+        allocations << {
+          kernel:              kernel,
+          attention_score:     score,
+          activation_priority: priority,
+          goal:                goal,
+        }
+      end
+
+      allocations
+    end
+
+    private def calculate_attention_score(goal : String) : Float64
+      case goal.downcase
+      when "reasoning"
+        0.9
+      when "learning"
+        0.7
+      when "attention"
+        0.8
+      when "memory"
+        0.6
+      when "adaptation"
+        0.75
+      else
+        0.5
+      end
+    end
+
+    private def calculate_priority(score : Float64) : Float64
+      # Simple priority calculation based on attention score
+      score * 0.8 + 0.2 # Ensure minimum priority
+    end
+
+    def kernels : Array(CognitiveKernel)
+      @kernels
+    end
+
+    def size : Int32
+      @kernels.size
+    end
+  end
 end

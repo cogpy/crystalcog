@@ -19,6 +19,15 @@ on:
   schedule:
     - cron: '40 20 * * 2'
 
+# Least-privilege token by default; jobs that write declare their own permissions.
+permissions:
+  contents: read
+
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -87,7 +96,7 @@ jobs:
     # ℹ️ Command-line programs to run using the OS shell.
     # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
     - if: matrix.build-mode == 'manual'
-      shell: bash
+      shell: bash --noprofile --norc -x -eo pipefail {0}
       run: |
         echo 'If you are using a "manual" build mode for one or more of the' \
           'languages you are analyzing, replace this with the commands to build' \

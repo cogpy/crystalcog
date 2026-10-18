@@ -35,6 +35,15 @@ on:
 env:
   CRYSTAL_VERSION: ${{ github.event.inputs.crystal_version || '1.14.0' }}
 
+# Least-privilege token by default; jobs that write declare their own permissions.
+permissions:
+  contents: read
+
+# Trace every command so CI logs show exactly what ran and what it printed.
+defaults:
+  run:
+    shell: bash -ex {0}
+
 jobs:
   # Matrix test for different Crystal versions
   version-matrix:
@@ -64,18 +73,20 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install sqlite3 libevent openssl gmp libyaml pcre2
+        brew install sqlite3 rocksdb libevent openssl gmp libyaml pcre2
+        # Homebrew libraries are not on the default linker path on Apple Silicon
+        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Run tests
-      run: crystal spec --error-trace
+      run: crystal spec --stats -v --error-trace
 
   # Component-specific unit tests
   component-tests:
@@ -108,6 +119,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           libsqlite3-dev \
+          librocksdb-dev \
           libevent-dev \
           libssl-dev \
           libgmp-dev \
@@ -115,87 +127,87 @@ jobs:
           libpcre2-dev
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Test CogUtil Component
       run: |
         echo "=== Testing CogUtil Component ==="
-        crystal spec spec/cogutil/ --error-trace --verbose || echo "CogUtil tests completed"
+        crystal spec --stats -v spec/cogutil/ --error-trace --verbose || echo "CogUtil tests completed"
 
     - name: Test AtomSpace Component
       run: |
         echo "=== Testing AtomSpace Component ==="
-        crystal spec spec/atomspace/ --error-trace --verbose || echo "AtomSpace tests completed"
+        crystal spec --stats -v spec/atomspace/ --error-trace --verbose || echo "AtomSpace tests completed"
 
     - name: Test PLN Component
       run: |
         echo "=== Testing PLN Component ==="
-        crystal spec spec/pln/ --error-trace --verbose || echo "PLN tests completed"
+        crystal spec --stats -v spec/pln/ --error-trace --verbose || echo "PLN tests completed"
 
     - name: Test URE Component
       run: |
         echo "=== Testing URE Component ==="
-        crystal spec spec/ure/ --error-trace --verbose || echo "URE tests completed"
+        crystal spec --stats -v spec/ure/ --error-trace --verbose || echo "URE tests completed"
 
     - name: Test OpenCog Component
       run: |
         echo "=== Testing OpenCog Component ==="
-        crystal spec spec/opencog/ --error-trace --verbose || echo "OpenCog tests completed"
+        crystal spec --stats -v spec/opencog/ --error-trace --verbose || echo "OpenCog tests completed"
 
     - name: Test MOSES Component
       run: |
         echo "=== Testing MOSES Component ==="
-        crystal spec spec/moses/ --error-trace --verbose || echo "MOSES tests completed"
+        crystal spec --stats -v spec/moses/ --error-trace --verbose || echo "MOSES tests completed"
 
     - name: Test Attention Component
       run: |
         echo "=== Testing Attention Component ==="
-        crystal spec spec/attention/ --error-trace --verbose || echo "Attention tests completed"
+        crystal spec --stats -v spec/attention/ --error-trace --verbose || echo "Attention tests completed"
 
     - name: Test NLP Component
       run: |
         echo "=== Testing NLP Component ==="
-        crystal spec spec/nlp/ --error-trace --verbose || echo "NLP tests completed"
+        crystal spec --stats -v spec/nlp/ --error-trace --verbose || echo "NLP tests completed"
 
     - name: Test Pattern Matching Component
       run: |
         echo "=== Testing Pattern Matching Component ==="
-        crystal spec spec/pattern_matching/ --error-trace --verbose || echo "Pattern Matching tests completed"
+        crystal spec --stats -v spec/pattern_matching/ --error-trace --verbose || echo "Pattern Matching tests completed"
 
     - name: Test Pattern Mining Component
       run: |
         echo "=== Testing Pattern Mining Component ==="
-        crystal spec spec/pattern_mining/ --error-trace --verbose || echo "Pattern Mining tests completed"
+        crystal spec --stats -v spec/pattern_mining/ --error-trace --verbose || echo "Pattern Mining tests completed"
 
     - name: Test CogServer Component
       run: |
         echo "=== Testing CogServer Component ==="
-        crystal spec spec/cogserver/ --error-trace --verbose || echo "CogServer tests completed"
+        crystal spec --stats -v spec/cogserver/ --error-trace --verbose || echo "CogServer tests completed"
 
     - name: Test Agent-Zero Component
       run: |
         echo "=== Testing Agent-Zero Component ==="
-        crystal spec spec/agent-zero/ --error-trace --verbose || echo "Agent-Zero tests completed"
+        crystal spec --stats -v spec/agent-zero/ --error-trace --verbose || echo "Agent-Zero tests completed"
 
     - name: Test Spatial Component
       run: |
         echo "=== Testing Spatial Component ==="
-        crystal spec spec/spatial/ --error-trace --verbose || echo "Spatial tests completed"
+        crystal spec --stats -v spec/spatial/ --error-trace --verbose || echo "Spatial tests completed"
 
     - name: Test Temporal Component
       run: |
         echo "=== Testing Temporal Component ==="
-        crystal spec spec/temporal/ --error-trace --verbose || echo "Temporal tests completed"
+        crystal spec --stats -v spec/temporal/ --error-trace --verbose || echo "Temporal tests completed"
 
     - name: Test Behavior Component
       run: |
         echo "=== Testing Behavior Component ==="
-        crystal spec spec/behavior/ --error-trace --verbose || echo "Behavior tests completed"
+        crystal spec --stats -v spec/behavior/ --error-trace --verbose || echo "Behavior tests completed"
 
     - name: Test Performance Suite
       run: |
         echo "=== Testing Performance Suite ==="
-        crystal spec spec/performance/ --error-trace --verbose || echo "Performance tests completed"
+        crystal spec --stats -v spec/performance/ --error-trace --verbose || echo "Performance tests completed"
 
     - name: Generate test summary
       run: |
@@ -230,6 +242,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           libsqlite3-dev \
+          librocksdb-dev \
           libevent-dev \
           libssl-dev \
           libgmp-dev \
@@ -237,12 +250,12 @@ jobs:
           libpcre2-dev
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Run full test suite
       run: |
         echo "Running full test suite..."
-        crystal spec --error-trace --junit_output=test-results.xml 2>&1 | tee test-output.log
+        crystal spec --stats -v --error-trace --junit_output=test-results.xml 2>&1 | tee test-output.log
 
         # Extract summary
         echo "=== Test Summary ===" >> test-summary.txt
@@ -297,25 +310,25 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Run integration tests
       run: |
         echo "Running integration tests..."
-        crystal spec spec/integration/ --error-trace --verbose || true
+        crystal spec --stats -v spec/integration/ --error-trace --verbose || true
 
     - name: Run cross-component tests
       run: |
         echo "Testing cross-component functionality..."
-        crystal spec spec/crystalcog_spec.cr --error-trace --verbose || true
+        crystal spec --stats -v spec/crystalcog_spec.cr --error-trace --verbose || true
 
     - name: Run spec_helper integration
       run: |
         echo "Testing main spec_helper integration..."
-        crystal spec spec/spec_helper.cr --error-trace --verbose || true
+        crystal spec --stats -v spec/spec_helper.cr --error-trace --verbose || true
 
   # Binary build verification
   binary-build-test:
@@ -336,10 +349,10 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsqlite3-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
 
     - name: Install dependencies
-      run: shards install
+      run: shards install --verbose
 
     - name: Build all binaries
       run: |
@@ -379,16 +392,16 @@ jobs:
           source="${TARGETS[$target]}"
           echo "Building $target from $source..."
           if [ -f "$source" ]; then
-            if crystal build --error-trace "$source" -o "bin/$target" 2>&1; then
+            if crystal build --verbose --stats --error-trace "$source" -o "bin/$target" 2>&1; then
               echo "  ✓ $target built successfully"
-              ((SUCCESS_COUNT++))
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
             else
               echo "  ✗ $target build failed"
-              ((FAIL_COUNT++))
+              FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
           else
             echo "  ⚠ Source file $source not found"
-            ((FAIL_COUNT++))
+            FAIL_COUNT=$((FAIL_COUNT + 1))
           fi
         done
 
