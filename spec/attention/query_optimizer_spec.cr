@@ -225,14 +225,16 @@ describe Attention::AttentionQueryOptimizer do
       atomspace = AtomSpace::AtomSpace.new
       bank = Attention::AttentionBank.new(atomspace)
 
-      low = atomspace.add_concept_node("low_match")
-      high = atomspace.add_concept_node("high_match")
+      thing = atomspace.add_concept_node("Thing")
+      low = atomspace.add_inheritance_link(atomspace.add_concept_node("low_match"), thing)
+      high = atomspace.add_inheritance_link(atomspace.add_concept_node("high_match"), thing)
       bank.set_attention_value(low.handle, AtomSpace::AttentionValue.new(5_i16, 0_i16))
       bank.set_attention_value(high.handle, AtomSpace::AttentionValue.new(400_i16, 0_i16))
 
-      # Concrete ConceptNode templates may yield multiple same-type candidates;
-      # the optimizer must order those results by average matched STI.
-      pattern = PatternMatching::Pattern.new(low)
+      # A variable template yields one result per grounding; the optimizer
+      # must order those results by average matched STI.
+      x = atomspace.add_node(AtomSpace::AtomType::VARIABLE_NODE, "$x")
+      pattern = PatternMatching::Pattern.new(atomspace.add_inheritance_link(x, thing))
       opt = Attention::AttentionQueryOptimizer.new(bank)
       results = opt.optimized_match(pattern)
 

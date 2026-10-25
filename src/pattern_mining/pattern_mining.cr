@@ -207,7 +207,7 @@ module PatternMining
         # This is a simplified approach - in practice, this would involve more complex
         # composition logic based on the specific abstraction type
 
-        if base_pattern.template.responds_to?(:outgoing) && abstraction.abstraction_atom.responds_to?(:outgoing)
+        if base_pattern.template.link? && abstraction.abstraction_atom.link?
           # Create a more complex pattern by combining structures
           specialized_template = create_specialized_template(base_pattern.template, abstraction.abstraction_atom)
           PatternMatching::Pattern.new(specialized_template)
@@ -229,7 +229,7 @@ module PatternMining
       # This is a simplified implementation
       # In practice, this would involve sophisticated pattern composition logic
 
-      if base.type == abstraction.type && base.responds_to?(:outgoing) && abstraction.responds_to?(:outgoing)
+      if base.type == abstraction.type && base.link? && abstraction.link?
         # Try to merge outgoing sets
         combined_outgoing = (base.outgoing + abstraction.outgoing).uniq
         case base.type

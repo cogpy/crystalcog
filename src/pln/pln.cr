@@ -779,7 +779,7 @@ module PLN
       return true if derived == goal
       return false unless derived.type == goal.type
 
-      if derived.responds_to?(:outgoing) && goal.responds_to?(:outgoing)
+      if derived.link? && goal.link?
         return false unless derived.outgoing.size == goal.outgoing.size
         derived.outgoing.zip(goal.outgoing).all? { |d, g| d == g }
       elsif derived.responds_to?(:name) && goal.responds_to?(:name)

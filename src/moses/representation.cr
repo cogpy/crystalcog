@@ -103,11 +103,18 @@ module Moses
       private def mutate_variable(program : String) : String
         variables = (0...input_size).map { |i| "$#{i}" }
 
-        # Replace a random variable with another
-        old_var = variables.sample
-        new_var = variables.sample
+        # Rename one occurrence of a variable, matching whole tokens so $1
+        # never rewrites part of $10.
+        occurrences = program.scan(/\$\d+/)
+        return program if occurrences.empty?
 
-        program.gsub(old_var, new_var)
+        target = Random.rand(occurrences.size)
+        new_var = variables.sample
+        seen = -1
+        program.gsub(/\$\d+/) do |match|
+          seen += 1
+          seen == target ? new_var : match
+        end
       end
 
       private def mutate_operator(program : String) : String
@@ -150,23 +157,39 @@ module Moses
       end
 
       # Perform crossover between two parent programs
+      # Subtree crossover: parse both parents and swap one random subtree
+      # from each, so offspring are always well-formed programs.
       def crossover(parent1 : String, parent2 : String) : Tuple(String, String)
-        # Simple string-based crossover for demonstration
-        # In full MOSES, this would operate on combo trees
+        tree1 = ProgramParser.parse(parent1)
+        tree2 = ProgramParser.parse(parent2)
+        return {parent1, parent2} unless tree1 && tree2
 
-        if parent1.size < 3 || parent2.size < 3
-          return {parent1, parent2}
+        cut1 = subtrees(tree1).sample
+        cut2 = subtrees(tree2).sample
+
+        {replace(tree1, cut1, cut2).to_s, replace(tree2, cut2, cut1).to_s}
+      end
+
+      private def subtrees(node : ProgramNode) : Array(ProgramNode)
+        case node
+        when BinaryOpNode then [node.as(ProgramNode)] + subtrees(node.left) + subtrees(node.right)
+        when UnaryOpNode  then [node.as(ProgramNode)] + subtrees(node.operand)
+        else                   [node.as(ProgramNode)]
         end
+      end
 
-        # Random crossover points
-        point1 = Random.rand(1..parent1.size - 1)
-        point2 = Random.rand(1..parent2.size - 1)
+      # Copy of `node` with the subtree identical to `target` swapped for `replacement`.
+      private def replace(node : ProgramNode, target : ProgramNode, replacement : ProgramNode) : ProgramNode
+        return replacement if node.same?(target)
 
-        # Create offspring
-        child1 = parent1[0...point1] + parent2[point2..]
-        child2 = parent2[0...point2] + parent1[point1..]
-
-        {child1, child2}
+        case node
+        when BinaryOpNode
+          BinaryOpNode.new(node.operator, replace(node.left, target, replacement), replace(node.right, target, replacement))
+        when UnaryOpNode
+          UnaryOpNode.new(node.operator, replace(node.operand, target, replacement))
+        else
+          node
+        end
       end
     end
 

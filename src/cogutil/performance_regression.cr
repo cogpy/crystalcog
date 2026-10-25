@@ -143,6 +143,31 @@ module CogUtil
       regressions.sort_by { |r| -r.severity }
     end
 
+    # Compare two sessions directly, treating `baseline` as the reference
+    # instead of the stored history.
+    def compare_sessions(baseline : PerformanceProfiler::Session,
+                         current : PerformanceProfiler::Session) : Array(RegressionResult)
+      regressions = Array(RegressionResult).new
+      baseline_metrics = baseline.all_metrics
+
+      current.all_metrics.each do |function_name, current_metric|
+        next unless baseline_metric = baseline_metrics[function_name]?
+
+        [
+          analyze_time_regression(function_name, baseline_metric, current_metric),
+          analyze_memory_regression(function_name, baseline_metric, current_metric),
+          analyze_error_regression(function_name, baseline_metric, current_metric),
+        ].each { |r| regressions << r if r }
+      end
+
+      regressions.sort_by { |r| -r.severity }
+    end
+
+    # Names of every function present in the stored history.
+    def tracked_functions : Array(String)
+      @historical_data.flat_map(&.metrics.keys).uniq.sort
+    end
+
     # Generate regression report
     def generate_regression_report(regressions : Array(RegressionResult)) : String
       String.build do |str|
@@ -158,7 +183,7 @@ module CogUtil
         end
 
         critical_regressions = regressions.select(&.critical?)
-        warning_regressions = regressions.select(&.warning?)
+        warning_regressions = regressions.select { |r| r.warning? && !r.critical? }
         minor_regressions = regressions.reject { |r| r.critical? || r.warning? }
 
         if critical_regressions.any?

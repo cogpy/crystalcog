@@ -500,7 +500,7 @@ module CogUtil
 
     private def serve_dashboard_html(context : HTTP::Server::Context)
       html = generate_dashboard_html
-      context.response.content_type = "text/html"
+      context.response.content_type = "text/html; charset=utf-8"
       context.response.print html
     end
 
@@ -535,55 +535,49 @@ module CogUtil
       context.response.print summary.to_json
     end
 
+    # HTTP::WebSocketHandler performs the RFC 6455 handshake (101 Switching
+    # Protocols + Sec-WebSocket-Accept) and runs the session after the block.
     private def handle_websocket(context : HTTP::Server::Context)
-      # Upgrade HTTP connection to WebSocket using response.upgrade
-      context.response.upgrade do |io|
-        # Create WebSocket protocol handler
-        ws_protocol = HTTP::WebSocket::Protocol.new(io, masked: false)
-        ws = HTTP::WebSocket.new(ws_protocol)
+      unless context.request.headers["Upgrade"]?.try(&.compare("websocket", case_insensitive: true)) == 0
+        context.response.status_code = 400
+        context.response.print "Expected WebSocket upgrade"
+        return
+      end
 
-        # Add client to active connections
+      HTTP::WebSocketHandler.new { |ws, _ctx| attach_websocket(ws) }.call(context)
+    end
+
+    private def attach_websocket(ws : HTTP::WebSocket)
+      @websocket_mutex.synchronize do
+        @websocket_clients << ws
+      end
+      puts "WebSocket client connected (total: #{@websocket_clients.size})"
+
+      ws.on_message do |message|
+        handle_websocket_message(ws, message)
+      end
+
+      ws.on_close do
         @websocket_mutex.synchronize do
-          @websocket_clients << ws
+          @websocket_clients.delete(ws)
         end
+        puts "WebSocket client disconnected (remaining: #{@websocket_clients.size})"
+      end
 
-        puts "WebSocket client connected (total: #{@websocket_clients.size})"
-
-        # Send initial state
-        initial_state = {
-          "type" => "initial_state",
-          "data" => {
-            "monitoring_active" => @monitoring_active,
-            "sample_count"      => @samples.size,
-            "active_alerts"     => @active_alerts.size,
-            "alert_rules"       => @alert_rules.size,
-          },
-        }
-
-        begin
-          ws.send(initial_state.to_json)
-
-          # Handle incoming messages
-          ws.on_message do |message|
-            handle_websocket_message(ws, message)
-          end
-
-          # Handle client disconnect
-          ws.on_close do
-            @websocket_mutex.synchronize do
-              @websocket_clients.delete(ws)
-            end
-            puts "WebSocket client disconnected (remaining: #{@websocket_clients.size})"
-          end
-
-          # Run the WebSocket
-          ws.run
-        rescue ex
-          puts "WebSocket error: #{ex.message}"
-          @websocket_mutex.synchronize do
-            @websocket_clients.delete(ws)
-          end
-        end
+      initial_state = {
+        "type" => "initial_state",
+        "data" => {
+          "monitoring_active" => @monitoring_active,
+          "sample_count"      => @samples.size,
+          "active_alerts"     => @active_alerts.size,
+          "alert_rules"       => @alert_rules.size,
+        },
+      }
+      ws.send(initial_state.to_json)
+    rescue ex
+      puts "WebSocket error: #{ex.message}"
+      @websocket_mutex.synchronize do
+        @websocket_clients.delete(ws)
       end
     end
 
@@ -769,6 +763,7 @@ module CogUtil
       <!DOCTYPE html>
       <html>
       <head>
+          <meta charset="utf-8">
           <title>CrystalCog Performance Dashboard</title>
           <style>
               body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
@@ -813,7 +808,7 @@ module CogUtil
           
           <script>
               // WebSocket connection for real-time updates
-              const ws = new WebSocket('ws://localhost:8080/ws');
+              const ws = new WebSocket(`ws://${location.host}/ws`);
               
               ws.onmessage = function(event) {
                   const message = JSON.parse(event.data);
@@ -828,16 +823,19 @@ module CogUtil
               loadMetrics();
               loadAlerts();
               
+              let metricsState = {};
+              let alertsState = [];
+
               function loadMetrics() {
                   fetch('/api/metrics')
                       .then(response => response.json())
-                      .then(data => renderMetrics(data));
+                      .then(data => { metricsState = data; renderMetrics(data); });
               }
               
               function loadAlerts() {
                   fetch('/api/alerts')
                       .then(response => response.json())
-                      .then(data => renderAlerts(data));
+                      .then(data => { alertsState = data; renderAlerts(data); });
               }
               
               function renderMetrics(metrics) {
@@ -853,8 +851,8 @@ module CogUtil
                       card.innerHTML = `
                           <div class="metric-label">${name}</div>
                           <div class="metric-value">${metric.current.toFixed(4)}</div>
-                          <div>Average: ${metric.recent_avg.toFixed(4)}</div>
-                          <div>Range: ${metric.recent_min.toFixed(4)} - ${metric.recent_max.toFixed(4)}</div>
+                          <div>Average: ${metric.avg.toFixed(4)}</div>
+                          <div>Range: ${metric.min.toFixed(4)} - ${metric.max.toFixed(4)}</div>
                           <div>Trend: ${metric.trend > 0 ? '↗️' : '↘️'} ${metric.trend.toFixed(4)}</div>
                       `;
                       container.appendChild(card);
@@ -883,15 +881,41 @@ module CogUtil
                   });
               }
               
+              // Fold one streamed sample into the cached summary: running
+              // average over the samples seen, widened range, and trend as
+              // the step from the previous value.
               function updateMetric(data) {
-                  // Real-time metric updates would be implemented here
-                  console.log('Metric update:', data);
+                  const prev = metricsState[data.metric];
+                  if (prev) {
+                      const n = (prev.count || 1) + 1;
+                      metricsState[data.metric] = Object.assign({}, prev, {
+                          current: data.value,
+                          avg: prev.avg + (data.value - prev.avg) / n,
+                          min: Math.min(prev.min, data.value),
+                          max: Math.max(prev.max, data.value),
+                          trend: data.value - prev.current,
+                          count: n
+                      });
+                  } else {
+                      metricsState[data.metric] = {
+                          current: data.value, avg: data.value,
+                          min: data.value, max: data.value, trend: 0, count: 1
+                      };
+                  }
+                  renderMetrics(metricsState);
               }
               
               function addAlert(data) {
-                  // Real-time alert updates would be implemented here
-                  console.log('New alert:', data);
-                  loadAlerts(); // Reload alerts for now
+                  alertsState = alertsState.filter(a => a.name !== data.name);
+                  alertsState.unshift({
+                      name: data.name,
+                      severity: data.severity,
+                      current_value: data.value,
+                      threshold: data.threshold,
+                      triggered_at: data.triggered_at,
+                      acknowledged: false
+                  });
+                  renderAlerts(alertsState);
               }
               
               // Refresh data every 5 seconds

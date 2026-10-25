@@ -328,7 +328,7 @@ module Robotics
                      @width : UInt32 = 0_u32,
                      @encoding : String = "rgb8")
         @is_bigendian = 0_u8
-        @step = @width * 3  # Assuming RGB8
+        @step = @width * 3 # Assuming RGB8
         @data = Bytes.new(0)
       end
 
@@ -546,6 +546,29 @@ module Robotics
       Transform.new(@child_frame_id, @frame_id, inv_translation, inv_rotation, @timestamp)
     end
 
+    # Chain `self` (frame_id <- child_frame_id) with `other` (other.frame_id <-
+    # other.child_frame_id), where other.frame_id must equal child_frame_id.
+    # The result maps points from other.child_frame_id into frame_id:
+    #   p = R1 (R2 p'' + t2) + t1  =>  R = R1 R2, t = R1 t2 + t1
+    def compose(other : Transform) : Transform
+      unless other.frame_id == @child_frame_id
+        raise ArgumentError.new("Cannot compose #{@frame_id}<-#{@child_frame_id} with #{other.frame_id}<-#{other.child_frame_id}")
+      end
+
+      a = @rotation
+      b = other.rotation
+      rotation = MessageTypes::Quaternion.new(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+      )
+      translation = rotate_by_quaternion(other.translation, a) + @translation
+      stamp = @timestamp < other.timestamp ? @timestamp : other.timestamp
+
+      Transform.new(@frame_id, other.child_frame_id, translation, rotation, stamp)
+    end
+
     private def rotate_by_quaternion(v : Spatial::Vector3, q : MessageTypes::Quaternion) : Spatial::Vector3
       # Quaternion rotation: q * v * q^-1
       u = Spatial::Vector3.new(q.x, q.y, q.z)
@@ -585,8 +608,48 @@ module Robotics
         return tf.inverse
       end
 
-      # TODO: Implement transform chain resolution
-      nil
+      resolve_chain(target_frame, source_frame)
+    end
+
+    # Breadth-first search over the frame graph (each stored transform is an
+    # edge usable in both directions), then fold the shortest path into one
+    # transform target_frame <- source_frame.
+    private def resolve_chain(target_frame : String, source_frame : String) : Transform?
+      return Transform.new(target_frame, source_frame) if target_frame == source_frame
+
+      adjacency = Hash(String, Array(Transform)).new { |h, k| h[k] = [] of Transform }
+      @transforms.each_value do |tf|
+        adjacency[tf.frame_id] << tf
+        adjacency[tf.child_frame_id] << tf.inverse
+      end
+      return nil unless adjacency.has_key?(target_frame) && adjacency.has_key?(source_frame)
+
+      # parent_edge[frame] = edge (parent <- frame) reached during the search
+      parent_edge = {} of String => Transform
+      visited = Set{target_frame}
+      queue = Deque{target_frame}
+
+      while frame = queue.shift?
+        break if frame == source_frame
+        adjacency[frame].each do |edge|
+          child = edge.child_frame_id
+          next if visited.includes?(child)
+          visited << child
+          parent_edge[child] = edge
+          queue << child
+        end
+      end
+      return nil unless parent_edge.has_key?(source_frame)
+
+      path = [] of Transform
+      frame = source_frame
+      while frame != target_frame
+        edge = parent_edge[frame]
+        path.unshift(edge)
+        frame = edge.frame_id
+      end
+
+      path.reduce { |acc, edge| acc.compose(edge) }
     end
 
     def can_transform(target_frame : String, source_frame : String) : Bool

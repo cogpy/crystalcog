@@ -83,7 +83,18 @@ module Moses
     # Test best candidate
     if best = result.best_candidate
       puts "\nBest candidate: #{best.program}"
-      puts "  (Program execution would be implemented in full version)"
+      correct = 0
+      training_data.each_with_index do |input, i|
+        output = begin
+          Moses::Candidate.new(best.program).execute(input, Moses::ProblemType::BooleanClassification)
+        rescue ex
+          "error: #{ex.message}"
+        end
+        expected = target_data[i] > 0.5
+        correct += 1 if output == expected
+        puts "  #{input} -> #{output} (expected #{expected})"
+      end
+      puts "  Accuracy: #{correct}/#{training_data.size}"
     end
   end
 

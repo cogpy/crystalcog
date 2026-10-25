@@ -63,7 +63,7 @@ module PatternMatching
     private def collect_variables(atom : AtomSpace::Atom)
       if Pattern.variable?(atom)
         @variables << atom
-      elsif atom.responds_to?(:outgoing)
+      elsif atom.link?
         atom.outgoing.each { |child| collect_variables(child) }
       end
     end
@@ -77,6 +77,21 @@ module PatternMatching
   abstract class Constraint
     abstract def satisfied?(bindings : VariableBinding, atomspace : AtomSpace::AtomSpace) : Bool
     abstract def to_s(io)
+
+    # Replace bound variables throughout `atom`. Links are rebuilt only when a
+    # descendant changed, so unbound patterns keep their identity.
+    protected def substitute_variables(atom : AtomSpace::Atom, bindings : VariableBinding) : AtomSpace::Atom
+      if Pattern.variable?(atom)
+        bindings[atom]? || atom
+      elsif atom.link?
+        original = atom.outgoing
+        substituted = original.map { |child| substitute_variables(child, bindings) }
+        return atom if substituted.zip(original).all? { |a, b| a.same?(b) }
+        AtomSpace::Link.new(atom.type, substituted, atom.truth_value)
+      else
+        atom
+      end
+    end
   end
 
   # Type constraint - ensures a variable binds to atoms of specific types
@@ -111,28 +126,14 @@ module PatternMatching
     end
 
     def initialize(atom : AtomSpace::Atom)
-      @atoms = [atom]
+      @atoms = [atom] of AtomSpace::Atom
     end
 
     def satisfied?(bindings : VariableBinding, atomspace : AtomSpace::AtomSpace) : Bool
       @atoms.all? do |atom|
         # Substitute variables with bindings
         substituted = substitute_variables(atom, bindings)
-        atomspace.contains?(substituted)
-      end
-    end
-
-    private def substitute_variables(atom : AtomSpace::Atom, bindings : VariableBinding) : AtomSpace::Atom
-      if Pattern.variable?(atom)
-        bindings[atom]? || atom
-      elsif atom.responds_to?(:outgoing)
-        # For links, substitute variables in outgoing atoms
-        new_outgoing = atom.outgoing.map { |child| substitute_variables(child, bindings) }
-        # Create a new link with substituted outgoing atoms
-        # This is simplified - would need proper link creation based on type
-        atom # Return original for now
-      else
-        atom
+        !atomspace.find_equivalent(substituted).nil?
       end
     end
 
@@ -149,26 +150,14 @@ module PatternMatching
     end
 
     def initialize(atom : AtomSpace::Atom)
-      @atoms = [atom]
+      @atoms = [atom] of AtomSpace::Atom
     end
 
     def satisfied?(bindings : VariableBinding, atomspace : AtomSpace::AtomSpace) : Bool
       @atoms.all? do |atom|
         # Substitute variables with bindings
         substituted = substitute_variables(atom, bindings)
-        !atomspace.contains?(substituted)
-      end
-    end
-
-    private def substitute_variables(atom : AtomSpace::Atom, bindings : VariableBinding) : AtomSpace::Atom
-      if Pattern.variable?(atom)
-        bindings[atom]? || atom
-      elsif atom.responds_to?(:outgoing)
-        # For links, substitute variables in outgoing atoms
-        new_outgoing = atom.outgoing.map { |child| substitute_variables(child, bindings) }
-        atom # Return original for now
-      else
-        atom
+        atomspace.find_equivalent(substituted).nil?
       end
     end
 
@@ -189,17 +178,6 @@ module PatternMatching
       left_substituted = substitute_variables(@left, bindings)
       right_substituted = substitute_variables(@right, bindings)
       left_substituted == right_substituted
-    end
-
-    private def substitute_variables(atom : AtomSpace::Atom, bindings : VariableBinding) : AtomSpace::Atom
-      if Pattern.variable?(atom)
-        bindings[atom]? || atom
-      elsif atom.responds_to?(:outgoing)
-        new_outgoing = atom.outgoing.map { |child| substitute_variables(child, bindings) }
-        atom # Return original for now
-      else
-        atom
-      end
     end
 
     def to_s(io)
@@ -230,14 +208,6 @@ module PatternMatching
       end
 
       false
-    end
-
-    private def substitute_variables(atom : AtomSpace::Atom, bindings : VariableBinding) : AtomSpace::Atom
-      if Pattern.variable?(atom)
-        bindings[atom]? || atom
-      else
-        atom
-      end
     end
 
     def to_s(io)
@@ -390,7 +360,7 @@ module PatternMatching
 
       if Pattern.variable?(template)
         explore_variable_bindings(pattern, template, results, start_time)
-      elsif template.responds_to?(:outgoing)
+      elsif template.link?
         explore_link_structures(pattern, template, results, start_time)
       else
         # Concrete atom - check if it exists and satisfies constraints
@@ -458,8 +428,10 @@ module PatternMatching
         break if results.size >= @max_results
         break if check_timeout(start_time)
 
-        next unless candidate.responds_to?(:outgoing)
+        next unless candidate.link?
         next unless candidate.outgoing.size == template.outgoing.size
+        # Stored patterns (links over variables) are not data to match against.
+        next if contains_variable?(candidate)
 
         # Push state for this candidate exploration
         candidate_state = current_state.dup
@@ -485,17 +457,17 @@ module PatternMatching
       return false if check_timeout(start_time)
 
       # Base case: both are atoms
-      if !template.responds_to?(:outgoing) && !candidate.responds_to?(:outgoing)
+      if !template.link? && !candidate.link?
         return template == candidate || Pattern.variable?(template)
       end
 
       # One is link, one is atom - no match unless template is variable
-      if template.responds_to?(:outgoing) != candidate.responds_to?(:outgoing)
+      if template.link? != candidate.link?
         return Pattern.variable?(template)
       end
 
       # Both are links - compare recursively
-      return false unless template.responds_to?(:outgoing) && candidate.responds_to?(:outgoing)
+      return false unless template.link? && candidate.link?
       return false unless template.type == candidate.type
       return false unless template.outgoing.size == candidate.outgoing.size
 
@@ -516,6 +488,11 @@ module PatternMatching
       end
 
       true
+    end
+
+    private def contains_variable?(atom : AtomSpace::Atom) : Bool
+      return true if Pattern.variable?(atom)
+      atom.link? && atom.outgoing.any? { |child| contains_variable?(child) }
     end
 
     # Check for timeout conditions
