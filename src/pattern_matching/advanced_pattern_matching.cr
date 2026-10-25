@@ -568,7 +568,7 @@ module PatternMatching
         structure_frequency = Hash(Tuple(AtomSpace::AtomType, Int32), Int32).new(0)
 
         @atomspace.get_all_atoms.each do |atom|
-          next unless atom.responds_to?(:outgoing)
+          next unless atom.link?
           key = {atom.type, atom.outgoing.size}
           structure_frequency[key] += 1
         end

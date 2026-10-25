@@ -39,6 +39,19 @@ module CogUtil
           json.field "errors", @errors
         end
       end
+
+      # Inverse of #to_json; missing fields default to zero.
+      def self.from_json_any(data : JSON::Any) : Metrics
+        m = Metrics.new
+        m.cpu_time = data["cpu_time"]?.try(&.as_f?) || data["cpu_time"]?.try(&.as_i64?).try(&.to_f64) || 0.0
+        m.wall_time = data["wall_time"]?.try(&.as_f?) || data["wall_time"]?.try(&.as_i64?).try(&.to_f64) || 0.0
+        m.gc_time = data["gc_time"]?.try(&.as_f?) || data["gc_time"]?.try(&.as_i64?).try(&.to_f64) || 0.0
+        m.memory_used = data["memory_used"]?.try(&.as_i64?).try(&.to_u64) || 0_u64
+        m.memory_peak = data["memory_peak"]?.try(&.as_i64?).try(&.to_u64) || 0_u64
+        m.call_count = data["call_count"]?.try(&.as_i64?).try(&.to_u64) || 0_u64
+        m.errors = data["errors"]?.try(&.as_i64?).try(&.to_u64) || 0_u64
+        m
+      end
     end
 
     # Profile session storing collected metrics
@@ -95,7 +108,24 @@ module CogUtil
       end
 
       def session_duration : Float64
-        (Time.instant - @start_time).total_seconds
+        @loaded_duration || (Time.instant - @start_time).total_seconds
+      end
+
+      @loaded_duration : Float64?
+
+      protected setter loaded_duration : Float64?
+
+      # Rebuild a session from the JSON written by PerformanceProfiler.export_metrics.
+      def self.from_export(json : String) : Session
+        data = JSON.parse(json)
+        session = Session.new
+        data.as_h?.try(&.["metrics"]?).try(&.as_h?).try &.each do |name, metrics|
+          session.all_metrics[name] = Metrics.from_json_any(metrics)
+        end
+        if duration = data.as_h?.try { data.dig?("session_info", "duration") }
+          session.loaded_duration = duration.as_f? || duration.as_i64?.try(&.to_f64)
+        end
+        session
       end
 
       private def get_memory_usage : UInt64

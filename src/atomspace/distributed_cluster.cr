@@ -706,6 +706,8 @@ module AtomSpace
         data["name"] = JSON::Any.new(atom.name)
       elsif atom.is_a?(Link)
         data["outgoing"] = JSON::Any.new(atom.outgoing.map { |a| JSON::Any.new(a.handle.to_s) })
+        # Handles are node-local, so ship the outgoing atoms by content too.
+        data["outgoing_atoms"] = JSON::Any.new(atom.outgoing.map { |a| JSON::Any.new(serialize_atom(a)) })
       end
 
       data
@@ -722,9 +724,19 @@ module AtomSpace
           name = data["name"].as_s
           return Node.new(type, name, tv)
         else
-          # For links, we'd need to resolve outgoing atoms
-          # This is simplified - real implementation would handle recursive resolution
-          return Link.new(type, [] of Atom, tv)
+          # Rebuild children from content and intern them locally, so the
+          # link points at this node's atoms rather than remote handles.
+          children = data["outgoing_atoms"]?.try(&.as_a?)
+          unless children
+            CogUtil::Logger.warn("Link sync without outgoing_atoms; cannot resolve remote handles")
+            return nil
+          end
+          outgoing = children.map do |child|
+            atom = deserialize_atom(child.as_h)
+            return nil unless atom
+            @local_atomspace.add_atom(atom)
+          end
+          return Link.new(type, outgoing, tv)
         end
       rescue ex
         CogUtil::Logger.error("Failed to deserialize atom: #{ex.message}")

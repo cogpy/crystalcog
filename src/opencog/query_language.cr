@@ -58,10 +58,11 @@ module OpenCog
         if atom.type == AtomSpace::AtomType::VARIABLE_NODE && atom.responds_to?(:name)
           var_name = atom.name.lstrip("$")
           var_map[var_name]? || atom
-        elsif atom.responds_to?(:outgoing)
-          new_outgoing = atom.outgoing.map { |child| substitute_variables(child, var_map) }
-          # Create new atom with substituted variables - simplified for now
-          atom # Would need proper atom construction
+        elsif atom.link?
+          original = atom.outgoing
+          substituted = original.map { |child| substitute_variables(child, var_map) }
+          return atom if substituted.zip(original).all? { |a, b| a.same?(b) }
+          AtomSpace::Link.new(atom.type, substituted, atom.truth_value)
         else
           atom
         end
@@ -265,6 +266,14 @@ module OpenCog
         clause_str = clause_str.strip
         return nil if clause_str.empty?
 
+        # Inheritance first: the generic triple pattern would also match ISA
+        if isa_match = clause_str.match(/(\$?\w+)\s+(?:ISA|inherits_from|->)\s+(\$?\w+)/i)
+          child = isa_match[1]
+          parent = isa_match[2]
+
+          return InheritanceClause.new(child, parent)
+        end
+
         # Try to parse as triple pattern: subject predicate object
         if triple_match = clause_str.match(/(\$?\w+)\s+(\$?\w+)\s+(\$?\w+)/)
           subject = triple_match[1]
@@ -272,14 +281,6 @@ module OpenCog
           object = triple_match[3]
 
           return TripleClause.new(subject, predicate, object)
-        end
-
-        # Try to parse as inheritance: child ISA parent
-        if isa_match = clause_str.match(/(\$?\w+)\s+(?:ISA|inherits_from|->)\s+(\$?\w+)/i)
-          child = isa_match[1]
-          parent = isa_match[2]
-
-          return InheritanceClause.new(child, parent)
         end
 
         # If we can't parse it, create a note for debugging
@@ -315,42 +316,41 @@ module OpenCog
           return results
         end
 
-        # Use pattern matching to find bindings
-        # For simplicity, we'll use the first pattern atom as template
-        template = pattern_atoms.first
-
-        # Create pattern and match
-        pattern = PatternMatching::Pattern.new(template)
-
-        # Add type constraints for query variables
-        query.variables.each do |var|
-          if var.type
-            var_atom = @atomspace.add_node(AtomSpace::AtomType::VARIABLE_NODE, "$#{var.name}")
-            type_constraint = PatternMatching::TypeConstraint.new(var_atom, var.type.not_nil!)
-            pattern.add_constraint(type_constraint)
-          end
+        # Typed query variables become constraints on every clause pattern.
+        type_constraints = query.variables.compact_map do |var|
+          next unless allowed = var.type
+          var_atom = @atomspace.add_node(AtomSpace::AtomType::VARIABLE_NODE, "$#{var.name}")
+          PatternMatching::TypeConstraint.new(var_atom, allowed)
         end
 
-        # Execute pattern matching
-        match_results = @pattern_matcher.match(pattern)
+        # Match each clause on its own, then natural-join the solutions on
+        # shared variable names (a conjunctive query).
+        solutions = [{Hash(String, AtomSpace::Atom).new, Array(AtomSpace::Atom).new}]
+        pattern_atoms.each do |template|
+          pattern = PatternMatching::Pattern.new(template)
+          type_constraints.each { |c| pattern.add_constraint(c) }
 
-        # Convert pattern match results to query results
-        match_results.each do |match_result|
-          # Create variable bindings for query result
-          bindings = Hash(String, AtomSpace::Atom).new
-
-          match_result.bindings.each do |var_atom, bound_atom|
-            if var_atom.type == AtomSpace::AtomType::VARIABLE_NODE && var_atom.responds_to?(:name)
-              var_name = var_atom.name.lstrip("$")
-              bindings[var_name] = bound_atom
+          clause_solutions = @pattern_matcher.match(pattern).map do |match_result|
+            bindings = Hash(String, AtomSpace::Atom).new
+            match_result.bindings.each do |var_atom, bound_atom|
+              if var_atom.type == AtomSpace::AtomType::VARIABLE_NODE
+                bindings[var_atom.name.lstrip("$")] = bound_atom
+              end
             end
+            {bindings, match_result.matched_atoms}
           end
 
-          # Calculate confidence based on matched atoms
-          confidence = calculate_confidence(match_result.matched_atoms)
+          solutions = solutions.flat_map do |(bound, matched)|
+            clause_solutions.compact_map do |(clause_bound, clause_matched)|
+              next unless clause_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing == atom }
+              {bound.merge(clause_bound), matched + clause_matched}
+            end
+          end
+          break if solutions.empty?
+        end
 
-          query_result = Query::QueryResult.new(bindings, confidence)
-          results << query_result
+        solutions.each do |(bindings, matched)|
+          results << Query::QueryResult.new(bindings, calculate_confidence(matched))
         end
 
         # Sort by confidence descending

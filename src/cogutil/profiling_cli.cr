@@ -228,18 +228,23 @@ module CogUtil
         return
       end
 
-      # Load and analyze data
       puts "Loading profiling data from #{input_file}..."
+      return unless session = load_session(input_file)
 
-      # Initialize regression detector
       @regression_detector = PerformanceRegression.new
 
       if baseline_file = options["baseline"]?
         puts "Performing regression analysis against baseline: #{baseline_file}"
-        # In a real implementation, we would load both files and compare
-        puts "Regression analysis complete (simulated)".colorize(:green)
+        return unless baseline = load_session(baseline_file)
+        regressions = @regression_detector.not_nil!.compare_sessions(baseline, session)
+        if regressions.empty?
+          puts "✅ No regressions against baseline".colorize(:green)
+        else
+          puts @regression_detector.not_nil!.generate_regression_report(regressions)
+        end
       else
         puts "No baseline specified, performing standalone analysis"
+        print_session_summary(session)
       end
 
       puts "Analysis complete!".colorize(:green)
@@ -286,9 +291,7 @@ module CogUtil
       # Initialize optimization engine
       @optimization_engine = OptimizationEngine.new
 
-      # In a real implementation, we would load the profiling session from file
-      # For now, we'll create a mock session for demonstration
-      session = create_mock_session
+      return unless session = load_session(input_file)
 
       recommendations = @optimization_engine.try(&.analyze_and_recommend(session)) || [] of OptimizationEngine::Recommendation
 
@@ -340,9 +343,9 @@ module CogUtil
       # Initialize regression detector
       @regression_detector = PerformanceRegression.new
 
-      # In a real implementation, we would load both sessions and compare
-      mock_session = create_mock_session
-      regressions = @regression_detector.try(&.analyze_regressions(mock_session)) || [] of PerformanceRegression::RegressionResult
+      return unless baseline = load_session(baseline_file)
+      return unless current = load_session(current_file)
+      regressions = @regression_detector.not_nil!.compare_sessions(baseline, current)
 
       if regressions.any?
         report = @regression_detector.try(&.generate_regression_report(regressions)) || ""
@@ -350,7 +353,7 @@ module CogUtil
 
         # Summary
         critical = regressions.count(&.critical?)
-        warnings = regressions.count(&.warning?)
+        warnings = regressions.count { |r| r.warning? && !r.critical? }
 
         puts "\nComparison Summary:".colorize(:cyan)
         puts "  Critical Regressions: #{critical}"
@@ -505,71 +508,163 @@ module CogUtil
       "#{size.round(2)} #{units[unit_index]}"
     end
 
-    private def create_mock_session : PerformanceProfiler::Session
-      # Create a mock session for demonstration purposes
-      session = PerformanceProfiler::Session.new
-
-      # Add some mock profiling data
-      session.start_profile("example_function")
-      sleep 0.01.seconds
-      session.end_profile("example_function")
-
+    # Load a session saved with `--format json` (PerformanceProfiler.export_metrics).
+    private def load_session(filename : String) : PerformanceProfiler::Session?
+      unless File.exists?(filename)
+        puts "Error: #{filename} not found".colorize(:red)
+        return nil
+      end
+      session = PerformanceProfiler::Session.from_export(File.read(filename))
+      if session.all_metrics.empty?
+        puts "Warning: #{filename} contains no metrics".colorize(:yellow)
+      end
       session
+    rescue ex : JSON::ParseException
+      puts "Error: #{filename} is not a JSON profile (save it with --format json): #{ex.message}".colorize(:red)
+      nil
     end
 
+    private def print_session_summary(session : PerformanceProfiler::Session)
+      metrics = session.all_metrics
+      puts "Functions profiled: #{metrics.size}"
+      puts "Session duration: #{session.session_duration.round(4)}s"
+      metrics.to_a.sort_by { |_, m| -m.wall_time }.each do |name, m|
+        avg_ms = m.call_count > 0 ? m.wall_time / m.call_count * 1000 : 0.0
+        puts "  #{name}: #{m.call_count} calls, total #{(m.wall_time * 1000).round(3)}ms, avg #{avg_ms.round(3)}ms, errors #{m.errors}, peak #{format_bytes(m.memory_peak)}"
+      end
+    end
+
+    # Alert rules file: JSON array (or {"rules": [...]}) of objects with
+    # name, metric_pattern, threshold, comparison (gt|lt|eq), duration_seconds,
+    # severity and optional enabled.
     private def load_alert_configuration(filename : String)
       puts "Loading alert configuration from #{filename}..."
-      # In a real implementation, this would load alert rules from JSON/YAML
-      puts "Alert configuration loaded".colorize(:green)
-    end
-
-    private def run_atomspace_benchmarks(iterations : Int32)
-      puts "Running AtomSpace benchmarks (#{iterations} iterations)...".colorize(:blue)
-
-      # Mock benchmark - in real implementation, this would run actual AtomSpace operations
-      total_time = 0.0
-      iterations.times do |i|
-        start = Time.instant
-        # Simulate AtomSpace operations
-        sleep 0.001.seconds
-        total_time += (Time.instant - start).total_seconds
-
-        if @verbose && (i + 1) % (iterations // 10) == 0
-          progress = ((i + 1).to_f / iterations * 100).round(1)
-          puts "  Progress: #{progress}%"
-        end
+      unless File.exists?(filename)
+        puts "Error: #{filename} not found".colorize(:red)
+        return
       end
 
-      avg_time = total_time / iterations
-      puts "  Average time per operation: #{(avg_time * 1000).round(3)}ms".colorize(:green)
+      data = JSON.parse(File.read(filename))
+      rules = data.as_a? || data.as_h?.try(&.["rules"]?).try(&.as_a?) || [] of JSON::Any
+      loaded = 0
+      rules.each do |rule|
+        next unless rule.as_h?
+        name = rule["name"]?.try(&.as_s?)
+        pattern = rule["metric_pattern"]?.try(&.as_s?)
+        threshold = rule["threshold"]?.try { |t| t.as_f? || t.as_i64?.try(&.to_f64) }
+        unless name && pattern && threshold
+          puts "  Skipping rule without name/metric_pattern/threshold: #{rule.to_json}".colorize(:yellow)
+          next
+        end
+        seconds = rule["duration_seconds"]?.try { |d| d.as_f? || d.as_i64?.try(&.to_f64) } || 0.0
+        @monitor.try &.add_alert_rule(
+          name, pattern, threshold,
+          rule["comparison"]?.try(&.as_s?) || "gt",
+          seconds.seconds,
+          rule["severity"]?.try(&.as_s?) || "warning",
+          rule["enabled"]?.try(&.as_bool?) != false
+        )
+        loaded += 1
+      end
+      puts "Alert configuration loaded: #{loaded} rule(s)".colorize(:green)
+    rescue ex : JSON::ParseException
+      puts "Error: invalid alert configuration #{filename}: #{ex.message}".colorize(:red)
     end
 
+    # Run `iterations` timed samples of `block` and print the mean.
+    private def time_samples(label : String, iterations : Int32, &block : Int32 ->)
+      iterations = 1 if iterations < 1
+      total = 0.0
+      iterations.times do |i|
+        start = Time.instant
+        block.call(i)
+        total += (Time.instant - start).total_seconds
+        step = Math.max(iterations // 10, 1)
+        if @verbose && (i + 1) % step == 0
+          puts "  Progress: #{((i + 1).to_f / iterations * 100).round(1)}%"
+        end
+      end
+      puts "  #{label}: #{(total / iterations * 1000).round(3)}ms per iteration".colorize(:green)
+    end
+
+    # Store-shaped workload (no AtomSpace dependency in cogutil): intern
+    # names, index by type, and walk an outgoing-set map like links do.
+    private def run_atomspace_benchmarks(iterations : Int32)
+      puts "Running AtomSpace benchmarks (#{iterations} iterations)...".colorize(:blue)
+      time_samples("insert+index+lookup of 1000 atoms", iterations) do |i|
+        by_name = Hash(String, UInt64).new
+        by_outgoing = Hash(Array(UInt64), UInt64).new
+        1000.times do |j|
+          handle = (i * 1000 + j).to_u64
+          by_name["concept_#{j}"] = handle
+          by_outgoing[[handle, handle &+ 1]] = handle if j.even?
+        end
+        1000.times { |j| by_name["concept_#{j}"]? }
+      end
+    end
+
+    # PLN deduction strength/confidence formula over chains of truth values.
     private def run_pln_benchmarks(iterations : Int32)
       puts "Running PLN reasoning benchmarks (#{iterations} iterations)...".colorize(:blue)
-      # Mock PLN benchmark
-      puts "  PLN reasoning benchmark complete".colorize(:green)
+      rng = Random.new(42)
+      acc = 0.0
+      time_samples("10000 deduction steps", iterations) do
+        s_ab, s_bc, s_b, s_c = rng.rand, rng.rand, rng.rand(0.01..0.99), rng.rand
+        10000.times do
+          s_ac = s_ab * s_bc + (1.0 - s_ab) * (s_c - s_b * s_bc) / (1.0 - s_b)
+          s_ab = s_ac.clamp(0.0, 1.0)
+          acc += s_ab
+        end
+      end
+      puts "  checksum: #{acc.round(6)}" if @verbose
     end
 
     private def run_memory_benchmarks(iterations : Int32)
       puts "Running memory allocation benchmarks (#{iterations} iterations)...".colorize(:blue)
-      # Mock memory benchmark
-      puts "  Memory benchmark complete".colorize(:green)
+      before = GC.stats.total_bytes
+      time_samples("allocate 10000 small objects", iterations) do
+        arrays = Array(Array(Int32)).new(10000) { |k| [k, k + 1, k + 2] }
+        arrays.size
+      end
+      allocated = GC.stats.total_bytes - before
+      puts "  Allocated #{format_bytes(allocated.to_u64)} total".colorize(:green)
     end
 
     private def run_concurrency_benchmarks(iterations : Int32)
       puts "Running concurrency benchmarks (#{iterations} iterations)...".colorize(:blue)
-      # Mock concurrency benchmark
-      puts "  Concurrency benchmark complete".colorize(:green)
+      time_samples("100 fibers x 100 channel messages", iterations) do
+        channel = Channel(Int32).new(64)
+        done = Channel(Nil).new
+        100.times do
+          spawn do
+            100.times { |k| channel.send(k) }
+            done.send(nil)
+          end
+        end
+        spawn { 100.times { done.receive }; channel.close }
+        while channel.receive?
+        end
+      end
     end
 
     private def generate_trend_analysis(days : Int32) : String
       String.build do |str|
         str << "📈 TREND ANALYSIS (Last #{days} days):\n"
         str << "-" * 40 << "\n"
-        str << "• Performance trends would be shown here\n"
-        str << "• Memory usage patterns\n"
-        str << "• Error rate changes\n"
-        str << "• Optimization opportunities\n\n"
+        detector = @regression_detector || PerformanceRegression.new
+        functions = detector.tracked_functions
+        if functions.empty?
+          str << "No historical samples recorded yet\n\n"
+        else
+          functions.each do |name|
+            if trend = detector.get_trend_analysis(name, days)
+              str << "• #{name}: time trend #{trend["time_trend"].round(4)}, memory trend #{trend["memory_trend"].round(2)}, samples #{trend["samples"].to_i}\n"
+            else
+              str << "• #{name}: fewer than 2 samples in window\n"
+            end
+          end
+          str << "\n"
+        end
       end
     end
 

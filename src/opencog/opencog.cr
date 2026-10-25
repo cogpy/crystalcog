@@ -284,8 +284,28 @@ module OpenCog
     def self.query_pattern(atomspace : AtomSpace::AtomSpace, pattern : AtomSpace::Atom, variables : Array(Variable) = [] of Variable) : Array(QueryResult)
       results = [] of QueryResult
 
-      # This is a simplified query processor
-      # In a full implementation, this would handle complex variable binding
+      # Patterns with variables go through the pattern matcher, which
+      # binds each variable (typed via `variables`) to a grounding.
+      if contains_variable?(pattern)
+        pattern_obj = PatternMatching::Pattern.new(pattern)
+        variables.each do |var|
+          next unless allowed = var.type
+          var_atom = atomspace.add_node(AtomSpace::AtomType::VARIABLE_NODE, "$#{var.name}")
+          pattern_obj.add_constraint(PatternMatching::TypeConstraint.new(var_atom, allowed))
+        end
+
+        PatternMatching::PatternMatcher.new(atomspace).match(pattern_obj).each do |match|
+          bindings = Hash(String, AtomSpace::Atom).new
+          match.bindings.each do |var_atom, bound|
+            bindings[var_atom.name.lstrip("$")] = bound if var_atom.type == AtomSpace::AtomType::VARIABLE_NODE
+          end
+          matched = match.matched_atoms
+          confidence = matched.empty? ? 0.0 : matched.sum(&.truth_value.confidence) / matched.size
+          results << QueryResult.new(bindings, confidence)
+        end
+        results.sort! { |a, b| b.confidence <=> a.confidence }
+        return results
+      end
 
       matching_atoms = AtomUtils.find_matching_atoms(atomspace, pattern)
 
@@ -352,20 +372,27 @@ module OpenCog
     def self.query_conjunction(atomspace : AtomSpace::AtomSpace, patterns : Array(AtomSpace::Atom)) : Array(QueryResult)
       return [] of QueryResult if patterns.empty?
 
-      # Start with results from first pattern
       results = query_pattern(atomspace, patterns[0])
 
-      # Filter results that satisfy all patterns
+      # Natural join: keep combinations whose shared variables agree; the
+      # joined confidence is the weaker of the two.
       patterns[1..].each do |pattern|
         pattern_results = query_pattern(atomspace, pattern)
 
-        # Keep only results that appear in both sets (simplified intersection)
-        results = results.select do |result|
-          pattern_results.any? { |pr| pr.bindings == result.bindings }
+        results = results.flat_map do |result|
+          pattern_results.compact_map do |pr|
+            next unless pr.bindings.all? { |name, atom| (bound = result.bindings[name]?).nil? || bound == atom }
+            QueryResult.new(result.bindings.merge(pr.bindings), Math.min(result.confidence, pr.confidence))
+          end
         end
       end
 
-      results
+      results.uniq(&.bindings)
+    end
+
+    private def self.contains_variable?(atom : AtomSpace::Atom) : Bool
+      return true if atom.type == AtomSpace::AtomType::VARIABLE_NODE
+      atom.link? && atom.outgoing.any? { |child| contains_variable?(child) }
     end
 
     # Execute a disjunction query (OR of multiple patterns)

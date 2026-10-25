@@ -316,17 +316,34 @@ module AIIntegration
 
       # Use PLN to find related concepts
       if pln = @pln_engine
-        # In a real implementation, this would use PLN to find semantic relationships
-        enrichments << "PLN analysis: Found semantic relationships in knowledge base"
+        derived = pln.forward_chain(AtomSpace::AtomType::INHERITANCE_LINK, 2)
+        related = concept_relations(concept_node)
+        enrichments << "PLN analysis: #{derived.size} new inference(s); #{related.size} relationship(s) involve #{concept}"
+        related.first(5).each { |rel| enrichments << "  PLN: #{rel}" }
       end
 
       # Use URE to derive properties
       if ure = @ure_engine
-        # In a real implementation, this would use URE to derive properties
-        enrichments << "URE analysis: Derived logical properties and relationships"
+        derived = ure.forward_chain(3)
+        touching = derived.select { |atom| mentions?(atom, concept_node) }
+        enrichments << "URE analysis: #{derived.size} derivation(s), #{touching.size} about #{concept}"
+        touching.first(5).each { |atom| enrichments << "  URE: #{atom}" }
       end
 
       enrichments
+    end
+
+    # Links that have `concept` anywhere in their outgoing tree, with their truth values.
+    private def concept_relations(concept : AtomSpace::Atom) : Array(String)
+      @atomspace.get_incoming(concept).map do |link|
+        "#{link} (s=#{link.truth_value.strength.round(3)}, c=#{link.truth_value.confidence.round(3)})"
+      end
+    end
+
+    private def mentions?(atom : AtomSpace::Atom, target : AtomSpace::Atom, depth : Int32 = 0) : Bool
+      return true if atom.handle == target.handle
+      return false if depth > 16 || !atom.link?
+      atom.outgoing.any? { |child| mentions?(child, target, depth + 1) }
     end
 
     def interactive_reasoning_session(user_input : String) : String
