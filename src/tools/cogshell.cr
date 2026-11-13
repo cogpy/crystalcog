@@ -20,7 +20,7 @@
 #   nlp <text>                   Process text with NLP
 #   parse <text>                 Link-grammar parse
 #   tv <name> <strength> <conf>  Set truth value on named concept
-#   see <image> [scene]          Look at a PNG/PPM image; add what it shows
+#   see <image> [scene]          Look at a PNG, JPEG or PPM image; add what it shows
 #   quit / exit                  Leave the shell
 
 require "../cogutil/cogutil"
@@ -201,7 +201,7 @@ module CogShell
         nlp <text>                     NLP process text
         parse <text>                   Link Grammar parse
         tv <name> <s> <c>              Set truth value
-        see <image> [scene]            Look at an image (PNG/PPM); add what it shows
+        see <image> [scene]            Look at an image (PNG, JPEG, PPM); add what it shows
         help                           This help
         quit                           Exit
       HELP

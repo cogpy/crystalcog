@@ -7,6 +7,79 @@ require "../cogutil/cogutil"
 module PLN
   VERSION = "0.1.0"
 
+  # PLN strength formulas (Goertzel, Iklé, Goertzel and Heljakka,
+  # "Probabilistic Logic Networks", 2008), under the usual independence
+  # assumptions. `s_ab` reads P(B|A); `s_a` is the term probability P(A).
+  #
+  # A node carries a term probability when its truth value has confidence
+  # above zero. Without term probabilities each formula falls back to the
+  # form that needs none, so graphs of plain nodes reason as before.
+  module Formulas
+    EPSILON = 1.0e-9
+
+    # P(B|not A) assumed by modus ponens when nothing better is known.
+    BACKGROUND_PROBABILITY = 0.2
+
+    def self.term_probability(atom : AtomSpace::Atom) : Float64?
+      tv = atom.truth_value
+      tv.confidence > 0.0 ? tv.strength.clamp(0.0, 1.0) : nil
+    end
+
+    # Whether P(B|A) = s_ab is possible at all given P(A) and P(B).
+    def self.consistent?(s_a : Float64, s_b : Float64, s_ab : Float64) : Bool
+      return true if s_a <= EPSILON
+      lower = Math.max((s_a + s_b - 1.0) / s_a, 0.0)
+      upper = Math.min(s_b / s_a, 1.0)
+      s_ab >= lower - 1.0e-6 && s_ab <= upper + 1.0e-6
+    end
+
+    # A->B, B->C |- A->C:
+    #   s_ac = s_ab*s_bc + (1 - s_ab)*(s_c - s_b*s_bc)/(1 - s_b)
+    # The second term is the part of C reached from A outside B.
+    def self.deduction(s_ab : Float64, s_bc : Float64, s_b : Float64? = nil, s_c : Float64? = nil) : Float64
+      through_b = s_ab * s_bc
+      return through_b.clamp(0.0, 1.0) unless s_b && s_c
+      return through_b.clamp(0.0, 1.0) if s_b >= 1.0 - EPSILON
+
+      outside_b = (s_c - s_b * s_bc) / (1.0 - s_b)
+      (through_b + (1.0 - s_ab) * outside_b.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    end
+
+    # A->B |- B->A by Bayes' rule: s_ba = s_ab*s_a/s_b.
+    def self.inversion(s_ab : Float64, s_a : Float64? = nil, s_b : Float64? = nil) : Float64
+      return s_ab.clamp(0.0, 1.0) unless s_a && s_b
+      return 0.0 if s_b <= EPSILON
+      (s_ab * s_a / s_b).clamp(0.0, 1.0)
+    end
+
+    # A->B, C->B |- A->C: invert C->B to B->C, then deduce through B.
+    def self.abduction(s_ab : Float64, s_cb : Float64, s_a : Float64? = nil,
+                       s_b : Float64? = nil, s_c : Float64? = nil) : Float64
+      unless s_a && s_b && s_c
+        # No term probabilities: the odds that A and C agree about B.
+        agree = s_ab * s_cb + (1.0 - s_ab) * (1.0 - s_cb)
+        return agree > 0.0 ? (s_ab * s_cb / agree).clamp(0.0, 1.0) : 0.0
+      end
+      deduction(s_ab, inversion(s_cb, s_c, s_b), s_b, s_c)
+    end
+
+    # A->B, A->C |- B->C: invert A->B to B->A, then deduce through A.
+    def self.induction(s_ab : Float64, s_ac : Float64, s_a : Float64? = nil,
+                       s_b : Float64? = nil, s_c : Float64? = nil) : Float64
+      unless s_a && s_b && s_c
+        agree = s_ab * s_ac + (1.0 - s_ab) * (1.0 - s_ac)
+        return agree > 0.0 ? (s_ab * s_ac / agree).clamp(0.0, 1.0) : 0.0
+      end
+      deduction(inversion(s_ab, s_a, s_b), s_ac, s_a, s_c)
+    end
+
+    # A->B, A |- B: s_b = s_ab*s_a + P(B|not A)*(1 - s_a).
+    def self.modus_ponens(s_ab : Float64, s_a : Float64,
+                          background : Float64 = BACKGROUND_PROBABILITY) : Float64
+      (s_ab * s_a + background * (1.0 - s_a)).clamp(0.0, 1.0)
+    end
+  end
+
   # A per-iteration read view for the built-in inheritance rules. AtomSpace
   # exposes snapshot arrays and Link#outgoing returns a detached copy; this
   # keeps the repeated rule scans and copies local to PLN.
@@ -32,27 +105,34 @@ module PLN
       refresh_inheritance(atomspace)
     end
 
-    # Rebuild after an accepted inheritance link. This preserves AtomSpace's
-    # candidate ordering while retaining links inferred earlier this iteration.
+    # Rebuild the inheritance index from the AtomSpace.
     def refresh_inheritance(atomspace : AtomSpace::AtomSpace)
-      @inheritance_links = atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK)
+      @inheritance_links = [] of AtomSpace::Atom
       @inheritance_by_subject.clear
       @inheritance_by_object.clear
       @handle_identity_safe = true
 
-      @inheritance_links.each do |atom|
-        next unless atom.is_a?(AtomSpace::Link)
-        next unless atom.arity == 2
-
-        subject = atom[0]
-        object = atom[1]
-        # AtomSpace indexes links by child handle but does not canonicalize
-        # supplied child atoms. If any link is detached, preserve the original
-        # Atom#== matching semantics with the fallback arrays below.
-        @handle_identity_safe &&= atomspace.contains?(subject) && atomspace.contains?(object)
-        (@inheritance_by_subject[subject.handle] ||= [] of AtomSpace::Atom) << atom
-        (@inheritance_by_object[object.handle] ||= [] of AtomSpace::Atom) << atom
+      atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK).each do |atom|
+        add_inheritance(atom, atomspace)
       end
+    end
+
+    # Index one inheritance link accepted during this iteration. New links
+    # go last, which is where the AtomSpace's own type index puts them, so
+    # candidates keep their order without rebuilding the whole index.
+    def add_inheritance(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Nil
+      @inheritance_links << atom
+      return unless atom.is_a?(AtomSpace::Link)
+      return unless atom.arity == 2
+
+      subject = atom[0]
+      object = atom[1]
+      # AtomSpace indexes links by child handle but does not canonicalize
+      # supplied child atoms. If any link is detached, preserve the original
+      # Atom#== matching semantics with the fallback arrays below.
+      @handle_identity_safe &&= atomspace.contains?(subject) && atomspace.contains?(object)
+      (@inheritance_by_subject[subject.handle] ||= [] of AtomSpace::Atom) << atom
+      (@inheritance_by_object[object.handle] ||= [] of AtomSpace::Atom) << atom
     end
 
     def links_from(subject : AtomSpace::Atom) : Array(AtomSpace::Atom)
@@ -130,25 +210,22 @@ module PLN
         next unless link.arity == 2
 
         b2, c = link[0], link[1]
+        next unless b == b2 # Found matching chain A->B, B->C
 
-        if b == b2 # Found matching chain A->B, B->C
-          # Calculate new truth value using PLN formula
-          tv_ab = premise.truth_value
-          tv_bc = link.truth_value
+        tv_ab = premise.truth_value
+        tv_bc = link.truth_value
 
-          # PLN deduction formula (simplified)
-          new_strength = tv_ab.strength * tv_bc.strength
-          new_confidence = tv_ab.confidence * tv_bc.confidence * 0.9 # Discount factor
+        new_strength = Formulas.deduction(tv_ab.strength, tv_bc.strength,
+          Formulas.term_probability(b), Formulas.term_probability(c))
+        new_confidence = tv_ab.confidence * tv_bc.confidence * 0.9 # Discount factor
 
-          new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
+        new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
 
-          # Create A->C link
-          return atomspace.add_link(
-            AtomSpace::AtomType::INHERITANCE_LINK,
-            [a, c],
-            new_tv
-          )
-        end
+        return atomspace.add_link(
+          AtomSpace::AtomType::INHERITANCE_LINK,
+          [a, c],
+          new_tv
+        )
       end
 
       nil
@@ -172,14 +249,11 @@ module PLN
 
       a, b = premise[0], premise[1]
 
-      # Create inverted truth value
+      # Bayes' rule when both terms carry a probability; otherwise the
+      # strength is kept and only the confidence is discounted.
       tv = premise.truth_value
-      # When strength is 0, inversion is undefined; treat as zero strength
-      inverted_strength = if tv.strength <= 0.0
-                            0.0
-                          else
-                            1.0 / (1.0 + (1.0 - tv.strength) / tv.strength)
-                          end
+      inverted_strength = Formulas.inversion(tv.strength,
+        Formulas.term_probability(a), Formulas.term_probability(b))
       inverted_confidence = tv.confidence * 0.8 # Discount for inversion
 
       inverted_tv = AtomSpace::SimpleTruthValue.new(
@@ -224,15 +298,8 @@ module PLN
           tv_ab = premise.truth_value
           tv_a = atom.truth_value
 
-          # Modus ponens strength formula (simplified)
           # P(B) = P(B|A) * P(A) + P(B|¬A) * P(¬A)
-          # We assume P(B|¬A) = 0.2 (default background probability)
-          p_b_given_a = tv_ab.strength
-          p_a = tv_a.strength
-          p_not_a = 1.0 - p_a
-          p_b_given_not_a = 0.2 # Background probability
-
-          new_strength = p_b_given_a * p_a + p_b_given_not_a * p_not_a
+          new_strength = Formulas.modus_ponens(tv_ab.strength, tv_a.strength)
           new_confidence = [tv_ab.confidence, tv_a.confidence].min * 0.9 # Discount factor
 
           new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
@@ -270,12 +337,7 @@ module PLN
 
       tv_ab = premise.truth_value
       tv_a = fact.truth_value
-      p_b_given_a = tv_ab.strength
-      p_a = tv_a.strength
-      p_not_a = 1.0 - p_a
-      p_b_given_not_a = 0.2
-
-      new_strength = p_b_given_a * p_a + p_b_given_not_a * p_not_a
+      new_strength = Formulas.modus_ponens(tv_ab.strength, tv_a.strength)
       new_confidence = [tv_ab.confidence, tv_a.confidence].min * 0.9
       new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
 
@@ -331,34 +393,26 @@ module PLN
         next if link == premise # Don't use the same premise
 
         c, b2 = link[0], link[1]
+        # Found C->B where B matches and C is different from A
+        next unless b == b2 && a != c
 
-        if b == b2 && a != c # Found C->B where B matches and C is different from A
-          # Apply abduction: conclude A->C
-          tv_ab = premise.truth_value
-          tv_cb = link.truth_value
+        tv_ab = premise.truth_value
+        tv_cb = link.truth_value
 
-          # Simplified abduction strength calculation
-          s_ab = tv_ab.strength
-          s_cb = tv_cb.strength
-          # Guard against 0/0 when both strengths are extreme (e.g. 1.0 and 0.0)
-          denom = s_ab * s_cb + (1 - s_ab) * (1 - s_cb)
-          new_strength = denom > 0.0 ? (s_ab * s_cb) / denom : 0.0
-          new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
+        new_strength = Formulas.abduction(tv_ab.strength, tv_cb.strength,
+          Formulas.term_probability(a), Formulas.term_probability(b), Formulas.term_probability(c))
+        new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
 
-          new_tv = AtomSpace::SimpleTruthValue.new(
-            new_strength.clamp(0.0, 1.0),
-            new_confidence.clamp(0.0, 1.0)
-          )
+        new_tv = AtomSpace::SimpleTruthValue.new(
+          new_strength.clamp(0.0, 1.0),
+          new_confidence.clamp(0.0, 1.0)
+        )
 
-          # Create A->C link (avoid creating A->A)
-          if a != c
-            return atomspace.add_link(
-              AtomSpace::AtomType::INHERITANCE_LINK,
-              [a, c],
-              new_tv
-            )
-          end
-        end
+        return atomspace.add_link(
+          AtomSpace::AtomType::INHERITANCE_LINK,
+          [a, c],
+          new_tv
+        )
       end
 
       nil
@@ -656,7 +710,7 @@ module PLN
                   iteration_new_atoms << new_atom
                   initial_atomspace_size = @atomspace.size # Update for next check
                   if context && new_atom.type == AtomSpace::AtomType::INHERITANCE_LINK
-                    context.refresh_inheritance(@atomspace)
+                    context.add_inheritance(new_atom, @atomspace)
                   end
                   CogUtil::Logger.debug("PLN: Applied #{rule.name} to #{atom}, created #{new_atom}")
                 end

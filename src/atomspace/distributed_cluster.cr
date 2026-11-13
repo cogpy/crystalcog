@@ -187,6 +187,12 @@ module AtomSpace
     @event_observers : Array(Proc(ClusterEvent, String, Nil))
     @previous_node_count : Int32 = 0
     @message_handlers = Hash(String, Proc(JSON::Any, TCPSocket?, Nil)).new
+    # Nodes that announced their departure, and when. A member list from a
+    # node that has not heard yet must not bring them back.
+    @departed = Hash(String, Time).new
+
+    # How long a departure outweighs second-hand news of that node.
+    DEPARTURE_MEMORY = 2.minutes
 
     def initialize(@cluster_id : String, @local_atomspace : AtomSpace,
                    host : String = "localhost", port : Int32 = 0,
@@ -262,11 +268,11 @@ module AtomSpace
       CogUtil::Logger.info("Cluster node #{@node_id} stopped")
     end
 
-    # Join an existing cluster by connecting to a seed node
+    # Join an existing cluster by connecting to a seed node. The seed answers
+    # with the members it knows and announces this node to each of them.
     def join_cluster(seed_host : String, seed_port : Int32) : Bool
+      socket = TCPSocket.new(seed_host, seed_port)
       begin
-        socket = TCPSocket.new(seed_host, seed_port)
-
         join_request = {
           "type"       => "cluster_join_request",
           "cluster_id" => @cluster_id,
@@ -278,40 +284,25 @@ module AtomSpace
 
         socket.puts(join_request.to_json)
 
-        response_data = socket.gets
-        if response_data
-          response = JSON.parse(response_data)
-          if response["status"] == "accepted"
-            # Update cluster membership from seed response
-            if cluster_nodes = response["cluster_nodes"]?
-              cluster_nodes.as_a.each do |node_data|
-                node_info = ClusterNodeInfo.new(
-                  node_data["id"].as_s,
-                  node_data["host"].as_s,
-                  node_data["port"].as_i
-                )
-                node_info.status = NodeStatus.parse(node_data["status"].as_s)
-                node_info.atomspace_size = node_data["atomspace_size"].as_i64.to_u64
-                @cluster_nodes[node_info.id] = node_info
-              end
-            end
+        response_data = socket.gets || return false
+        response = JSON.parse(response_data)
+        return false unless response["status"] == "accepted"
 
-            # Start initial synchronization
-            spawn do
-              perform_initial_sync
-            end
+        response["cluster_nodes"]?.try(&.as_a?).try(&.each { |node_data| learn_node(node_data, first_hand: true) })
 
-            CogUtil::Logger.info("Successfully joined cluster #{@cluster_id}")
-            return true
-          end
+        # Start initial synchronization
+        spawn do
+          perform_initial_sync
         end
 
+        CogUtil::Logger.info("Successfully joined cluster #{@cluster_id}")
+        true
+      ensure
         socket.close
-        return false
-      rescue ex
-        CogUtil::Logger.error("Failed to join cluster: #{ex.message}")
-        return false
       end
+    rescue ex
+      CogUtil::Logger.error("Failed to join cluster: #{ex.message}")
+      false
     end
 
     # Add a new atom to the local AtomSpace and propagate to cluster
@@ -478,6 +469,8 @@ module AtomSpace
         handle_sync_operation(message)
       when "cluster_departure"
         handle_departure(message)
+      when "member_joined"
+        handle_member_joined(message)
       when "conflict_resolution"
         handle_conflict_resolution(message)
       else
@@ -512,30 +505,94 @@ module AtomSpace
       # Add new node to cluster
       new_node = ClusterNodeInfo.new(node_id, host, port)
       new_node.status = NodeStatus::Active
+      @departed.delete(node_id)
       @cluster_nodes[node_id] = new_node
 
       # Send acceptance response with current cluster state
       response = {
         "status"        => "accepted",
-        "cluster_nodes" => @cluster_nodes.values.map { |node|
-          {
-            "id"             => node.id,
-            "host"           => node.host,
-            "port"           => node.port,
-            "status"         => node.status.to_s,
-            "atomspace_size" => node.atomspace_size,
-          }
-        },
+        "cluster_nodes" => member_records,
       }
 
       client.try(&.puts(response.to_json))
 
       emit_event(ClusterEvent::NODE_JOINED, node_id)
       CogUtil::Logger.info("New node #{node_id} joined cluster")
+
+      # Tell the members already here. Without this only the seed and the
+      # newcomer would know of each other.
+      announcement = {
+        "type"        => JSON::Any.new("member_joined"),
+        "source_node" => JSON::Any.new(@node_id),
+        "node"        => JSON.parse(node_record(new_node).to_json),
+        "members"     => JSON.parse(member_records.to_json),
+      }
+      @cluster_nodes.values.each do |node|
+        next if node.id == @node_id || node.id == node_id
+        send_message_to_node(node, announcement)
+      end
+    end
+
+    private def node_record(node : ClusterNodeInfo)
+      {
+        "id"             => node.id,
+        "host"           => node.host,
+        "port"           => node.port,
+        "status"         => node.status.to_s,
+        "atomspace_size" => node.atomspace_size,
+      }
+    end
+
+    private def member_records
+      @cluster_nodes.values.map { |node| node_record(node) }
+    end
+
+    # Record a member described by another node. Returns true when it was
+    # not known before. `first_hand` news comes from the node itself or from
+    # the seed that just accepted us; anything else yields to a departure
+    # this node heard about recently.
+    private def learn_node(data : JSON::Any, first_hand : Bool = false) : Bool
+      id = data["id"]?.try(&.as_s?) || return false
+      return false if id == @node_id
+      host = data["host"]?.try(&.as_s?) || return false
+      port = data["port"]?.try(&.as_i?) || return false
+
+      if left_at = @departed[id]?
+        return false if !first_hand && Time.utc - left_at < DEPARTURE_MEMORY
+        @departed.delete(id)
+      end
+
+      if known = @cluster_nodes[id]?
+        known.update_heartbeat if first_hand
+        return false
+      end
+
+      node = ClusterNodeInfo.new(id, host, port)
+      node.status = data["status"]?.try(&.as_s?).try { |status| NodeStatus.parse?(status) } || NodeStatus::Active
+      node.atomspace_size = data["atomspace_size"]?.try(&.as_i64?).try(&.to_u64) || 0_u64
+      @cluster_nodes[id] = node
+      emit_event(ClusterEvent::NODE_JOINED, id)
+      CogUtil::Logger.info("Learned of cluster node #{id} at #{host}:#{port}")
+      true
+    end
+
+    # Another member accepted a node: learn it, and any member in the
+    # sender's list this node had missed.
+    private def handle_member_joined(message : JSON::Any)
+      message["node"]?.try { |node| learn_node(node, first_hand: true) }
+      message["members"]?.try(&.as_a?).try(&.each { |node| learn_node(node) })
     end
 
     private def handle_heartbeat(message : JSON::Any)
       node_id = message["node_id"].as_s
+
+      # A heartbeat names its sender's address and the members it knows, so
+      # a node that missed an announcement catches up on the next beat.
+      if message["host"]? && message["port"]?
+        learn_node(JSON.parse({"id" => node_id, "host" => message["host"], "port" => message["port"],
+                               "status" => message["status"]}.to_json), first_hand: true)
+      end
+      message["members"]?.try(&.as_a?).try(&.each { |node| learn_node(node) })
 
       if node = @cluster_nodes[node_id]?
         node.update_heartbeat
@@ -605,13 +662,17 @@ module AtomSpace
 
         # Send heartbeat to all cluster nodes
         heartbeat_message = {
-          "type"           => "heartbeat",
-          "node_id"        => @node_id,
-          "status"         => @local_node.status.to_s,
-          "atomspace_size" => @local_node.atomspace_size,
-          "load_factor"    => @local_node.load_factor,
-          "timestamp"      => Time.utc.to_rfc3339,
+          "type"           => JSON::Any.new("heartbeat"),
+          "node_id"        => JSON::Any.new(@node_id),
+          "host"           => JSON::Any.new(@local_node.host),
+          "port"           => JSON::Any.new(@local_node.port.to_i64),
+          "status"         => JSON::Any.new(@local_node.status.to_s),
+          "atomspace_size" => JSON::Any.new(@local_node.atomspace_size.to_i64),
+          "load_factor"    => JSON::Any.new(@local_node.load_factor),
+          "timestamp"      => JSON::Any.new(Time.utc.to_rfc3339),
+          "members"        => JSON.parse(member_records.to_json),
         }
+        @departed.reject! { |_, left_at| Time.utc - left_at > DEPARTURE_MEMORY }
 
         broadcast_message(heartbeat_message)
 
@@ -622,6 +683,7 @@ module AtomSpace
         # Clean up stale nodes
         @cluster_nodes.reject! do |node_id, node|
           if node_id != @node_id && node.is_stale?
+            @departed[node_id] = Time.utc
             emit_event(ClusterEvent::NODE_LEFT, node_id)
             CogUtil::Logger.info("Removed stale node #{node_id} from cluster")
             cluster_changed = true
@@ -690,7 +752,8 @@ module AtomSpace
     end
 
     private def broadcast_message(message : Hash)
-      @cluster_nodes.each_value do |node|
+      # Sending yields to other fibers, which may add or drop members.
+      @cluster_nodes.values.each do |node|
         next if node.id == @node_id
         send_message_to_node(node, message)
       end
@@ -835,6 +898,8 @@ module AtomSpace
 
     private def handle_departure(message : JSON::Any)
       node_id = message["node_id"].as_s
+      return if node_id == @node_id
+      @departed[node_id] = Time.utc
       if @cluster_nodes.delete(node_id)
         emit_event(ClusterEvent::NODE_LEFT, node_id)
         CogUtil::Logger.info("Node #{node_id} left cluster")

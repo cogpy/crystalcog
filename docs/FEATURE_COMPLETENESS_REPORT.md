@@ -227,16 +227,21 @@ Two minor test failures in distributed storage edge cases:
 | AI bridge on real models | `src/ai_integration/ai_bridge.cr`, [AI_INTEGRATION.md](AI_INTEGRATION.md) |
 | Paphos snapshot persistence, IPFS pubsub, Echo State reservoir | `src/integrations` |
 | Agent network optimization on the real peer graph | `src/agent-zero/network_services.cr` |
+| PLN strength formulas with term probabilities (deduction, Bayes inversion, abduction, induction) | `PLN::Formulas` in `src/pln/pln.cr`, [PLN-REASONING-MODULE.md](PLN-REASONING-MODULE.md) |
+| Cluster membership announced to every node, with heartbeat repair | `src/atomspace/distributed_cluster.cr` |
+| Pattern mining that specializes variables to constants, link shapes and other variables | `src/pattern_mining/pattern_mining.cr` |
+| Interlaced PNG and baseline JPEG decoding | `src/vision/image.cr`, `src/vision/jpeg.cr`, [VISION.md](VISION.md) |
+| Paphos events, service functions and remote commands | `src/integrations/platform/paphos_server.cr`, `paphos_connector.cr`, [PYGMALION_PLATFORM.md](PYGMALION_PLATFORM.md) |
 
 ### Still simplified
 
 | Area | State |
 |---|---|
-| Distributed cluster membership | A joining node learns the seed's node list; nodes that join later are not announced to earlier joiners. |
-| Paphos connector commands and event stream | `send_command`, `execute_service_function` and the event stream act locally; the Paphos API has no endpoints for them. |
-| Pattern mining specialization | `specialize_pattern` handles same-type links only. |
-| Vision | Flat-coloured shapes only; no interlaced PNG, no JPEG. |
-| PLN formulas | Deduction, modus ponens and abduction use simplified strength formulas. |
+| PLN engine | A rule draws one conclusion per premise per iteration, from the first matching second premise, so some consequences need more iterations or are not reached. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| Pattern mining | Patterns are single trees. Conjunctions of several clauses are not mined. |
+| Vision | Object detection expects flat-coloured shapes. Progressive, lossless, arithmetic-coded, 12-bit and CMYK JPEGs are refused. |
+| Paphos events | Kept in memory (the last 1,000 per server), so they do not survive a restart. Clients follow the stream by long polling. |
+| Distributed cluster | Membership converges by announcement and heartbeat; there is no consensus protocol. |
 
 ---
 

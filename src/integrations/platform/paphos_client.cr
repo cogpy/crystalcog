@@ -120,6 +120,35 @@ module PaphosBackend
       nil
     end
 
+    # Publish an event to the caller's stream; returns the stored event.
+    def publish_event(type : String, data : Hash(String, String) = {} of String => String,
+                      source : String = "crystalcog") : JSON::Any
+      request("POST", "/events", {"event" => {"type" => type, "source" => source, "data" => data}})["event"]
+    end
+
+    # The caller's events with an id above `after`, oldest first. `wait`
+    # holds the request open until an event arrives or the time is up.
+    def events(after : Int64 = 0_i64, types : Array(String)? = nil, limit : Int32? = nil,
+               wait : Time::Span? = nil) : Array(JSON::Any)
+      query = {"after" => after.to_s}
+      types.try { |list| query["types"] = list.join(",") }
+      limit.try { |count| query["limit"] = count.to_s }
+      wait.try { |span| query["wait"] = span.total_seconds.to_s }
+      request("GET", "/events?" + URI::Params.encode(query))["events"].as_a
+    end
+
+    # The service functions the backend offers: name and description.
+    def actions : Array(JSON::Any)
+      request("GET", "/actions")["actions"].as_a
+    end
+
+    # Run a service function and return its result fields. A refusal or an
+    # unknown name raises `Error` (422 and 404).
+    def call_action(name : String, args : Hash(String, String) = {} of String => String) : Hash(String, String)
+      response = request("POST", "/actions/#{URI.encode_path_segment(name)}", {"action" => {"args" => args}})
+      response["result"].as_h.transform_values(&.as_s)
+    end
+
     private def request(method : String, path : String, body = nil, auth : Bool = true) : JSON::Any
       uri = URI.parse(@base_url + path)
       headers = HTTP::Headers{"Accept" => "application/json"}
