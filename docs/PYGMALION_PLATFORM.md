@@ -114,6 +114,27 @@ Chat messages that start with `/` are crystalcog commands, such as `/inherit cat
 - `persistence.store_atomspace_data` / `load_atomspace_data` save and restore a whole AtomSpace, links and truth values included.
 - With `batch_operations`, or while offline, writes wait in a queue until `flush_batch`.
 
+## Events and service functions
+
+The Paphos backend also has an event stream and named service functions, which upstream lacks.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /events` | Publish `{"event": {"type", "source"?, "data"?}}`. `data` is an object of strings. |
+| `GET /events?after=&types=&limit=&wait=` | The caller's events with an id above `after`, oldest first. `wait` (seconds, at most 25) holds the request until one arrives. |
+| `GET /actions` | The service functions: name and description. |
+| `POST /actions/:name` | Run one with `{"action": {"args": {...}}}`. A refusal is a 422, an unknown name a 404. |
+
+- Events belong to the user who published them. The server keeps the last 1,000 in memory.
+- Built-in functions are `echo`, `stats`, `snapshot.copy` and `events.clear`. A host program adds its own with `server.register_action(name, description) { |args, user_id| ... }` and refuses a call by raising `PaphosBackend::Server::ActionError`.
+- Every call records an `action_executed` event.
+
+`PaphosBackend::Connector` uses these once it is connected:
+
+- `send_command(name, params)` runs the function of that name. The reply has `status` (`success`, `error`, or `local` when there is no backend), the result as JSON in `result`, and each result field as `result.<field>`.
+- `execute_service_function(name, args)` returns the result as JSON and raises on a refusal.
+- `event_stream.publish_event` sends to the backend and `receive_events(wait)` returns what arrived since the last call, from any client of the account. Events published while the backend is unreachable stay queued and go out on the next `connect` or publish.
+
 ## Verification
 
 - **Specs:** `crystal spec spec/integrations/platform/` covers:

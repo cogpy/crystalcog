@@ -123,6 +123,23 @@ Enhanced meta-cognitive reflection using PLN reasoning.
   (target-tv-confidence . 0.9))
 ```
 
+### Strength formulas in the Crystal engine
+
+`PLN::Formulas` (`src/pln/pln.cr`) holds the strength formulas the Crystal rules use. `s_ab` reads P(B|A) and `s_a` is the term probability P(A).
+
+| Rule | Formula |
+|---|---|
+| Deduction (A→B, B→C ⊢ A→C) | `s_ab*s_bc + (1 - s_ab)*(s_c - s_b*s_bc)/(1 - s_b)` |
+| Inversion (A→B ⊢ B→A) | `s_ab*s_a/s_b` (Bayes) |
+| Abduction (A→B, C→B ⊢ A→C) | invert C→B, then deduce through B |
+| Induction (A→B, A→C ⊢ B→C) | invert A→B, then deduce through A |
+| Modus ponens (A→B, A ⊢ B) | `s_ab*s_a + 0.2*(1 - s_a)` |
+
+- A node has a term probability when its truth value has confidence above zero; its strength is then read as P(node).
+- When a node involved has none, deduction uses `s_ab*s_bc`, inversion keeps the strength, and abduction and induction use the odds that the two premises agree.
+- `Formulas.consistent?(s_a, s_b, s_ab)` tells whether a conditional probability is possible for the given term probabilities.
+- Induction is available as a formula; the stock engine has no induction rule.
+
 ### Available PLN Rules
 - **Modus Ponens**: If A implies B and A is true, then B is true
 - **Deduction**: If A implies B and B implies C, then A implies C

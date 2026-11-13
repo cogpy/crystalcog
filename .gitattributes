@@ -1,2 +1,12 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Images are bytes. A bright image with no zero byte looks like text to
+# `text=auto`, and a checkout on Windows would then rewrite its 0x0A bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ppm binary
+*.pgm binary
+*.pnm binary
+spec/vision/fixtures/* binary

@@ -386,9 +386,13 @@ module Vision
       io.write_bytes(chunk_crc(type.to_slice, payload), IO::ByteFormat::BigEndian)
     end
 
+    # Where each Adam7 pass puts its pixels: first column, first row,
+    # column step, row step.
+    ADAM7_PASSES = [{0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2}]
+
     # Decode a PNG: grayscale, RGB, palette, gray+alpha or RGBA at any
-    # standard bit depth, non-interlaced. Alpha is composited over white
-    # and 16-bit samples keep their high byte.
+    # standard bit depth, plain or Adam7 interlaced. Alpha is composited
+    # over white and 16-bit samples keep their high byte.
     def self.from_png(bytes : Bytes) : Image
       raise ImageError.new("not a PNG file") unless bytes.size >= 8 && bytes[0, 8] == PNG_SIGNATURE
       position = 8
@@ -399,6 +403,7 @@ module Vision
       transparency = Bytes.empty
       compressed = IO::Memory.new
       seen_end = false
+      interlace = 0
 
       while position + 8 <= bytes.size
         length = IO::ByteFormat::BigEndian.decode(UInt32, bytes[position, 4]).to_i64
@@ -420,7 +425,8 @@ module Vision
                     else        {8, 16}
                     end
           raise ImageError.new("PNG bit depth #{depth} is not valid for colour type #{color_type}") unless allowed.includes?(depth)
-          raise ImageError.new("interlaced PNG is not supported") unless payload[12] == 0
+          interlace = payload[12].to_i
+          raise ImageError.new("unknown PNG interlace method #{interlace}") unless interlace == 0 || interlace == 1
         when "PLTE" then palette = payload
         when "tRNS" then transparency = payload
         when "IDAT" then compressed.write(payload)
@@ -441,18 +447,70 @@ module Vision
                 when 6 then 4 # RGBA
                 else        raise ImageError.new("unknown PNG colour type #{color_type}")
                 end
-      row_bytes = (width.to_i64 * samples * depth + 7) // 8
-      raise ImageError.new("PNG is too large") if row_bytes * height > Int32::MAX
-      row_bytes = row_bytes.to_i32
+      raise ImageError.new("PNG is too large") if width.to_i64 * height * samples * 2 > Int32::MAX
+      bits = samples * depth
       # Filters work on whole bytes: the distance to the "previous pixel".
-      stride = Math.max(samples * depth // 8, 1)
+      stride = Math.max(bits // 8, 1)
       compressed.rewind
       raw = Compress::Zlib::Reader.open(compressed, &.getb_to_end)
-      raise ImageError.new("PNG pixel data is truncated") if raw.size < (row_bytes + 1).to_i64 * height
 
-      # Undo the per-row filters.
-      unfiltered = Bytes.new(row_bytes * height)
-      height.times do |y|
+      # One byte per sample, whatever the stored depth. Gray samples are
+      # scaled to 0-255; palette indices stay as they are. An interlaced
+      # file stores seven reduced images one after the other, each filtered
+      # on its own; a plain file is one pass over every pixel.
+      pixels = Bytes.new(width * height * samples)
+      passes = interlace == 1 ? ADAM7_PASSES : [{0, 0, 1, 1}]
+      consumed = 0
+      passes.each do |(x0, y0, dx, dy)|
+        pass_width = (width - x0 + dx - 1) // dx
+        pass_height = (height - y0 + dy - 1) // dy
+        next if pass_width <= 0 || pass_height <= 0
+
+        row_bytes = (pass_width * bits + 7) // 8
+        needed = (row_bytes + 1) * pass_height
+        raise ImageError.new("PNG pixel data is truncated") if raw.size - consumed < needed
+        unfiltered = unfilter_png(raw[consumed, needed], row_bytes, pass_height, stride)
+        consumed += needed
+
+        pass_height.times do |pass_y|
+          row = unfiltered[pass_y * row_bytes, row_bytes]
+          target = ((y0 + pass_y * dy) * width + x0) * samples
+          (pass_width * samples).times do |i|
+            value = case depth
+                    when  8 then row[i]
+                    when 16 then row[i * 2]
+                    else
+                      shift = 8 - depth - (i * depth) % 8
+                      packed = (row[i * depth // 8].to_i >> shift) & ((1 << depth) - 1)
+                      color_type == 3 ? packed.to_u8 : (packed * 255 // ((1 << depth) - 1)).to_u8
+                    end
+            pixels[target + (i // samples) * dx * samples + i % samples] = value
+          end
+        end
+      end
+
+      over_white = ->(value : UInt8, alpha : UInt8) { ((value.to_i * alpha + 255 * (255 - alpha.to_i) + 127) // 255).to_u8 }
+      image = Image.new(width, height, color_type == 0 || color_type == 4 ? 1 : 3)
+      (width * height).times do |p|
+        case color_type
+        when 0 then image.data[p] = pixels[p]
+        when 2 then image.data[p * 3, 3].copy_from(pixels[p * 3, 3])
+        when 3
+          index = pixels[p].to_i
+          raise ImageError.new("PNG palette index #{index} out of range") if index * 3 + 2 >= palette.size
+          alpha = transparency[index]? || 255_u8
+          3.times { |c| image.data[p * 3 + c] = over_white.call(palette[index * 3 + c], alpha) }
+        when 4 then image.data[p] = over_white.call(pixels[p * 2], pixels[p * 2 + 1])
+        when 6 then 3.times { |c| image.data[p * 3 + c] = over_white.call(pixels[p * 4 + c], pixels[p * 4 + 3]) }
+        end
+      end
+      image
+    end
+
+    # Undo PNG's per-row filters for one pass of `rows` rows.
+    protected def self.unfilter_png(raw : Bytes, row_bytes : Int32, rows : Int32, stride : Int32) : Bytes
+      unfiltered = Bytes.new(row_bytes * rows)
+      rows.times do |y|
         filter = raw[y * (row_bytes + 1)]
         line = raw[y * (row_bytes + 1) + 1, row_bytes]
         row_bytes.times do |i|
@@ -475,44 +533,10 @@ module Vision
           unfiltered[y * row_bytes + i] = ((line[i].to_i + predicted) & 0xFF).to_u8
         end
       end
-
-      # One byte per sample, whatever the stored depth. Gray samples are
-      # scaled to 0-255; palette indices stay as they are.
-      pixels = Bytes.new(width * height * samples)
-      height.times do |y|
-        row = unfiltered[y * row_bytes, row_bytes]
-        (width * samples).times do |i|
-          value = case depth
-                  when  8 then row[i]
-                  when 16 then row[i * 2]
-                  else
-                    shift = 8 - depth - (i * depth) % 8
-                    packed = (row[i * depth // 8].to_i >> shift) & ((1 << depth) - 1)
-                    color_type == 3 ? packed.to_u8 : (packed * 255 // ((1 << depth) - 1)).to_u8
-                  end
-          pixels[y * width * samples + i] = value
-        end
-      end
-
-      over_white = ->(value : UInt8, alpha : UInt8) { ((value.to_i * alpha + 255 * (255 - alpha.to_i) + 127) // 255).to_u8 }
-      image = Image.new(width, height, color_type == 0 || color_type == 4 ? 1 : 3)
-      (width * height).times do |p|
-        case color_type
-        when 0 then image.data[p] = pixels[p]
-        when 2 then image.data[p * 3, 3].copy_from(pixels[p * 3, 3])
-        when 3
-          index = pixels[p].to_i
-          raise ImageError.new("PNG palette index #{index} out of range") if index * 3 + 2 >= palette.size
-          alpha = transparency[index]? || 255_u8
-          3.times { |c| image.data[p * 3 + c] = over_white.call(palette[index * 3 + c], alpha) }
-        when 4 then image.data[p] = over_white.call(pixels[p * 2], pixels[p * 2 + 1])
-        when 6 then 3.times { |c| image.data[p * 3 + c] = over_white.call(pixels[p * 4 + c], pixels[p * 4 + 3]) }
-        end
-      end
-      image
+      unfiltered
     end
 
-    # Read a PNG, PGM or PPM file, by content.
+    # Read a PNG, JPEG, PGM or PPM file, by content.
     def self.load(path : String) : Image
       bytes = File.open(path, &.getb_to_end)
       from_bytes(bytes)
@@ -523,11 +547,18 @@ module Vision
     def self.from_bytes(bytes : Bytes) : Image
       if bytes.size >= 8 && bytes[0, 8] == PNG_SIGNATURE
         from_png(bytes)
+      elsif bytes.size >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+        from_jpeg(bytes)
       elsif bytes.size >= 2 && bytes[0] == 'P'.ord
         from_ppm(bytes)
       else
-        raise ImageError.new("unrecognised image format (PNG, PGM and PPM are supported)")
+        raise ImageError.new("unrecognised image format (PNG, JPEG, PGM and PPM are supported)")
       end
+    end
+
+    # Decode a baseline JPEG (see `Vision::JPEG`).
+    def self.from_jpeg(bytes : Bytes) : Image
+      JPEG.decode(bytes)
     end
 
     # Write as PNG, or as PGM/PPM when the path ends in .pgm, .ppm or .pnm.
@@ -537,3 +568,5 @@ module Vision
     end
   end
 end
+
+require "./jpeg"

@@ -126,7 +126,32 @@ module PaphosBackend
       end
     end
 
+    # Something that happened, published by a client or by the server. Events
+    # are kept in memory only: they report activity and are not state.
+    record Event, id : Int64, owner_id : Int64, type : String, source : String,
+      data : Hash(String, String), created_at : Int64 do
+      def to_h
+        {"id" => id, "type" => type, "source" => source, "data" => data, "created_at" => created_at}
+      end
+    end
+
+    # A service function clients can call by name with string arguments.
+    record Action, name : String, description : String,
+      handler : Proc(Hash(String, String), Int64, Hash(String, String))
+
+    # Raised by an action that cannot do what it was asked.
+    class ActionError < Exception
+    end
+
+    # Events kept per server; older ones are dropped.
+    EVENT_LIMIT = 1000
+    # Longest a GET /events?wait= request is held open.
+    EVENT_WAIT_LIMIT = 25.seconds
+
     getter port : Int32 = 0
+    @events = Deque(Event).new
+    @next_event_id = 1_i64
+    @actions = {} of String => Action
     @store : Store
     @users = {} of Int64 => User
     @mutex = Mutex.new
@@ -139,6 +164,29 @@ module PaphosBackend
       @store.users.each do |u|
         user = User.new(u["id"].to_i64, u["email"], u["password_hash"])
         @users[user.id] = user
+      end
+      register_builtin_actions
+    end
+
+    # Add a service function. The block gets the caller's arguments and
+    # user id and returns the result fields; it raises `ActionError` to
+    # refuse. Registering a name again replaces the function.
+    def register_action(name : String, description : String = "",
+                        &handler : Hash(String, String), Int64 -> Hash(String, String)) : Nil
+      unless name.matches?(ACTION_NAME)
+        raise ArgumentError.new("action names are 1-100 characters of A-Z a-z 0-9 . _ : -")
+      end
+      @actions[name] = Action.new(name, description, handler)
+    end
+
+    # Record an event for a user, as POST /events does.
+    def publish_event(owner_id : Int64, type : String, data : Hash(String, String), source : String = "paphos") : Event
+      @mutex.synchronize do
+        event = Event.new(@next_event_id, owner_id, type, source, data, Time.utc.to_unix_ms)
+        @next_event_id += 1
+        @events << event
+        @events.shift if @events.size > EVENT_LIMIT
+        event
       end
     end
 
@@ -220,6 +268,16 @@ module PaphosBackend
           list_snapshots(ctx, current_user(ctx))
         elsif seg.size == 2 && seg[0] == "snapshots"
           snapshot_member(ctx, method, URI.decode(seg[1]), current_user(ctx))
+        elsif seg.size == 1 && seg[0] == "events" && method == "GET"
+          list_events(ctx, current_user(ctx))
+        elsif seg.size == 1 && seg[0] == "events" && method == "POST"
+          create_event(ctx, current_user(ctx))
+        elsif seg.size == 1 && seg[0] == "actions" && method == "GET"
+          respond(ctx, {"actions" => @actions.values.sort_by(&.name).map { |action|
+            {"name" => action.name, "description" => action.description}
+          }})
+        elsif seg.size == 2 && seg[0] == "actions" && method == "POST"
+          call_action(ctx, URI.decode(seg[1]), current_user(ctx))
         else
           not_found(ctx.request.path)
         end
@@ -514,7 +572,121 @@ module PaphosBackend
       message
     end
 
+    # -------------------------------------------------------------- events
+
+    EVENT_TYPE = /\A[A-Za-z0-9._:-]{1,100}\z/
+
+    # POST /events {"event": {"type", "source"?, "data"?: {string: string}}}
+    private def create_event(ctx, user)
+      params = param_key(ctx, "event")
+      type = required_string(params, "type")
+      unless type.matches?(EVENT_TYPE)
+        raise ApiError.new(400, "Invalid params", "type", "type must be 1-100 characters of A-Z a-z 0-9 . _ : -")
+      end
+      source = params["source"]?.try(&.as_s?) || "client"
+      event = publish_event(user.id, type, string_fields(params["data"]?, "data"), source)
+      ctx.response.status_code = 201
+      respond(ctx, {"event" => event.to_h})
+    end
+
+    # GET /events lists the caller's events with an id above `after`,
+    # oldest first. `types` (comma-separated) keeps only those types and
+    # `limit` caps the count. With `wait` (seconds) the request is held
+    # until an event arrives or the time is up, so a client can follow the
+    # stream by asking again with the last id it saw.
+    private def list_events(ctx, user)
+      query = ctx.request.query_params
+      after = query["after"]?.try(&.to_i64?) || 0_i64
+      types = query["types"]?.try(&.split(',', remove_empty: true))
+      limit = (query["limit"]?.try(&.to_i?) || 100).clamp(1, EVENT_LIMIT)
+      wait = (query["wait"]?.try(&.to_f?) || 0.0).clamp(0.0, EVENT_WAIT_LIMIT.total_seconds).seconds
+
+      deadline = Time.monotonic + wait
+      matching = events_for(user.id, after, types, limit)
+      while matching.empty? && Time.monotonic < deadline
+        sleep 20.milliseconds
+        matching = events_for(user.id, after, types, limit)
+      end
+      respond(ctx, {"events" => matching.map(&.to_h), "last_id" => matching.last?.try(&.id) || after})
+    end
+
+    private def events_for(owner_id : Int64, after : Int64, types : Array(String)?, limit : Int32) : Array(Event)
+      @mutex.synchronize do
+        @events.select do |event|
+          event.owner_id == owner_id && event.id > after && (types.nil? || types.includes?(event.type))
+        end.first(limit)
+      end
+    end
+
+    # ------------------------------------------------------------- actions
+
+    ACTION_NAME = /\A[A-Za-z0-9._:-]{1,100}\z/
+
+    # POST /actions/:name {"action": {"args"?: {string: string}}} runs a
+    # service function and records an `action_executed` event.
+    private def call_action(ctx, name : String, user)
+      action = @actions[name]? || raise ApiError.new(404, "Not found", "name", "No action named #{name}")
+      params = param_key(ctx, "action")
+      args = string_fields(params["args"]?, "args")
+      result = begin
+        action.handler.call(args, user.id)
+      rescue ex : ActionError
+        publish_event(user.id, "action_executed", {"action" => name, "status" => "refused"})
+        raise ApiError.new(422, "Action refused", name, ex.message)
+      end
+      publish_event(user.id, "action_executed", {"action" => name, "status" => "success"})
+      respond(ctx, {"action" => name, "result" => result})
+    end
+
+    private def register_builtin_actions : Nil
+      register_action("echo", "Return the arguments unchanged") { |args, _user| args }
+
+      register_action("stats", "Count the caller's characters, chats, messages, snapshots and events") do |_args, user|
+        chats = @store.chats.select { |chat| chat.owner_id == user }
+        chat_ids = chats.map(&.id).to_set
+        {
+          "characters" => @store.characters.count { |character| character.owner_id == user }.to_s,
+          "chats"      => chats.size.to_s,
+          "messages"   => @store.messages.count { |message| chat_ids.includes?(message.chat_id) }.to_s,
+          "snapshots"  => @store.snapshots.count { |snapshot| snapshot.owner_id == user }.to_s,
+          "events"     => @mutex.synchronize { @events.count { |event| event.owner_id == user } }.to_s,
+        }
+      end
+
+      register_action("snapshot.copy", "Copy snapshot `from` to the key `to`") do |args, user|
+        from = args["from"]? || raise ActionError.new("from is required")
+        to = args["to"]? || raise ActionError.new("to is required")
+        raise ActionError.new("to must be 1-200 characters of A-Z a-z 0-9 . _ : -") unless to.matches?(SNAPSHOT_KEY)
+        source = @store.snapshots.find { |snapshot| snapshot.owner_id == user && snapshot.key == from } ||
+                 raise ActionError.new("no snapshot named #{from}")
+        @mutex.synchronize do
+          @store.snapshots.reject! { |snapshot| snapshot.owner_id == user && snapshot.key == to }
+          @store.snapshots << Snapshot.new(to, user, source.data.dup, Time.utc.to_unix_ms)
+          persist
+        end
+        {"key" => to, "fields" => source.data.size.to_s}
+      end
+
+      register_action("events.clear", "Forget the caller's events") do |_args, user|
+        removed = @mutex.synchronize do
+          before = @events.size
+          @events.reject! { |event| event.owner_id == user }
+          before - @events.size
+        end
+        {"removed" => removed.to_s}
+      end
+    end
+
     # ------------------------------------------------------------- helpers
+
+    # An optional JSON object whose values must all be strings.
+    private def string_fields(value : JSON::Any?, field : String) : Hash(String, String)
+      return {} of String => String if value.nil? || value.raw.nil?
+      fields = value.as_h? || raise ApiError.new(400, "Invalid params", field, "#{field} must be an object")
+      fields.to_h do |key, entry|
+        {key, entry.as_s? || raise ApiError.new(400, "Invalid params", field, "#{field}.#{key} must be a string")}
+      end
+    end
 
     private def respond(ctx, body)
       ctx.response.print body.to_json

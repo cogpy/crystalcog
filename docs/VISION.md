@@ -4,7 +4,7 @@
 
 | File | What it does |
 |---|---|
-| `image.cr` | `Vision::Image`: 8-bit gray or RGB pixels. Reads and writes PNG and PPM/PGM. Filters: gray, Gaussian blur, Sobel edges, Otsu threshold, resize, crop. |
+| `image.cr` | `Vision::Image`: 8-bit gray or RGB pixels. Reads PNG, JPEG and PPM/PGM; writes PNG and PPM/PGM. Filters: gray, Gaussian blur, Sobel edges, Otsu threshold, resize, crop. |
 | `perception.cr` | Colour naming, connected regions, shape classification, spatial relations, motion between frames. |
 | `vision.cr` | `Vision::Scene` and its grounding in the AtomSpace. |
 
@@ -61,7 +61,8 @@ Positions are the object's centre as fractions of the image width and height; ar
 
 ## Image formats
 
-- **PNG:** grayscale, RGB, palette, gray+alpha and RGBA, at 1 to 16 bits per sample, non-interlaced. Alpha is composited over white. 16-bit samples keep their high byte. Interlaced PNGs are not supported.
+- **PNG:** grayscale, RGB, palette, gray+alpha and RGBA, at 1 to 16 bits per sample, plain or Adam7 interlaced. Alpha is composited over white. 16-bit samples keep their high byte.
+- **JPEG** (read only, `src/vision/jpeg.cr`): 8-bit baseline and extended sequential files, grayscale or three components, any chroma subsampling, with or without restart markers. Chroma is upsampled by repetition. Progressive, lossless, arithmetic-coded, 12-bit and four-component (CMYK) files raise `Vision::ImageError` naming the reason.
 - **PPM/PGM:** binary (P5, P6) and ASCII (P2, P3).
 - **Raw frames:** `Vision::Image.from_raw` takes the ROS encodings `rgb8`, `bgr8`, `rgba8`, `bgra8` and `mono8`.
 

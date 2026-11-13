@@ -53,16 +53,28 @@ module PatternMining
     end
   end
 
-  # Shallow abstraction represents a way to abstract/generalize valuations
+  # A shallow abstraction says what one variable of a pattern stands for in
+  # `frequency` of its valuations, one level deep:
+  #
+  # - a node: the variable is that constant;
+  # - a link whose children are fresh variables: the variable is a link of
+  #   that type and arity;
+  # - another variable of the pattern: the two always hold the same atom.
+  #
+  # `variable` is nil for an abstraction made without one, which applies to
+  # a pattern's only variable.
   struct ShallowAbstraction
     getter abstraction_atom : AtomSpace::Atom
     getter frequency : Int32
+    getter variable : AtomSpace::Atom?
 
-    def initialize(@abstraction_atom : AtomSpace::Atom, @frequency : Int32)
+    def initialize(@abstraction_atom : AtomSpace::Atom, @frequency : Int32, @variable : AtomSpace::Atom? = nil)
     end
 
     def to_s(io)
-      io << "ShallowAbstraction(#{@abstraction_atom}, freq: #{@frequency})"
+      io << "ShallowAbstraction("
+      @variable.try { |variable| io << variable << " := " }
+      io << @abstraction_atom << ", freq: " << @frequency << ")"
     end
   end
 
@@ -114,6 +126,18 @@ module PatternMining
       PatternSupport.new(pattern, support, database_size)
     end
 
+    # Every grounding of a pattern in the AtomSpace, as valuations.
+    def valuations(pattern : PatternMatching::Pattern) : Array(Valuation)
+      @pattern_matcher.match(pattern).compact_map do |match|
+        next unless match.success?
+        data_atom = match.matched_atoms.first? || match.bindings.values.first? || next
+        Valuation.new(pattern, match, data_atom)
+      end
+    rescue ex
+      CogUtil::Logger.warn("Valuation extraction failed for pattern #{pattern.template}: #{ex.message}")
+      [] of Valuation
+    end
+
     # Extract valuations for a pattern over the database
     def extract_valuations(pattern : PatternMatching::Pattern, data_atoms : Array(AtomSpace::Atom)) : Array(Valuation)
       valuations = Array(Valuation).new
@@ -149,100 +173,77 @@ module PatternMining
     def initialize(@atomspace : AtomSpace::AtomSpace)
     end
 
-    # Determine shallow abstractions from a set of valuations
-    # This identifies common structural patterns in the groundings
-    def determine_shallow_abstractions(valuations : Array(Valuation)) : Array(ShallowAbstraction)
-      abstractions = Array(ShallowAbstraction).new
-      abstraction_freq = Hash(AtomSpace::Atom, Int32).new(0)
+    # The shallow abstractions of each variable over a set of valuations,
+    # most frequent first. One held by fewer than `min_frequency` valuations
+    # cannot give a pattern with that much support and is left out.
+    def determine_shallow_abstractions(valuations : Array(Valuation), min_frequency : Int32 = 2) : Array(ShallowAbstraction)
+      counts = Hash(String, Int32).new(0)
+      found = Hash(String, {AtomSpace::Atom, AtomSpace::Atom}).new
 
       valuations.each do |valuation|
-        # Extract structural patterns from the grounding
-        structural_atoms = extract_structural_atoms(valuation.grounding)
-
-        structural_atoms.each do |atom|
-          abstraction_freq[atom] += 1
+        bindings = valuation.grounding.bindings
+        bindings.each do |variable, value|
+          shape = shallow_shape(variable, value)
+          key = "#{variable.name}|#{shape}"
+          counts[key] += 1
+          found[key] ||= {variable, shape}
         end
-      end
 
-      # Convert to shallow abstractions
-      abstraction_freq.each do |atom, freq|
-        if freq > 1 # Only consider abstractions that appear multiple times
-          abstractions << ShallowAbstraction.new(atom, freq)
-        end
-      end
-
-      # Sort by frequency (most frequent first)
-      abstractions.sort! { |a, b| b.frequency <=> a.frequency }
-      abstractions
-    end
-
-    # Extract structural atoms from a match result
-    private def extract_structural_atoms(match : PatternMatching::MatchResult) : Array(AtomSpace::Atom)
-      structural_atoms = Array(AtomSpace::Atom).new
-
-      # Extract bound atoms from variable bindings
-      match.bindings.each do |variable, atom|
-        structural_atoms << atom
-
-        # If the atom has outgoing links, extract those too
-        if atom.responds_to?(:outgoing)
-          atom.outgoing.each do |outgoing_atom|
-            structural_atoms << outgoing_atom
+        # Two variables holding the same atom can be one variable.
+        variables = bindings.keys.sort_by(&.name)
+        variables.each_with_index do |first, i|
+          variables.each(within: (i + 1)..) do |second|
+            next unless bindings[first] == bindings[second]
+            key = "#{second.name}|=#{first.name}"
+            counts[key] += 1
+            found[key] ||= {second, first}
           end
         end
       end
 
-      # Extract matched atoms
-      match.matched_atoms.each do |atom|
-        structural_atoms << atom
+      abstractions = counts.compact_map do |key, frequency|
+        next if frequency < min_frequency
+        variable, shape = found[key]
+        ShallowAbstraction.new(shape, frequency, variable)
       end
-
-      structural_atoms.uniq
+      abstractions.sort_by! { |abstraction| {-abstraction.frequency, abstraction.to_s} }
+      abstractions
     end
 
-    # Specialize a pattern by composing it with a shallow abstraction
+    # A node stands for itself. A link is reduced to its type and arity,
+    # with a fresh variable per child named after the variable it refines
+    # (`$X` gives `$X.1`, `$X.2`), so names stay unique within the pattern.
+    private def shallow_shape(variable : AtomSpace::Atom, value : AtomSpace::Atom) : AtomSpace::Atom
+      return value unless value.link?
+
+      children = Array(AtomSpace::Atom).new(value.outgoing.size) do |i|
+        AtomSpace::VariableNode.new("#{variable.name}.#{i + 1}").as(AtomSpace::Atom)
+      end
+      AtomSpace::Link.new(value.type, children)
+    end
+
+    # The pattern with the abstraction's variable replaced by the abstraction
+    # wherever it occurs. Returns nil when the pattern does not use that
+    # variable.
     def specialize_pattern(base_pattern : PatternMatching::Pattern, abstraction : ShallowAbstraction) : PatternMatching::Pattern?
-      begin
-        # Create a specialized pattern by combining the base pattern with the abstraction
-        # This is a simplified approach - in practice, this would involve more complex
-        # composition logic based on the specific abstraction type
+      variable = abstraction.variable
+      # An abstraction that names no variable refines the pattern's only one.
+      variable ||= base_pattern.variables.first if base_pattern.variables.size == 1
+      # Without a variable to refine the pattern stays as it is.
+      return PatternMatching::Pattern.new(base_pattern.template) unless variable
+      return nil unless base_pattern.variables.includes?(variable)
 
-        if base_pattern.template.link? && abstraction.abstraction_atom.link?
-          # Create a more complex pattern by combining structures
-          specialized_template = create_specialized_template(base_pattern.template, abstraction.abstraction_atom)
-          PatternMatching::Pattern.new(specialized_template)
-        else
-          # For simple cases, use the abstraction as a constraint
-          specialized_pattern = PatternMatching::Pattern.new(base_pattern.template)
-          # Add constraint based on the abstraction
-          # This is a simplified implementation
-          specialized_pattern
-        end
-      rescue ex
-        CogUtil::Logger.debug("Pattern specialization failed: #{ex.message}")
-        nil
-      end
+      PatternMatching::Pattern.new(substitute(base_pattern.template, variable, abstraction.abstraction_atom))
+    rescue ex
+      CogUtil::Logger.debug("Pattern specialization failed: #{ex.message}")
+      nil
     end
 
-    # Create a specialized template by combining base and abstraction
-    private def create_specialized_template(base : AtomSpace::Atom, abstraction : AtomSpace::Atom) : AtomSpace::Atom
-      # This is a simplified implementation
-      # In practice, this would involve sophisticated pattern composition logic
+    private def substitute(atom : AtomSpace::Atom, variable : AtomSpace::Atom, replacement : AtomSpace::Atom) : AtomSpace::Atom
+      return replacement if atom == variable
+      return atom unless atom.link?
 
-      if base.type == abstraction.type && base.link? && abstraction.link?
-        # Try to merge outgoing sets
-        combined_outgoing = (base.outgoing + abstraction.outgoing).uniq
-        case base.type
-        when AtomSpace::AtomType::INHERITANCE_LINK
-          AtomSpace::InheritanceLink.new(combined_outgoing[0], combined_outgoing[1])
-        when AtomSpace::AtomType::EVALUATION_LINK
-          AtomSpace::EvaluationLink.new(combined_outgoing[0], combined_outgoing[1])
-        else
-          base # Fallback to original
-        end
-      else
-        base
-      end
+      AtomSpace::Link.new(atom.type, atom.outgoing.map { |child| substitute(child, variable, replacement) })
     end
   end
 
@@ -302,22 +303,25 @@ module PatternMining
           @discovered_patterns << pattern_support
 
           # Step 3: Extract valuations for this pattern
-          data_atoms = get_data_atoms
-          valuations = @support_calculator.extract_valuations(current_pattern, data_atoms)
+          valuations = @support_calculator.valuations(current_pattern)
 
-          # Step 4: Determine shallow abstractions
-          abstractions = @pattern_specializer.determine_shallow_abstractions(valuations)
+          # Step 4: Determine shallow abstractions. One held by fewer
+          # valuations than the minimum support cannot reach it.
+          abstractions = @pattern_specializer.determine_shallow_abstractions(valuations, @min_support)
 
-          # Step 5: Create specializations and add those with enough support
+          # Step 5: Queue the specializations. Each is checked for support
+          # when its turn comes.
           abstractions.each do |abstraction|
             break if check_timeout(start_time)
 
             specialized_pattern = @pattern_specializer.specialize_pattern(current_pattern, abstraction)
-            if specialized_pattern
-              specialized_key = pattern_to_key(specialized_pattern)
-              unless @explored_patterns.includes?(specialized_key)
-                @patterns_to_explore << specialized_pattern
-              end
+            next unless specialized_pattern
+            # Without variables it is one atom of the data, not a pattern.
+            next if specialized_pattern.variables.empty?
+
+            specialized_key = pattern_to_key(specialized_pattern)
+            unless @explored_patterns.includes?(specialized_key)
+              @patterns_to_explore << specialized_pattern
             end
           end
         else

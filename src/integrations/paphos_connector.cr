@@ -410,13 +410,23 @@ module PaphosBackend
     end
   end
 
-  # Event streaming handler for real-time synchronization
+  # Event stream between this node and the Paphos backend.
+  #
+  # With a backend client attached, events are published to the backend's
+  # `/events` and read back from it, so every client of the same account
+  # sees them. Without one (offline, or before authentication) they are
+  # queued in this process.
   class EventStreamHandler
     property backend_url : String
     property connected : Bool
     property event_queue : Array(Hash(String, String))
     property subscriptions : Array(String)
     property cognitive_agency_coordinator : CognitiveAgencyCoordinator?
+    # Set once authenticated; nil keeps the stream local.
+    property client : PaphosBackend::Client?
+    # Id of the newest backend event already consumed.
+    getter last_event_id : Int64 = 0_i64
+    getter last_error : String?
 
     def initialize(@backend_url : String)
       @connected = false
@@ -430,10 +440,16 @@ module PaphosBackend
       @cognitive_agency_coordinator = coordinator
     end
 
-    # Connect to event stream
+    def remote? : Bool
+      !@client.nil?
+    end
+
+    # Connect to event stream. Events published before a backend was
+    # attached are sent to it now.
     def connect : Bool
       CogUtil::Logger.info("Connecting to Paphos event stream at #{@backend_url}")
       @connected = true
+      flush_queue if remote?
       true
     end
 
@@ -443,7 +459,9 @@ module PaphosBackend
       CogUtil::Logger.info("Disconnected from Paphos event stream")
     end
 
-    # Publish event to stream
+    # Publish event to stream. Returns false when the stream is closed or
+    # the backend could not be reached; in the second case the event stays
+    # queued for the next `connect` or `publish_event`.
     def publish_event(event_type : String, data : Hash(String, String)) : Bool
       return false unless @connected
 
@@ -453,25 +471,74 @@ module PaphosBackend
         "source"    => "crystalcog",
       }.merge(data)
 
-      @event_queue << event
-
       # Coordinate with cognitive agency if available
       if coord = @cognitive_agency_coordinator
         coord.record_sync_event(event_type, data)
       end
 
+      @event_queue << event
+      delivered = remote? ? flush_queue : true
       CogUtil::Logger.debug("Published event: #{event_type}")
-      true
+      delivered
     end
 
-    # Consume events from stream
-    def consume_events : Array(Hash(String, String))
+    # Send queued events to the backend, oldest first. Stops at the first
+    # failure so the order is kept.
+    private def flush_queue : Bool
+      client = @client || return false
+      until @event_queue.empty?
+        event = @event_queue.first
+        data = event.reject("type", "source")
+        client.publish_event(event["type"], data, event["source"]? || "crystalcog")
+        @event_queue.shift
+      end
+      @last_error = nil
+      true
+    rescue ex : PaphosBackend::Client::Error | IO::Error | Socket::Error
+      @last_error = ex.message
+      CogUtil::Logger.warn("Paphos event not delivered: #{ex.message}")
+      false
+    end
+
+    # Consume events from stream: the events of this account that arrived
+    # since the last call, from any client, each as flat string fields.
+    # `wait` holds the request until one arrives. Offline, the events
+    # queued in this process are returned and cleared.
+    def consume_events(wait : Time::Span? = nil) : Array(Hash(String, String))
       return [] of Hash(String, String) unless @connected
 
-      # Return queued events and clear
-      events = @event_queue.dup
-      @event_queue.clear
-      events
+      client = @client
+      unless client
+        events = @event_queue.dup
+        @event_queue.clear
+        return events
+      end
+
+      fetched = client.events(after: @last_event_id, wait: wait)
+      fetched.map do |event|
+        @last_event_id = Math.max(@last_event_id, event["id"].as_i64)
+        fields = {
+          "type"      => event["type"].as_s,
+          "source"    => event["source"].as_s,
+          "id"        => event["id"].as_i64.to_s,
+          "timestamp" => Time.unix_ms(event["created_at"].as_i64).to_s,
+        }
+        # The event's own fields; `timestamp` is the publisher's clock when
+        # it sent one. The envelope's type, source and id are not overridden.
+        event["data"].as_h.each do |key, value|
+          fields[key] = value.as_s unless {"type", "source", "id"}.includes?(key)
+        end
+        fields
+      end
+    rescue ex : PaphosBackend::Client::Error | IO::Error | Socket::Error
+      @last_error = ex.message
+      CogUtil::Logger.warn("Paphos events not read: #{ex.message}")
+      [] of Hash(String, String)
+    end
+
+    # The consumed events whose type this handler subscribes to.
+    def consume_subscribed(wait : Time::Span? = nil) : Array(Hash(String, String))
+      consume_events(wait).select { |event| @subscriptions.includes?(event["type"]?) }
     end
 
     # Subscribe to event type
@@ -494,6 +561,8 @@ module PaphosBackend
         "connected"     => @connected.to_s,
         "queue_size"    => @event_queue.size.to_s,
         "subscriptions" => @subscriptions.join(","),
+        "remote"        => remote?.to_s,
+        "last_event_id" => @last_event_id.to_s,
       }
     end
   end
@@ -541,6 +610,7 @@ module PaphosBackend
 
       # Connect event stream if enabled
       if @config.event_streaming_enabled
+        @event_stream.client = @client
         @event_stream.connect
       end
 
@@ -561,39 +631,63 @@ module PaphosBackend
       @cognitive_coordinator.coordinate_grip(local_grip)
     end
 
-    # Send cognitive command to backend (Lucky API)
+    # Send a command to the backend. Connected, the command is the name of
+    # a backend action (`POST /actions/:name`) and `result` is what it
+    # returned, as JSON; a refusal or an unknown command gives
+    # `status: "error"` with the reason in `error`. Offline, the command is
+    # only coordinated and recorded locally, and `status` is `"local"`.
     def send_command(command : String, params : Hash(String, String)) : Hash(String, String)
       CogUtil::Logger.info("Sending command to Paphos: #{command}")
 
-      unless @auth_handler.validate_token
-        @auth_handler.authenticate
-      end
-
       # Coordinate with cognitive agency
       coordination = @cognitive_coordinator.coordinate_grip(params)
-
-      # Publish event
-      if @config.event_streaming_enabled
-        @event_stream.publish_event("command_execution", {
-          "command" => command,
-          "status"  => "executed",
-        })
-      end
-
-      {
-        "status"      => "success",
+      response = {
         "command"     => command,
-        "result"      => "Command executed with cognitive coordination",
         "api_version" => API_VERSION,
         "coherence"   => coordination["coherence"]? || "0.9",
       }
+
+      unless @connected
+        response["status"] = "local"
+        response["result"] = "Not connected to a Paphos backend; the command was coordinated locally"
+        return response
+      end
+
+      @auth_handler.authenticate unless @auth_handler.validate_token
+      begin
+        result = @client.call_action(command, params)
+        response["status"] = "success"
+        response["result"] = result.to_json
+        result.each { |field, value| response["result.#{field}"] = value }
+      rescue ex : PaphosBackend::Client::Error | IO::Error | Socket::Error
+        response["status"] = "error"
+        response["error"] = ex.message || ex.class.name
+        response["result"] = ""
+      end
+
+      if @config.event_streaming_enabled
+        @event_stream.publish_event("command_execution", {
+          "command" => command,
+          "status"  => response["status"],
+        })
+      end
+
+      response
+    end
+
+    # The backend's service functions: name => description.
+    def service_functions : Hash(String, String)
+      return {} of String => String unless @connected
+      @client.actions.to_h { |action| {action["name"].as_s, action["description"].as_s} }
+    rescue PaphosBackend::Client::Error | IO::Error | Socket::Error
+      {} of String => String
     end
 
     # Receive events from backend
-    def receive_events : Array(Hash(String, String))
+    def receive_events(wait : Time::Span? = nil) : Array(Hash(String, String))
       CogUtil::Logger.debug("Receiving events from Paphos backend")
 
-      @event_stream.consume_events
+      @event_stream.consume_events(wait)
     end
 
     # Synchronize cognitive state with backend
@@ -625,17 +719,18 @@ module PaphosBackend
       true
     end
 
-    # Execute backend service function (Lucky action)
+    # Execute a backend service function and return its result as JSON.
+    # Raises `PaphosBackend::Client::Error` when the backend refuses or
+    # does not know the function, and when there is no connection.
     def execute_service_function(function_name : String, args : Hash(String, String)) : String
       CogUtil::Logger.info("Executing Paphos service function: #{function_name}")
-
-      # Build Lucky API endpoint
-      endpoint = @config.api_endpoint("/actions/#{function_name}")
+      raise PaphosBackend::Client::Error.new(503, "Not connected to a Paphos backend") unless @connected
 
       # Coordinate with cognitive agency
       @cognitive_coordinator.coordinate_grip(args)
 
-      "Function executed: #{function_name} (via Lucky API at #{endpoint})"
+      @auth_handler.authenticate unless @auth_handler.validate_token
+      @client.call_action(function_name, args).to_json
     end
 
     # Store cognitive snapshot
