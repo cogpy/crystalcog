@@ -232,15 +232,22 @@ Two minor test failures in distributed storage edge cases:
 | Pattern mining that specializes variables to constants, link shapes and other variables | `src/pattern_mining/pattern_mining.cr` |
 | Interlaced PNG and baseline JPEG decoding | `src/vision/image.cr`, `src/vision/jpeg.cr`, [VISION.md](VISION.md) |
 | Paphos events, service functions and remote commands | `src/integrations/platform/paphos_server.cr`, `paphos_connector.cr`, [PYGMALION_PLATFORM.md](PYGMALION_PLATFORM.md) |
+| PLN deduction and abduction that reach every second premise | `src/pln/pln.cr` |
+| First-order unification in URE (occurs check, variables on both sides) | `URE::Unifier` in `src/ure/ure.cr` |
+| Query lexer and parser with DISTINCT, LIMIT, OPTIONAL and positioned errors | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
+| Progressive JPEG decoding | `src/vision/jpeg.cr` |
+| Paphos events kept across restarts | `src/integrations/platform/paphos_server.cr` |
 
 ### Still simplified
 
 | Area | State |
 |---|---|
-| PLN engine | A rule draws one conclusion per premise per iteration, from the first matching second premise, so some consequences need more iterations or are not reached. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. Evidence from a second derivation of a known conclusion is not combined with the first. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| URE rules | A rule declares only the atom types of its premises and conclusion. The unifier is used for queries and goal checks, not to select rules. |
+| Query language | Clauses are inheritance and subject-predicate-object triples. No FILTER, UNION, ORDER BY or nested groups. Running a query adds its pattern atoms to the AtomSpace. |
 | Pattern mining | Patterns are single trees. Conjunctions of several clauses are not mined. |
-| Vision | Object detection expects flat-coloured shapes. Progressive, lossless, arithmetic-coded, 12-bit and CMYK JPEGs are refused. |
-| Paphos events | Kept in memory (the last 1,000 per server), so they do not survive a restart. Clients follow the stream by long polling. |
+| Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded, 12-bit and CMYK JPEGs are refused. |
+| Paphos events | The last 1,000 per server are kept, and written to the data file in full on every event. Clients follow the stream by long polling. |
 | Distributed cluster | Membership converges by announcement and heartbeat; there is no consensus protocol. |
 
 ---

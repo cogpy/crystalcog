@@ -121,15 +121,21 @@ module PaphosBackend
       property messages = [] of Message
       property next_user_id : Int64 = 1
       property next_message_id : Int64 = 1
+      # The most recent events, oldest first, and the id the next one gets.
+      # Ids keep counting across restarts so a client's "after" still works.
+      property events = [] of Event
+      property next_event_id : Int64 = 1
 
       def initialize
       end
     end
 
-    # Something that happened, published by a client or by the server. Events
-    # are kept in memory only: they report activity and are not state.
+    # Something that happened, published by a client or by the server. The
+    # last `EVENT_LIMIT` are kept, in the data file when there is one.
     record Event, id : Int64, owner_id : Int64, type : String, source : String,
       data : Hash(String, String), created_at : Int64 do
+      include JSON::Serializable
+
       def to_h
         {"id" => id, "type" => type, "source" => source, "data" => data, "created_at" => created_at}
       end
@@ -149,8 +155,6 @@ module PaphosBackend
     EVENT_WAIT_LIMIT = 25.seconds
 
     getter port : Int32 = 0
-    @events = Deque(Event).new
-    @next_event_id = 1_i64
     @actions = {} of String => Action
     @store : Store
     @users = {} of Int64 => User
@@ -182,10 +186,11 @@ module PaphosBackend
     # Record an event for a user, as POST /events does.
     def publish_event(owner_id : Int64, type : String, data : Hash(String, String), source : String = "paphos") : Event
       @mutex.synchronize do
-        event = Event.new(@next_event_id, owner_id, type, source, data, Time.utc.to_unix_ms)
-        @next_event_id += 1
-        @events << event
-        @events.shift if @events.size > EVENT_LIMIT
+        event = Event.new(@store.next_event_id, owner_id, type, source, data, Time.utc.to_unix_ms)
+        @store.next_event_id += 1
+        @store.events << event
+        @store.events.shift if @store.events.size > EVENT_LIMIT
+        persist
         event
       end
     end
@@ -612,7 +617,7 @@ module PaphosBackend
 
     private def events_for(owner_id : Int64, after : Int64, types : Array(String)?, limit : Int32) : Array(Event)
       @mutex.synchronize do
-        @events.select do |event|
+        @store.events.select do |event|
           event.owner_id == owner_id && event.id > after && (types.nil? || types.includes?(event.type))
         end.first(limit)
       end
@@ -649,7 +654,7 @@ module PaphosBackend
           "chats"      => chats.size.to_s,
           "messages"   => @store.messages.count { |message| chat_ids.includes?(message.chat_id) }.to_s,
           "snapshots"  => @store.snapshots.count { |snapshot| snapshot.owner_id == user }.to_s,
-          "events"     => @mutex.synchronize { @events.count { |event| event.owner_id == user } }.to_s,
+          "events"     => @mutex.synchronize { @store.events.count { |event| event.owner_id == user } }.to_s,
         }
       end
 
@@ -669,9 +674,10 @@ module PaphosBackend
 
       register_action("events.clear", "Forget the caller's events") do |_args, user|
         removed = @mutex.synchronize do
-          before = @events.size
-          @events.reject! { |event| event.owner_id == user }
-          before - @events.size
+          before = @store.events.size
+          @store.events.reject! { |event| event.owner_id == user }
+          persist
+          before - @store.events.size
         end
         {"removed" => removed.to_s}
       end

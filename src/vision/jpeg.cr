@@ -1,10 +1,15 @@
 # Baseline JPEG decoding in pure Crystal.
 #
-# Handles what cameras and most tools write by default: 8-bit Huffman-coded
-# sequential DCT (SOF0 and SOF1), grayscale or three components with any
-# sampling factors, interleaved or one component per scan, with or without
-# restart markers. Progressive, lossless, arithmetic-coded, 12-bit and
-# four-component (CMYK) files are refused with an `ImageError`.
+# Handles 8-bit Huffman-coded DCT files, sequential (SOF0, SOF1) and
+# progressive (SOF2): grayscale or three components with any sampling
+# factors, interleaved or one component per scan, with or without restart
+# markers. Lossless, arithmetic-coded, 12-bit and four-component (CMYK)
+# files are refused with an `ImageError`.
+#
+# A progressive file sends each block's coefficients over several scans:
+# first by frequency band (spectral selection), and within a band first
+# the high bits and then one more bit per scan (successive approximation).
+# The coefficients are collected and turned into pixels at the end.
 
 require "./image"
 
@@ -101,6 +106,13 @@ module Vision
         (@buffer >> @available) & 1
       end
 
+      # `count` bits as a plain number.
+      def unsigned(count : Int32) : Int32
+        value = 0
+        count.times { value = (value << 1) | bit }
+        value
+      end
+
       # `count` bits as the signed value JPEG encodes with them.
       def signed(count : Int32) : Int32
         return 0 if count == 0
@@ -130,6 +142,13 @@ module Vision
       property plane = Bytes.empty
       property plane_width = 0
       property plane_height = 0
+      # Progressive files only: every block's 64 coefficients, in natural
+      # (row by row) order, before dequantization.
+      property coefficients = Slice(Int16).empty
+
+      def blocks_wide : Int32
+        plane_width // 8
+      end
 
       def initialize(@id, @horizontal, @vertical, @quantization)
       end
@@ -148,6 +167,7 @@ module Vision
       restart_interval = 0
       adobe_transform : Int32? = nil
       scans = 0
+      progressive = false
 
       position = 2
       loop do
@@ -176,7 +196,8 @@ module Vision
         case marker
         when 0xDB then read_quantization(segment, quantization)
         when 0xC4 then read_huffman(segment, dc_tables, ac_tables)
-        when 0xC0, 0xC1
+        when 0xC0, 0xC1, 0xC2
+          progressive = marker == 0xC2
           raise ImageError.new("JPEG has more than one frame") unless components.empty?
           raise ImageError.new("truncated JPEG frame header") if segment.size < 6
           raise ImageError.new("only 8-bit JPEG is supported (this one has #{segment[0]} bits)") unless segment[0] == 8
@@ -197,8 +218,6 @@ module Vision
             end
             components << component
           end
-        when 0xC2
-          raise ImageError.new("progressive JPEG is not supported (baseline only)")
         when 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF
           raise ImageError.new("this kind of JPEG (lossless, hierarchical or arithmetic-coded) is not supported")
         when 0xDD
@@ -211,14 +230,27 @@ module Vision
           end
         when 0xDA
           raise ImageError.new("JPEG scan comes before its frame header") if components.empty?
-          prepare_planes(components, width, height) if scans == 0
-          position = decode_scan(bytes, position, segment, components, quantization, dc_tables, ac_tables,
-            restart_interval, width, height)
+          if scans == 0
+            prepare_planes(components, width, height)
+            if progressive
+              components.each do |component|
+                component.coefficients = Slice(Int16).new(component.plane_width * component.plane_height)
+              end
+            end
+          end
+          position = if progressive
+                       decode_progressive_scan(bytes, position, segment, components, dc_tables, ac_tables,
+                         restart_interval, width, height)
+                     else
+                       decode_scan(bytes, position, segment, components, quantization, dc_tables, ac_tables,
+                         restart_interval, width, height)
+                     end
           scans += 1
         end
       end
 
       raise ImageError.new("JPEG has no image data") if scans == 0
+      reconstruct(components, quantization) if progressive
       assemble(components, width, height, adobe_transform)
     end
 
@@ -345,8 +377,8 @@ module Vision
 
       size = dc.decode(reader)
       raise ImageError.new("JPEG DC coefficient is too large") if size > 11
-      component.predictor += reader.signed(size)
-      block[0] = component.predictor * table[0]
+      component.predictor &+= reader.signed(size)
+      block[0] = component.predictor &* table[0]
 
       index = 1
       while index < 64
@@ -362,6 +394,211 @@ module Vision
         raise ImageError.new("JPEG block has more than 64 coefficients") if index > 63
         block[ZIGZAG[index]] = reader.signed(size) * table[index]
         index += 1
+      end
+    end
+
+    # One scan of a progressive file: the bits `low` and above (or just bit
+    # `low`, when `high` says the higher ones came earlier) of coefficients
+    # `first..last` for the scan's components. Returns the position after it.
+    private def self.decode_progressive_scan(bytes : Bytes, position : Int32, header : Bytes,
+                                             components : Array(Component), dc_tables : Hash(Int32, HuffmanTable),
+                                             ac_tables : Hash(Int32, HuffmanTable), restart_interval : Int32,
+                                             width : Int32, height : Int32) : Int32
+      raise ImageError.new("truncated JPEG scan header") if header.size < 1
+      count = header[0].to_i
+      raise ImageError.new("truncated JPEG scan header") if header.size < 1 + count * 2 + 3
+      scan = Array(Component).new(count) do |i|
+        id = header[1 + i * 2].to_i
+        component = components.find { |candidate| candidate.id == id } ||
+                    raise ImageError.new("JPEG scan names component #{id}, which the frame does not have")
+        tables = header[2 + i * 2].to_i
+        component.dc_table = tables >> 4
+        component.ac_table = tables & 15
+        component.predictor = 0
+        component
+      end
+      raise ImageError.new("JPEG scan has no components") if scan.empty?
+
+      first = header[1 + count * 2].to_i
+      last = header[2 + count * 2].to_i
+      high = header[3 + count * 2].to_i >> 4
+      low = header[3 + count * 2].to_i & 15
+      unless first <= last && last <= 63 && low <= 13 && (first == 0) == (last == 0)
+        raise ImageError.new("JPEG progressive scan has an invalid coefficient range")
+      end
+      raise ImageError.new("JPEG progressive AC scan must have one component") if first > 0 && scan.size > 1
+
+      h_max = components.max_of(&.horizontal)
+      v_max = components.max_of(&.vertical)
+      if scan.size == 1
+        component = scan.first
+        units_wide = (width * component.horizontal + 8 * h_max - 1) // (8 * h_max)
+        units_high = (height * component.vertical + 8 * v_max - 1) // (8 * v_max)
+      else
+        units_wide = (width + 8 * h_max - 1) // (8 * h_max)
+        units_high = (height + 8 * v_max - 1) // (8 * v_max)
+      end
+
+      reader = BitReader.new(bytes, position)
+      # Blocks still to come whose band is entirely zero in this scan.
+      end_of_band_run = 0
+      unit = 0
+      units_high.times do |unit_y|
+        units_wide.times do |unit_x|
+          if restart_interval > 0 && unit > 0 && unit % restart_interval == 0
+            reader.restart
+            scan.each { |component| component.predictor = 0 }
+            end_of_band_run = 0
+          end
+          unit += 1
+
+          scan.each do |component|
+            across = scan.size == 1 ? 1 : component.horizontal
+            down = scan.size == 1 ? 1 : component.vertical
+            down.times do |block_y|
+              across.times do |block_x|
+                index = ((unit_y * down + block_y) * component.blocks_wide + unit_x * across + block_x) * 64
+                next if index + 64 > component.coefficients.size
+                block = component.coefficients.to_unsafe + index
+                if first == 0
+                  if high == 0
+                    table = dc_tables[component.dc_table]? || raise ImageError.new("JPEG scan uses a DC table that was not defined")
+                    size = table.decode(reader)
+                    raise ImageError.new("JPEG DC coefficient is too large") if size > 11
+                    component.predictor &+= reader.signed(size)
+                    block[0] = coefficient(component.predictor << low)
+                  elsif reader.bit == 1
+                    block[0] = coefficient(block[0].to_i | (1 << low))
+                  end
+                else
+                  table = ac_tables[component.ac_table]? || raise ImageError.new("JPEG scan uses an AC table that was not defined")
+                  end_of_band_run = if high == 0
+                                      first_ac_pass(reader, table, block, first, last, low, end_of_band_run)
+                                    else
+                                      refine_ac_pass(reader, table, block, first, last, low, end_of_band_run)
+                                    end
+                end
+              end
+            end
+          end
+        end
+      end
+      reader.position
+    end
+
+    private def self.coefficient(value : Int32) : Int16
+      value.clamp(Int16::MIN.to_i, Int16::MAX.to_i).to_i16
+    end
+
+    # The first bits of an AC band: runs of zeros and new nonzero values.
+    # Returns the end-of-band run left for the blocks that follow.
+    private def self.first_ac_pass(reader : BitReader, table : HuffmanTable, block : Pointer(Int16),
+                                   first : Int32, last : Int32, low : Int32, run : Int32) : Int32
+      return run - 1 if run > 0
+
+      index = first
+      while index <= last
+        symbol = table.decode(reader)
+        zeros = symbol >> 4
+        size = symbol & 15
+        if size == 0
+          if zeros < 15
+            # This block's band ends here, and so do the next few blocks'.
+            run = (1 << zeros) - 1
+            run += reader.unsigned(zeros) if zeros > 0
+            break
+          end
+          index += 16
+          next
+        end
+        index += zeros
+        raise ImageError.new("JPEG block has more than 64 coefficients") if index > last
+        block[ZIGZAG[index]] = coefficient(reader.signed(size) << low)
+        index += 1
+      end
+      run
+    end
+
+    # One more bit for an AC band. Coefficients that are already nonzero get
+    # a correction bit as they are passed; a zero one may become +-1 at
+    # this bit position.
+    private def self.refine_ac_pass(reader : BitReader, table : HuffmanTable, block : Pointer(Int16),
+                                    first : Int32, last : Int32, low : Int32, run : Int32) : Int32
+      plus = 1 << low
+      minus = -1 << low
+      index = first
+
+      if run == 0
+        while index <= last
+          symbol = table.decode(reader)
+          zeros = symbol >> 4
+          size = symbol & 15
+          value = 0
+          if size != 0
+            raise ImageError.new("JPEG refinement scan has a coefficient larger than one bit") unless size == 1
+            value = reader.bit == 1 ? plus : minus
+          elsif zeros != 15
+            run = 1 << zeros
+            run += reader.unsigned(zeros) if zeros > 0
+            break
+          end
+
+          # Pass `zeros` coefficients that are still zero, correcting the
+          # nonzero ones on the way, and stop at the next zero one.
+          while index <= last
+            position = ZIGZAG[index]
+            if block[position] != 0
+              refine(reader, block + position, plus, minus)
+            else
+              zeros -= 1
+              break if zeros < 0
+            end
+            index += 1
+          end
+
+          block[ZIGZAG[index]] = coefficient(value) if value != 0 && index <= last
+          index += 1
+        end
+      end
+
+      if run > 0
+        # The rest of this band holds no new values, only corrections.
+        while index <= last
+          position = ZIGZAG[index]
+          refine(reader, block + position, plus, minus) if block[position] != 0
+          index += 1
+        end
+        run -= 1
+      end
+      run
+    end
+
+    private def self.refine(reader : BitReader, target : Pointer(Int16), plus : Int32, minus : Int32) : Nil
+      return unless reader.bit == 1
+      current = target.value.to_i
+      return unless current & plus == 0
+      target.value = coefficient(current >= 0 ? current + plus : current + minus)
+    end
+
+    # Progressive files: dequantize every block and turn it into samples.
+    private def self.reconstruct(components : Array(Component), quantization : Hash(Int32, Array(Int32))) : Nil
+      coefficients = StaticArray(Int32, 64).new(0)
+      workspace = StaticArray(Float64, 64).new(0.0)
+      components.each do |component|
+        table = quantization[component.quantization]? ||
+                raise ImageError.new("JPEG component uses a quantization table that was not defined")
+        # The table is stored in zigzag order; the coefficients are not.
+        natural = StaticArray(Int32, 64).new(0)
+        64.times { |i| natural[ZIGZAG[i]] = table[i] }
+
+        blocks_high = component.plane_height // 8
+        blocks_high.times do |block_y|
+          component.blocks_wide.times do |block_x|
+            source = component.coefficients.to_unsafe + (block_y * component.blocks_wide + block_x) * 64
+            64.times { |i| coefficients[i] = source[i].to_i * natural[i] }
+            inverse_dct(pointerof(coefficients), pointerof(workspace), component, block_x * 8, block_y * 8)
+          end
+        end
       end
     end
 

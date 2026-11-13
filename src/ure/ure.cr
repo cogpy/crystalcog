@@ -7,6 +7,115 @@ require "../cogutil/cogutil"
 module URE
   VERSION = "0.1.0"
 
+  # What each variable stands for, by variable name. A value may contain
+  # other variables; `Unifier.resolve` follows them through.
+  alias Bindings = Hash(String, AtomSpace::Atom)
+
+  # First-order unification of atoms.
+  #
+  # A variable is a node whose name starts with `$`, of any node type, and
+  # is identified by its name. Either side may contain variables. A
+  # variable keeps one value throughout, and cannot be bound to a term
+  # that contains it (the occurs check), so `$X` never unifies with
+  # `List($X, a)`.
+  module Unifier
+    def self.variable?(atom : AtomSpace::Atom) : Bool
+      atom.is_a?(AtomSpace::Node) && atom.name.starts_with?("$")
+    end
+
+    # The names of the variables in an atom, in order of first appearance.
+    def self.variables(atom : AtomSpace::Atom) : Array(String)
+      names = [] of String
+      collect_variables(atom, names)
+      names
+    end
+
+    private def self.collect_variables(atom : AtomSpace::Atom, names : Array(String)) : Nil
+      if variable?(atom)
+        names << atom.name unless names.includes?(atom.name)
+      elsif atom.is_a?(AtomSpace::Link)
+        atom.outgoing.each { |child| collect_variables(child, names) }
+      end
+    end
+
+    def self.ground?(atom : AtomSpace::Atom) : Bool
+      return false if variable?(atom)
+      return true unless atom.is_a?(AtomSpace::Link)
+      atom.outgoing.all? { |child| ground?(child) }
+    end
+
+    # The most general set of bindings that makes `a` and `b` the same
+    # atom, extending `bindings`; nil when there is none. `bindings` itself
+    # is left as it was.
+    def self.unify(a : AtomSpace::Atom, b : AtomSpace::Atom, bindings : Bindings = Bindings.new) : Bindings?
+      result = bindings.dup
+      unify_into(a, b, result) ? result : nil
+    end
+
+    private def self.unify_into(a : AtomSpace::Atom, b : AtomSpace::Atom, bindings : Bindings) : Bool
+      a = walk(a, bindings)
+      b = walk(b, bindings)
+
+      if variable?(a)
+        return true if variable?(b) && a.name == b.name
+        return bind(a.name, b, bindings)
+      end
+      return bind(b.name, a, bindings) if variable?(b)
+
+      if a.is_a?(AtomSpace::Link) && b.is_a?(AtomSpace::Link)
+        return false unless a.type == b.type
+        left = a.outgoing
+        right = b.outgoing
+        return false unless left.size == right.size
+        left.each_with_index do |child, i|
+          return false unless unify_into(child, right[i], bindings)
+        end
+        return true
+      end
+
+      a == b
+    end
+
+    # Follow a bound variable to what it currently stands for.
+    private def self.walk(atom : AtomSpace::Atom, bindings : Bindings) : AtomSpace::Atom
+      while variable?(atom)
+        bound = bindings[atom.name]? || break
+        atom = bound
+      end
+      atom
+    end
+
+    private def self.bind(name : String, value : AtomSpace::Atom, bindings : Bindings) : Bool
+      return false if occurs?(name, value, bindings)
+      bindings[name] = value
+      true
+    end
+
+    private def self.occurs?(name : String, atom : AtomSpace::Atom, bindings : Bindings) : Bool
+      atom = walk(atom, bindings)
+      return atom.name == name if variable?(atom)
+      return false unless atom.is_a?(AtomSpace::Link)
+      atom.outgoing.any? { |child| occurs?(name, child, bindings) }
+    end
+
+    # The atom with every bound variable replaced by its value, all the way
+    # down. Unbound variables stay. Links are rebuilt only where something
+    # changed.
+    def self.resolve(atom : AtomSpace::Atom, bindings : Bindings) : AtomSpace::Atom
+      atom = walk(atom, bindings)
+      return atom unless atom.is_a?(AtomSpace::Link)
+
+      children = atom.outgoing
+      resolved = children.map { |child| resolve(child, bindings) }
+      unchanged = resolved.each_with_index.all? { |child, i| child.same?(children[i]) }
+      unchanged ? atom : AtomSpace::Link.new(atom.type, resolved, atom.truth_value)
+    end
+
+    def self.unifiable?(a : AtomSpace::Atom, b : AtomSpace::Atom) : Bool
+      !unify(a, b).nil?
+    end
+  end
+
   # Generic rule interface for URE
   abstract class Rule
     abstract def name : String
@@ -494,13 +603,16 @@ module URE
       groundings = [] of Hash(String, AtomSpace::Atom)
 
       # Extract variables from pattern
-      variables = extract_variables(pattern)
+      variables = Unifier.variables(pattern)
       return groundings if variables.empty?
 
-      # Search for matches in atomspace
+      # Each ground atom the pattern unifies with gives one grounding.
+      # Atoms with variables of their own, the pattern included when it is
+      # stored in the AtomSpace, are other patterns and ground nothing.
       @atomspace.get_all_atoms.each do |atom|
-        binding = unify_with_variables(pattern, atom, variables)
-        groundings << binding if binding
+        next unless Unifier.ground?(atom)
+        bindings = Unifier.unify(pattern, atom) || next
+        groundings << variables.to_h { |name| {name, Unifier.resolve(bindings[name], bindings)} }
       end
 
       groundings
@@ -588,15 +700,9 @@ module URE
     end
 
     private def find_applicable_rules(target : AtomSpace::Atom) : Array(Rule)
-      @rules.select do |rule|
-        rule.conclusion == target.type || rule_can_generate(rule, target)
-      end
-    end
-
-    private def rule_can_generate(rule : Rule, target : AtomSpace::Atom) : Bool
-      # Check if rule can potentially generate the target
-      # This is a simplified check - in practice would use more sophisticated unification
-      rule.conclusion == target.type
+      # A rule declares the type of atom it concludes, and nothing more
+      # specific, so the type is all there is to match a target against.
+      @rules.select { |rule| rule.conclusion == target.type }
     end
 
     private def create_premise_nodes(rule : Rule, target : AtomSpace::Atom, depth : Int32) : Array(BITNode)
@@ -736,78 +842,6 @@ module URE
       end
 
       results.uniq
-    end
-
-    private def extract_variables(pattern : AtomSpace::Atom, visited : Set(UInt64)? = nil) : Array(String)
-      visited ||= Set(UInt64).new
-      variables = [] of String
-
-      return variables if visited.includes?(pattern.handle)
-      visited.add(pattern.handle)
-
-      if pattern.is_a?(AtomSpace::Node) && pattern.name.starts_with?("$")
-        variables << pattern.name
-      elsif pattern.is_a?(AtomSpace::Link)
-        pattern.outgoing.each { |child| variables.concat(extract_variables(child, visited)) }
-      end
-
-      variables.uniq
-    end
-
-    private def unify_with_variables(pattern : AtomSpace::Atom, candidate : AtomSpace::Atom, variables : Array(String)) : Hash(String, AtomSpace::Atom)?
-      # Simplified unification - in practice would be much more sophisticated
-      return nil unless pattern.type == candidate.type
-
-      binding = {} of String => AtomSpace::Atom
-
-      if pattern.is_a?(AtomSpace::Node) && variables.includes?(pattern.name)
-        binding[pattern.name] = candidate
-        return binding
-      end
-
-      if pattern.is_a?(AtomSpace::Link) && candidate.is_a?(AtomSpace::Link)
-        return nil unless pattern.outgoing.size == candidate.outgoing.size
-
-        pattern.outgoing.zip(candidate.outgoing) do |p, c|
-          sub_binding = unify_with_variables(p, c, variables)
-          return nil unless sub_binding
-          binding.merge!(sub_binding)
-        end
-
-        return binding
-      end
-
-      # Exact match for non-variable nodes
-      pattern == candidate ? binding : nil
-    end
-
-    # Advanced unification with proper variable handling
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
-      return false if depth > 100
-      return true if atom1 == atom2
-
-      # Handle variable unification
-      if atom1.is_a?(AtomSpace::Node) && atom1.name.starts_with?("$")
-        return true # Variable matches anything
-      end
-
-      if atom2.is_a?(AtomSpace::Node) && atom2.name.starts_with?("$")
-        return true # Variable matches anything
-      end
-
-      # Structure unification for links
-      if atom1.is_a?(AtomSpace::Link) && atom2.is_a?(AtomSpace::Link)
-        return false unless atom1.type == atom2.type
-        return false unless atom1.outgoing.size == atom2.outgoing.size
-
-        atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b, depth + 1)
-        end
-
-        return true
-      end
-
-      false
     end
   end
 
@@ -1114,32 +1148,8 @@ module URE
       nodes
     end
 
-    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom, depth : Int32 = 0) : Bool
-      return false if depth > 100
-      return true if atom1 == atom2
-
-      # Handle variable unification
-      if atom1.is_a?(AtomSpace::Node) && atom1.name.starts_with?("$")
-        return true
-      end
-
-      if atom2.is_a?(AtomSpace::Node) && atom2.name.starts_with?("$")
-        return true
-      end
-
-      # Structure unification for links
-      if atom1.is_a?(AtomSpace::Link) && atom2.is_a?(AtomSpace::Link)
-        return false unless atom1.type == atom2.type
-        return false unless atom1.outgoing.size == atom2.outgoing.size
-
-        atom1.outgoing.zip(atom2.outgoing) do |a, b|
-          return false unless atoms_unify?(a, b, depth + 1)
-        end
-
-        return true
-      end
-
-      false
+    private def atoms_unify?(atom1 : AtomSpace::Atom, atom2 : AtomSpace::Atom) : Bool
+      Unifier.unifiable?(atom1, atom2)
     end
 
     private def record_performance(strategy : InferenceStrategy, results : Array(AtomSpace::Atom),

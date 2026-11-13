@@ -46,7 +46,36 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 
 # Multiple clauses
 "SELECT $pet WHERE { $pet ISA Dog . $pet likes Food }"
+
+# Every variable in the pattern, quoted names, a result limit
+"SELECT * WHERE { $x ISA \"Blue Whale\" } LIMIT 10"
+
+# One result per distinct value
+"SELECT DISTINCT $who WHERE { $who likes $what }"
+
+# Optional part: results without a match keep $food unbound
+"SELECT $pet $food WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food } }"
 ```
+
+### Grammar
+
+```
+query    := SELECT [DISTINCT] ( "*" | variable { [","] variable } )
+            WHERE "{" clauses "}" [ LIMIT integer ]
+variable := "$" name [ ":" type ]
+clauses  := clause { ( "." | newline ) clause }
+clause   := term ( ISA | inherits_from | "->" ) term
+          | term term term
+          | OPTIONAL "{" clauses "}"
+term     := "$" name | name | "quoted name"
+```
+
+- Keywords are case-insensitive. `#` starts a comment.
+- A name is letters, digits and underscores, with single hyphens inside. Anything else goes in double quotes.
+- A parse error says what was expected, what was found, and the line and column, for example `expected a term, found "}" at line 1, column 26`.
+- A selected variable must appear in WHERE.
+- Results carry the selected variables only.
+- A triple's predicate resolves to the PredicateNode of that name when there is one.
 
 ### Variable Types
 - `$var` - Generic variable
@@ -54,11 +83,13 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 - `$var:PREDICATE` - Predicate node variable
 - `$var:NODE` - Any node type
 - `$var:LINK` - Any link type
+- `$var:<AtomType>` - Any atom type by name, such as `$var:PREDICATE_NODE`
 
 ### Query Patterns
 - **Triple patterns**: `subject predicate object`
 - **Inheritance patterns**: `child ISA parent` or `child -> parent`
-- **Multiple clauses**: Connected with periods (.)
+- **Multiple clauses**: Separated by periods (.) or line breaks
+- **Optional clauses**: `OPTIONAL { ... }`, a left join
 
 ## Integration Points
 
