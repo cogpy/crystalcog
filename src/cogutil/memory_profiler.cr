@@ -49,8 +49,11 @@ module CogUtil
       property duration_ms : Float64
       property memory_per_atom : Float64
       property memory_efficiency : Float64
+      # Bytes the operation itself allocated, temporaries included, counted
+      # by the allocator around the block alone.
+      property allocated_bytes : Int64
 
-      def initialize(@operation, @initial_memory, @final_memory, @atom_count, @duration_ms)
+      def initialize(@operation, @initial_memory, @final_memory, @atom_count, @duration_ms, @allocated_bytes = 0_i64)
         # Per-atom cost is the growth in live GC heap across the operation.
         # Both snapshots are taken after a collection, so this is what the
         # operation retained; process RSS also moves with page granularity,
@@ -65,6 +68,12 @@ module CogUtil
 
       def memory_increase_kb
         @final_memory.rss_kb - @initial_memory.rss_kb
+      end
+
+      # Allocation per atom. Unlike `memory_per_atom` this does not depend
+      # on the state of the heap, so two results can be subtracted.
+      def allocated_per_atom : Float64
+        @atom_count > 0 ? @allocated_bytes.to_f / @atom_count.to_f : 0.0
       end
     end
 
@@ -140,8 +149,11 @@ module CogUtil
       initial_memory = get_system_memory_info
       start_time = Time.instant
 
-      # Execute the operation
+      # Execute the operation. The allocation counter is read right around
+      # the block, with no pause in between where another fiber could run.
+      allocated_before = GC.stats.total_bytes
       result = yield
+      allocated_bytes = (GC.stats.total_bytes - allocated_before).to_i64
 
       end_time = Time.instant
       duration_ms = (end_time - start_time).total_milliseconds
@@ -166,7 +178,8 @@ module CogUtil
         initial_memory,
         final_memory,
         atom_count,
-        duration_ms
+        duration_ms,
+        allocated_bytes
       )
     end
 

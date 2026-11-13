@@ -69,6 +69,23 @@ describe CogUtil::MemoryProfiler do
       result.memory_efficiency.should eq(final.memory_efficiency)
     end
 
+    it "reports what the operation allocated per atom" do
+      memory = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
+        100_i64, 200_i64, 50_i64, 25_i64, 25_i64, 25_i64
+      )
+      result = CogUtil::MemoryProfiler::MemoryBenchmarkResult.new("alloc", memory, memory, 4, 1.0, 1024_i64)
+      result.allocated_bytes.should eq(1024)
+      result.allocated_per_atom.should eq(256.0)
+      # Not given: nothing counted, and no division by a zero atom count.
+      CogUtil::MemoryProfiler::MemoryBenchmarkResult.new("none", memory, memory, 0, 1.0).allocated_per_atom.should eq(0.0)
+
+      measured = CogUtil::MemoryProfiler.benchmark_memory("strings") do
+        Array.new(100) { |i| "value #{i}" * 10 }
+      end
+      measured.atom_count.should eq(100)
+      measured.allocated_bytes.should be >= 100 * 80
+    end
+
     it "returns zero memory_per_atom when atom_count is zero" do
       initial = CogUtil::MemoryProfiler::SystemMemoryInfo.new(
         100_i64, 200_i64, 50_i64, 25_i64, 25_i64, 25_i64

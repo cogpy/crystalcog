@@ -308,6 +308,10 @@ function parseCrystalSpecLog(text) {
 function parseE2EReports(artifactDir) {
   const findings = [];
   const reportFiles = [];
+  const isFailureLine = (line) =>
+    /^\s*(?:FAIL(?:ED)?|ERROR|FATAL)\b/i.test(line) ||
+    /\bfailed\b(?:\s*(?::|$)|\s+(?:with|to|after|during|due to|on)\b)|\btimed out\b|[✗❌]/i.test(line);
+
   function collect(dir, depth = 0) {
     if (!fs.existsSync(dir) || depth > 4) return;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -324,8 +328,8 @@ function parseE2EReports(artifactDir) {
 
   for (const file of reportFiles) {
     const text = fs.readFileSync(file, 'utf8');
-    const failed = /fail|error|✗|❌/i.test(text) && !/0 failures/i.test(text);
-    if (failed || /failed|timed out/i.test(text)) {
+    const lineFails = text.split(/\r?\n/).filter(isFailureLine);
+    if (lineFails.length > 0) {
       const isE2E = /e2e/i.test(file);
       findings.push({
         type: isE2E ? 'e2e_test_failure' : 'integration_test_failure',
@@ -340,7 +344,6 @@ function parseE2EReports(artifactDir) {
     }
 
     // Parse explicit failure lines from e2e shell output patterns
-    const lineFails = text.match(/.*(?:failed|timed out|ERROR:).*/gi) || [];
     for (const lf of lineFails.slice(0, 20)) {
       const isE2E = /e2e/i.test(file) || /CogServer|API tests|persistence/i.test(lf);
       findings.push({

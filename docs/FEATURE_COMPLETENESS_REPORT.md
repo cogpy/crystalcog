@@ -213,25 +213,30 @@ Two minor test failures in distributed storage edge cases:
 
 ---
 
-## Remaining Work (Low Priority)
+## Remaining Work
 
-### Not Yet Implemented
+### Completed since this report was first written
 
-| Feature | Priority | Complexity |
-|---------|----------|------------|
-| ROS Integration | Low | Medium |
-| Advanced Temporal Reasoning | Medium | High |
-| Neural-Symbolic Integration | Medium | High |
-| Vision Processing | Low | High |
-| Self-Modification | Low | Very High |
-| Explanation Generation | Medium | Medium |
+| Feature | Where |
+|---|---|
+| WebSocket frames and real-time event streaming | `src/cogserver/cogserver.cr`, [COGSERVER_API.md](COGSERVER_API.md) |
+| Interactive telnet shell | same |
+| Vision processing | `src/vision`, [VISION.md](VISION.md) |
+| Remote and distributed storage that moves real atoms | `src/atomspace/atom_wire.cr`, `storage.cr` (CogStorageNode), `distributed_storage.cr` |
+| Temporal pattern matching on real timestamps, structural pattern learning, Monte Carlo matching | `src/pattern_matching/advanced_pattern_matching.cr` |
+| AI bridge on real models | `src/ai_integration/ai_bridge.cr`, [AI_INTEGRATION.md](AI_INTEGRATION.md) |
+| Paphos snapshot persistence, IPFS pubsub, Echo State reservoir | `src/integrations` |
+| Agent network optimization on the real peer graph | `src/agent-zero/network_services.cr` |
 
-### Enhancement Opportunities
+### Still simplified
 
-1. **WebSocket Full Frame Handling**: Implement complete WebSocket frame protocol
-2. **Real-time Event Streaming**: Push events to connected WebSocket clients
-3. **Advanced NLP Pipeline**: Complete dependency parsing and semantic understanding
-4. **Genetic Programming**: Add program synthesis capabilities
+| Area | State |
+|---|---|
+| Distributed cluster membership | A joining node learns the seed's node list; nodes that join later are not announced to earlier joiners. |
+| Paphos connector commands and event stream | `send_command`, `execute_service_function` and the event stream act locally; the Paphos API has no endpoints for them. |
+| Pattern mining specialization | `specialize_pattern` handles same-type links only. |
+| Vision | Flat-coloured shapes only; no interlaced PNG, no JPEG. |
+| PLN formulas | Deduction, modus ponens and abduction use simplified strength formulas. |
 
 ---
 

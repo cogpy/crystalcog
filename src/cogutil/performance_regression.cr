@@ -45,12 +45,13 @@ module CogUtil
           when "version"
             version = json.read_string
           when "environment"
-            environment = Hash(String, String).from_json(json)
+            environment = Hash(String, String).new(json)
           when "metrics"
             json.read_object do |metric_name|
-              # This would need proper Metrics.from_json implementation
-              json.skip
+              metrics[metric_name] = PerformanceProfiler::Metrics.from_json_any(JSON.parse(json.read_raw))
             end
+          else
+            json.skip
           end
         end
 
@@ -289,12 +290,13 @@ module CogUtil
         if data_json = parsed["data"]?
           if data_array = data_json.as_a?
             @historical_data = data_array.map do |item|
-              # Would need proper HistoricalData.from_json implementation
-              # For now, we'll use a simplified version
               timestamp = Time.parse_rfc3339(item["timestamp"].as_s)
               version = item["version"].as_s
               environment = item["environment"].as_h.transform_values(&.as_s)
               metrics = Hash(String, PerformanceProfiler::Metrics).new
+              item["metrics"]?.try(&.as_h?).try(&.each do |name, data|
+                metrics[name] = PerformanceProfiler::Metrics.from_json_any(data)
+              end)
 
               HistoricalData.new(timestamp, metrics, version, environment)
             end

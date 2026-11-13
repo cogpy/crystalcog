@@ -15,6 +15,8 @@ require "./ml/ml_main"
 require "./learning/learning_main"
 require "./tools/cogshell"
 require "./integrations/integration"
+require "./integrations/platform/stack"
+require "./tools/engine_cli"
 
 # Conditionally require server components
 {% if flag?(:with_cogserver) %}
@@ -39,7 +41,25 @@ module CrystalCog
   end
 
   # Main entry point for command-line usage
+  # Serve the Pygmalion platform stack until interrupted (configured by env;
+  # see src/integrations/platform/stack.cr).
+  def self.run_pygmalion_platform
+    stack = PygmalionPlatform::Stack.new.start
+    puts "Pygmalion platform running:"
+    stack.status.each { |k, v| puts "  #{k}: #{v}" }
+    {% unless flag?(:win32) %}
+      Signal::INT.trap { stack.stop; exit 0 }
+      Signal::TERM.trap { stack.stop; exit 0 }
+    {% end %}
+    sleep
+  end
+
   def self.main(args = ARGV)
+    # Engine and tool commands print only their own output, so it can be piped.
+    if EngineCLI.command?(args.first?)
+      exit EngineCLI.run(args.first, args[1..])
+    end
+
     puts "CrystalCog #{VERSION} - OpenCog in Crystal"
     puts "Args received: #{args}"
 
@@ -67,16 +87,28 @@ module CrystalCog
     when "integration"
       puts "Running integration demo..."
       test_integration_demo
+    when "platform"
+      run_pygmalion_platform
     else
-      puts "Usage: crystalcog [server|shell|test|integration|attention|nlp|language-capabilities|moses]"
+      puts "Usage: crystalcog [server|shell|test|integration|platform|attention|nlp|language-capabilities|moses|"
+      puts "                   chat|generate|tokenize|detokenize|cog|tool|tools|engine]"
       puts "  server                  - Start the CogServer"
       puts "  shell                   - Start interactive shell"
       puts "  test                    - Run basic test operations"
       puts "  integration             - Demo integration framework (cogpy/pyg/pygmalion/galatea/paphos)"
+      puts "  platform                - Run the Pygmalion platform (Aphrodite engine + Paphos + Galatea)"
       puts "  attention               - Demo attention allocation mechanisms"
       puts "  nlp                     - Demo natural language processing"
       puts "  language-capabilities   - Demo language processing with reasoning"
       puts "  moses                   - Run MOSES evolutionary program learning"
+      puts "  chat                    - Chat with the native Crystal engine; the model can call crystalcog tools,"
+      puts "                            and /commands run AtomSpace, PLN, URE and NLP directly"
+      puts "  generate                - Generate text with the native Crystal engine"
+      puts "  tokenize / detokenize   - Convert between text and token ids"
+      puts "  cog                     - Run one CogShell command (--atomspace FILE keeps state between runs)"
+      puts "  tool / tools            - Call a crystalcog tool with JSON arguments / list the tools"
+      puts "  engine serve            - Serve the native engine over the OpenAI-compatible API"
+      puts "  (run any of the last six with --help for options)"
     end
   end
 

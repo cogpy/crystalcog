@@ -219,8 +219,13 @@ describe CrystalCogIntegration::Manager do
       manager = CrystalCogIntegration::Manager.new
       manager.initialize_all_integrations(atomspace)
 
-      snapshot = manager.load_cognitive_snapshot("test_snapshot_001")
-      snapshot.should_not be_nil
+      manager.store_cognitive_snapshot("test_snapshot_001").should be_true
+      snapshot = manager.load_cognitive_snapshot("test_snapshot_001").not_nil!
+      snapshot["snapshot_id"].should eq("test_snapshot_001")
+      snapshot["kind"].should eq("cognitive_state")
+
+      # A snapshot that was never stored is not invented.
+      manager.load_cognitive_snapshot("never_stored").should be_nil
     end
   end
 

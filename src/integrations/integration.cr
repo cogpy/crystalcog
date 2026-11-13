@@ -334,9 +334,9 @@ module CrystalCogIntegration
               if agency = @cognitive_agency
                 agency.process(pygmalion_response, "pygmalion")
               end
-            rescue ex : IO::Error | Socket::Error
+            rescue ex : IO::Error | Socket::Error | PygmalionAgent::BackendError
               # The Pygmalion backend is an external service; the rest of the
-              # pipeline still runs without it.
+              # pipeline still runs without it (unreachable or HTTP error).
               CogUtil::Logger.warn("Pygmalion backend unavailable: #{ex.message}")
               result["pygmalion_status"] = "unavailable"
             end

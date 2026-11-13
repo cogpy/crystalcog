@@ -6,6 +6,7 @@
 
 require "socket"
 require "http/server"
+require "http/web_socket"
 require "json"
 require "base64"
 require "../cogutil/cogutil"
@@ -27,14 +28,36 @@ module CogServer
     getter ws_port : Int32
     getter atomspace : AtomSpace::AtomSpace
 
-    @server : HTTP::Server?
+    getter broadcaster : EventBroadcaster
+
+    # How long a new connection on the telnet port may stay silent before it
+    # is treated as an interactive shell (HTTP clients speak first).
+    TELNET_SNIFF_TIMEOUT = 300.milliseconds
+    HTTP_METHODS         = {"GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH "}
+
+    @server : TCPServer?
     @ws_server : HTTP::Server?
     @running : Bool = false
     @sessions : Hash(String, Session)
+    @sessions_mutex = Mutex.new
+    @shell_mutex = Mutex.new
+    @shell : Proc(String, String)?
+
+    # Builds the command shell for a server's AtomSpace. The AtomSpace core
+    # reaches this file through the cluster code, so the shell (PLN, URE,
+    # NLP, vision) is not required here: requiring "cogserver_shell"
+    # installs it. Without it only the built-in server commands exist.
+    class_property shell_factory : Proc(AtomSpace::AtomSpace, Proc(String, String))?
+    @metrics : MetricsCollector
+    @observer : AtomSpace::AtomSpaceSignal?
+    @telnet_http : HTTP::Server::RequestProcessor?
 
     def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT)
       @atomspace = AtomSpace::AtomSpace.new
       @sessions = Hash(String, Session).new
+      @shell = Server.shell_factory.try(&.call(@atomspace))
+      @broadcaster = EventBroadcaster.new
+      @metrics = MetricsCollector.new
 
       CogUtil::Logger.info("CogServer #{VERSION} initializing")
       CogUtil::Logger.info("Telnet server will listen on #{@host}:#{@port}")
@@ -47,6 +70,23 @@ module CogServer
 
       @running = true
       CogUtil::Logger.info("Starting CogServer...")
+
+      # AtomSpace changes become monitor events for WebSocket subscribers.
+      @broadcaster.start
+      broadcaster = @broadcaster
+      observer = AtomSpace::AtomSpaceSignal.new do |event, atom|
+        case event
+        when .atom_added?              then broadcaster.broadcast_atom_added(atom)
+        when .atom_removed?            then broadcaster.broadcast_atom_removed(atom)
+        when .truth_value_changed?     then broadcaster.broadcast_atom_changed(MonitorEventType::TruthValueChanged, atom)
+        when .attention_value_changed? then broadcaster.broadcast_atom_changed(MonitorEventType::AttentionChanged, atom)
+        end
+        nil
+      end
+      @observer = observer
+      @atomspace.add_observer(observer)
+      @metrics.attach(@atomspace, @broadcaster)
+      @metrics.start
 
       # Start telnet server in a fiber
       spawn do
@@ -71,8 +111,15 @@ module CogServer
       @server.try(&.close)
       @ws_server.try(&.close)
 
-      @sessions.each_value(&.close)
-      @sessions.clear
+      @metrics.stop
+      @observer.try { |observer| @atomspace.remove_observer(observer) }
+      @observer = nil
+      @broadcaster.stop
+
+      @sessions_mutex.synchronize do
+        @sessions.each_value(&.close)
+        @sessions.clear
+      end
 
       CogUtil::Logger.info("CogServer stopped")
     end
@@ -96,17 +143,108 @@ module CogServer
       }
     end
 
+    # The telnet port speaks two protocols. A client that stays silent, or
+    # whose first bytes are not an HTTP request line, gets an interactive
+    # line-based shell (`telnet host 17001`, `nc`). A client that opens with
+    # an HTTP request gets the one-shot `?cmd=` interface.
     private def start_telnet_server
-      @server = HTTP::Server.new do |context|
-        handle_telnet_request(context)
+      server = TCPServer.new(@host, @port)
+      @server = server
+      @telnet_http = HTTP::Server::RequestProcessor.new { |context| handle_telnet_request(context) }
+      CogUtil::Logger.info("Telnet server listening on #{server.local_address}")
+
+      while @running
+        socket = server.accept? || break
+        spawn handle_telnet_connection(socket)
       end
-
-      address = @server.not_nil!.bind_tcp(@host, @port)
-      CogUtil::Logger.info("Telnet server listening on #{address}")
-
-      @server.not_nil!.listen
     rescue ex
-      CogUtil::Logger.error("Telnet server error: #{ex.message}")
+      CogUtil::Logger.error("Telnet server error: #{ex.message}") if @running
+    end
+
+    private def handle_telnet_connection(socket : TCPSocket)
+      socket.read_timeout = TELNET_SNIFF_TIMEOUT
+      first = begin
+        socket.peek
+      rescue IO::TimeoutError
+        nil
+      end
+      socket.read_timeout = nil
+
+      if first && http_request?(first)
+        @telnet_http.try(&.process(socket, socket))
+      elsif first.nil? || !first.empty? # silent client, or one that already typed a command
+        run_telnet_session(socket)
+      end
+    rescue ex : IO::Error
+      CogUtil::Logger.debug("Telnet connection closed: #{ex.message}")
+    ensure
+      socket.close rescue nil
+    end
+
+    private def http_request?(bytes : Bytes) : Bool
+      head = String.new(bytes[0, Math.min(bytes.size, 8)])
+      HTTP_METHODS.any? { |method| head.starts_with?(method) }
+    end
+
+    private def run_telnet_session(socket : TCPSocket)
+      session = open_session(:telnet)
+      socket << "Welcome to CogServer #{VERSION}\r\n"
+      socket << "Session ID: #{session.id}\r\n"
+      socket << "AtomSpace contains #{@atomspace.size} atoms\r\n"
+      socket << "Type 'help' for available commands\r\n"
+      until session.closed? || !@running
+        socket << "cog> "
+        socket.flush
+        line = socket.gets || break
+        command = clean_telnet_line(line)
+        next if command.empty?
+        output = process_telnet_command(command, session)
+        socket << output.gsub(/\r?\n/, "\r\n") << "\r\n" unless output.empty?
+      end
+      socket.flush
+    ensure
+      close_session(session) if session
+    end
+
+    # Drop telnet option negotiation (IAC sequences) and control characters.
+    private def clean_telnet_line(line : String) : String
+      bytes = line.to_slice
+      clean = IO::Memory.new(bytes.size)
+      i = 0
+      while i < bytes.size
+        byte = bytes[i]
+        if byte == 0xFF_u8 # IAC
+          option = bytes[i + 1]?
+          i += option && option >= 0xFB_u8 ? 3 : 2
+        elsif byte == 0x08_u8 || byte == 0x7F_u8 # backspace / delete
+          clean.seek(-1, IO::Seek::Current) if clean.pos > 0
+          i += 1
+        else
+          clean.write_byte(byte) if byte >= 0x20_u8 || byte == 0x09_u8
+          i += 1
+        end
+      end
+      String.new(clean.to_slice[0, clean.pos]).scrub.strip
+    end
+
+    private def open_session(type : Symbol) : Session
+      session = Session.new(generate_session_id, @atomspace, type)
+      @sessions_mutex.synchronize { @sessions[session.id] = session }
+      session
+    end
+
+    private def close_session(session : Session)
+      session.close
+      @sessions_mutex.synchronize { @sessions.delete(session.id) }
+    end
+
+    # Run a CogShell command (AtomSpace, PLN, URE, NLP, vision) on the
+    # server's AtomSpace.
+    def run_shell_command(command : String) : String
+      shell = @shell || return "Unknown command: #{command}. The knowledge base shell is not loaded."
+      @shell_mutex.synchronize { shell.call(command).rstrip }
+    rescue ex
+      "Error: #{ex.message}"
     end
 
     private def start_websocket_server
@@ -123,9 +261,8 @@ module CogServer
     end
 
     private def handle_telnet_request(context)
-      session_id = generate_session_id
-      session = Session.new(session_id, @atomspace, :telnet)
-      @sessions[session_id] = session
+      session = open_session(:telnet)
+      session_id = session.id
 
       context.response.content_type = "text/plain"
       context.response.print("Welcome to CogServer #{VERSION}\n")
@@ -148,6 +285,9 @@ module CogServer
       CogUtil::Logger.error("Telnet request error: #{ex.message}")
       context.response.status_code = 500
       context.response.print("Internal server error: #{ex.message}")
+    ensure
+      # One HTTP request is one session; nothing keeps it open afterwards.
+      close_session(session) if session
     end
 
     private def process_telnet_command(command : String, session : Session) : String
@@ -160,7 +300,20 @@ module CogServer
         atomspace     - Show AtomSpace statistics
         list          - List atoms in AtomSpace
         stats         - Show session statistics
+        sessions      - Show open sessions
         quit, exit    - Close session
+
+        Knowledge base commands:
+        concept <name>                 Create ConceptNode
+        predicate <name>               Create PredicateNode
+        inherit <child> <parent> [s c] InheritanceLink
+        eval <pred> <a> [b ...]        EvaluationLink
+        imply <a> <b> [s c]            ImplicationLink
+        reason [steps]                 Run PLN
+        ure                            Run URE forward chaining
+        query <name>                   Lookup by name
+        list <type>                    List atoms of a type
+        size, clear, tv, nlp, parse    See CogShell
         HELP
       when "info"
         "CogServer #{VERSION} - Host: #{@host}, Port: #{@port}, WebSocket: #{@ws_port}"
@@ -176,11 +329,19 @@ module CogServer
         end
       when "stats"
         "Session #{session.id} (#{session.session_type}), Active: #{session.duration.total_seconds.round(1)}s"
+      when "sessions"
+        sessions = @sessions_mutex.synchronize { @sessions.values }
+        sessions.map { |s| "#{s.id} (#{s.session_type}) #{s.duration.total_seconds.round(1)}s" }.join("\n")
       when "quit", "exit"
         session.close
         "Session closed. Goodbye!"
       else
-        "Unknown command: #{command}. Type 'help' for available commands."
+        output = run_shell_command(command.strip)
+        if output.starts_with?("Unknown command:")
+          "Unknown command: #{command}. Type 'help' for available commands."
+        else
+          output
+        end
       end
     rescue ex
       "Command error: #{ex.message}"
@@ -194,49 +355,138 @@ module CogServer
       end
     end
 
+    # WebSocket endpoint (RFC 6455) for real-time monitoring and control.
+    #
+    # Client -> server, JSON text frames (an optional "id" is echoed back):
+    #   {"action": "subscribe",   "events": ["AtomAdded", "*"]}
+    #   {"action": "unsubscribe", "events": ["AtomAdded"]}
+    #   {"action": "command",     "command": "inherit cat animal"}
+    #   {"action": "stats"}  {"action": "ping"}
+    # A frame that is not a JSON object is run as a shell command.
+    #
+    # Server -> client: {"type": "welcome" | "subscribed" | "result" | "stats"
+    # | "pong" | "error", ...} replies, and the subscribed monitor events
+    # {"type": "AtomAdded", "timestamp": ..., "data": {...}}.
     private def handle_websocket_upgrade(context)
-      # Check for proper WebSocket upgrade headers
-      if context.request.headers["Connection"]?.try(&.downcase.includes?("upgrade")) &&
-         context.request.headers["Upgrade"]?.try(&.downcase) == "websocket"
-        # Basic WebSocket handshake
-        websocket_key = context.request.headers["Sec-WebSocket-Key"]?
-        if websocket_key.nil?
-          context.response.status_code = 400
-          context.response.content_type = "application/json"
-          context.response.print({"error" => "Missing WebSocket key"}.to_json)
-          return
-        end
+      request = context.request
+      unless request.headers["Connection"]?.try(&.downcase.includes?("upgrade")) &&
+             request.headers["Upgrade"]?.try(&.downcase) == "websocket"
+        return websocket_reject(context, 400, "Invalid WebSocket upgrade request")
+      end
+      websocket_key = request.headers["Sec-WebSocket-Key"]?
+      return websocket_reject(context, 400, "Missing WebSocket key") unless websocket_key
+      version = request.headers["Sec-WebSocket-Version"]?
+      if version && version != "13"
+        context.response.headers["Sec-WebSocket-Version"] = "13"
+        return websocket_reject(context, 426, "Unsupported WebSocket version")
+      end
 
-        # Create session for WebSocket
-        session_id = generate_session_id
-        session = Session.new(session_id, @atomspace, :websocket)
-        @sessions[session_id] = session
+      response = context.response
+      response.status = HTTP::Status::SWITCHING_PROTOCOLS
+      response.headers["Upgrade"] = "websocket"
+      response.headers["Connection"] = "Upgrade"
+      response.headers["Sec-WebSocket-Accept"] = HTTP::WebSocket::Protocol.key_challenge(websocket_key)
+      # A server may only select a subprotocol the client offered.
+      offered = request.headers.get?("Sec-WebSocket-Protocol").try(&.flat_map(&.split(',')).map(&.strip)) || [] of String
+      response.headers["Sec-WebSocket-Protocol"] = "json" if offered.includes?("json")
 
-        # Generate WebSocket accept key (simplified)
-        websocket_magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        accept_key = Base64.strict_encode("#{websocket_key}#{websocket_magic}")
-
-        # Send WebSocket upgrade response
-        context.response.status_code = 101
-        context.response.headers["Upgrade"] = "websocket"
-        context.response.headers["Connection"] = "Upgrade"
-        context.response.headers["Sec-WebSocket-Accept"] = accept_key
-        context.response.headers["Sec-WebSocket-Protocol"] = "json"
-
-        CogUtil::Logger.info("WebSocket connection established for session #{session_id}")
-
-        # Note: In a full implementation, this would handle the WebSocket frames
-        # For now, we establish the connection successfully
-      else
-        context.response.status_code = 400
-        context.response.content_type = "application/json"
-        context.response.print({"error" => "Invalid WebSocket upgrade request"}.to_json)
+      response.upgrade do |io|
+        serve_websocket(HTTP::WebSocket.new(io))
       end
     rescue ex
       CogUtil::Logger.error("WebSocket upgrade error: #{ex.message}")
-      context.response.status_code = 500
+      websocket_reject(context, 500, "WebSocket upgrade failed")
+    end
+
+    private def websocket_reject(context, status : Int32, message : String)
+      context.response.status_code = status
       context.response.content_type = "application/json"
-      context.response.print({"error" => "WebSocket upgrade failed"}.to_json)
+      context.response.print({"error" => message}.to_json)
+    end
+
+    private def serve_websocket(socket : HTTP::WebSocket)
+      session = open_session(:websocket)
+      monitor = @broadcaster.register_monitor(session.id, persistent: true)
+      CogUtil::Logger.info("WebSocket connection established for session #{session.id}")
+
+      # One writer per connection: replies and events share the outbox, so
+      # frames never interleave and a slow client cannot stall the broadcaster.
+      writer_done = Channel(Nil).new
+      spawn do
+        while message = monitor.outbox.receive?
+          begin
+            socket.send(message)
+          rescue IO::Error
+            break
+          end
+        end
+        writer_done.send(nil)
+      end
+
+      monitor.reply({"type" => "welcome", "session" => session.id, "version" => VERSION,
+                     "events" => MonitorEventType.names}.to_json)
+      socket.on_message { |message| handle_websocket_message(message, monitor) }
+      socket.run
+    rescue ex : IO::Error
+      CogUtil::Logger.debug("WebSocket closed: #{ex.message}")
+    ensure
+      if session
+        @broadcaster.unregister_monitor(session.id)
+        close_session(session)
+      end
+      if writer_done
+        select
+        when writer_done.receive
+        when timeout(1.second)
+        end
+      end
+    end
+
+    private def handle_websocket_message(message : String, monitor : WebSocketMonitor)
+      monitor.touch
+      request = begin
+        JSON.parse(message).as_h?
+      rescue JSON::ParseException
+        nil
+      end
+      # Anything that is not a JSON object is a shell command.
+      return monitor.reply({"type" => "result", "command" => message.strip,
+                            "output" => run_shell_command(message.strip)}.to_json) unless request
+
+      id = request["id"]?
+      action = request["action"]?.try(&.as_s?) || request["command"]?.try { "command" }
+      reply = case action
+              when "subscribe", "unsubscribe"
+                names = request["events"]?.try { |e| e.as_a?.try(&.compact_map(&.as_s?)) || e.as_s?.try { |one| [one] } } || [] of String
+                resolved = names.map { |name| {name, MonitorEventType.resolve(name)} }
+                if bad = resolved.find { |(_, canonical)| canonical.nil? }
+                  {"type" => JSON::Any.new("error"), "message" => JSON::Any.new("unknown event #{bad[0].inspect}; " \
+                                                                                "expected * or one of #{MonitorEventType.names.join(", ")}")}
+                else
+                  resolved.each do |(_, canonical)|
+                    action == "subscribe" ? monitor.subscribe(canonical.not_nil!) : monitor.unsubscribe(canonical.not_nil!)
+                  end
+                  {"type"   => JSON::Any.new("subscribed"),
+                   "events" => JSON::Any.new(monitor.subscriptions.to_a.sort.map { |e| JSON::Any.new(e) })}
+                end
+              when "command"
+                command = request["command"]?.try(&.as_s?).to_s.strip
+                if command.empty?
+                  {"type" => JSON::Any.new("error"), "message" => JSON::Any.new("command is required")}
+                else
+                  {"type" => JSON::Any.new("result"), "command" => JSON::Any.new(command),
+                   "output" => JSON::Any.new(run_shell_command(command))}
+                end
+              when "stats"
+                {"type" => JSON::Any.new("stats"), "data" => JSON.parse(stats.to_json)}
+              when "ping"
+                {"type" => JSON::Any.new("pong")}
+              else
+                {"type" => JSON::Any.new("error"), "message" => JSON::Any.new("unknown action #{action.inspect}; " \
+                                                                              "expected subscribe, unsubscribe, command, stats or ping")}
+              end
+      reply["id"] = id if id
+      monitor.reply(reply.to_json)
     end
 
     private def handle_http_api(context)
@@ -253,6 +503,8 @@ module CogServer
         handle_create_atom(context)
       when "/atoms"
         handle_atoms_request(context)
+      when .starts_with?("/atoms/")
+        handle_atom_request(context, context.request.path.lchop("/atoms/"))
       when "/sessions"
         handle_sessions_request(context)
       when "/ping"
@@ -356,19 +608,7 @@ module CogServer
 
         response = {
           "count" => atoms.size,
-          "atoms" => atoms.map { |atom|
-            {
-              "handle"      => atom.handle,
-              "type"        => atom.type.to_s,
-              "name"        => atom.node? ? atom.name : nil,
-              "outgoing"    => atom.link? ? atom.outgoing.map(&.handle) : nil,
-              "truth_value" => {
-                "strength"   => atom.truth_value.strength,
-                "confidence" => atom.truth_value.confidence,
-              },
-              "string" => atom.to_s,
-            }
-          },
+          "atoms" => atoms.map { |atom| atom_entry(atom) },
         }
 
         context.response.content_type = "application/json"
@@ -376,6 +616,17 @@ module CogServer
       when "POST"
         # Create new atom
         handle_create_atom(context)
+      when "DELETE"
+        # Remove the atom described by {"atom": <content form>}.
+        begin
+          data = JSON.parse(context.request.body.try(&.gets_to_end) || "")
+          described = AtomSpace::AtomWire.read(data["atom"]? || data) { |handle| @atomspace.get_atom(handle) }
+          remove_atom_response(context, @atomspace.find_equivalent(described))
+        rescue ex : JSON::ParseException | KeyError | ArgumentError | TypeCastError | OverflowError
+          context.response.status_code = 400
+          context.response.content_type = "application/json"
+          context.response.print({"error" => "Invalid request: #{ex.message}"}.to_json)
+        end
       else
         context.response.status_code = 405
         context.response.content_type = "application/json"
@@ -383,29 +634,70 @@ module CogServer
       end
     end
 
+    private def atom_entry(atom : AtomSpace::Atom)
+      {
+        "handle"      => atom.handle,
+        "type"        => atom.type.to_s,
+        "name"        => atom.node? ? atom.name : nil,
+        "outgoing"    => atom.link? ? atom.outgoing.map(&.handle) : nil,
+        "truth_value" => {
+          "strength"   => atom.truth_value.strength,
+          "confidence" => atom.truth_value.confidence,
+        },
+        "string" => atom.to_s,
+      }
+    end
+
+    # GET /atoms/:handle returns one atom, with its full content form under
+    # "wire"; DELETE /atoms/:handle removes it.
+    private def handle_atom_request(context, handle_text : String)
+      handle = handle_text.to_u64?
+      atom = handle.try { |h| @atomspace.get_atom(h) }
+      case context.request.method
+      when "GET"
+        context.response.content_type = "application/json"
+        if atom
+          entry = JSON.parse(atom_entry(atom).to_json).as_h
+          entry["wire"] = JSON.parse(AtomSpace::AtomWire.to_json(atom))
+          context.response.print(entry.to_json)
+        else
+          context.response.status_code = 404
+          context.response.print({"error" => "No atom with handle #{handle_text}"}.to_json)
+        end
+      when "DELETE"
+        remove_atom_response(context, atom)
+      else
+        context.response.status_code = 405
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Method not allowed"}.to_json)
+      end
+    end
+
+    private def remove_atom_response(context, atom : AtomSpace::Atom?)
+      context.response.content_type = "application/json"
+      if atom.nil?
+        context.response.status_code = 404
+        context.response.print({"error" => "No such atom"}.to_json)
+      elsif @atomspace.remove_atom(atom)
+        context.response.print({"success" => true, "removed" => atom.handle}.to_json)
+      else
+        context.response.status_code = 409
+        context.response.print({"error" => "Atom is still used by other links", "handle" => atom.handle}.to_json)
+      end
+    end
+
+    # POST /atoms takes an atom in its content form, either at the top level
+    # or under "atom". Outgoing entries are nested atoms or existing handles.
+    # Truth values merge with what is stored unless "replace" is true.
     private def handle_create_atom(context)
       begin
         body = context.request.body.try(&.gets_to_end) || ""
         data = JSON.parse(body)
 
-        type_str = data["type"].as_s
-        atom_type = AtomSpace::AtomType.parse(type_str)
-
-        if atom_type.node?
-          name = data["name"].as_s
-          atom = @atomspace.add_node(atom_type, name)
-        elsif atom_type.link?
-          outgoing_data = data["outgoing"].as_a
-          # Resolve every target before mutating the graph. Invalid handles must
-          # not silently turn a submitted relationship into an empty link.
-          outgoing = outgoing_data.map do |value|
-            handle = value.as_i64.to_u64
-            @atomspace.get_atom(handle) || raise ArgumentError.new("Unknown outgoing handle: #{handle}")
-          end
-          atom = @atomspace.add_link(atom_type, outgoing)
-        else
-          raise ArgumentError.new("Expected a concrete node or link type")
-        end
+        # Resolve every target before mutating the graph. Invalid handles must
+        # not silently turn a submitted relationship into an empty link.
+        described = AtomSpace::AtomWire.read(data["atom"]? || data) { |handle| @atomspace.get_atom(handle) }
+        atom = AtomSpace::AtomWire.intern(described, @atomspace, data["replace"]?.try(&.as_bool?) || false)
 
         response = {
           "success" => true,
@@ -631,6 +923,7 @@ module CogServer
 
           if storage
             @atomspace.attach_storage(storage)
+            @broadcaster.broadcast_storage(MonitorEventType::StorageAttached, storage.name, storage_type)
             response = {
               "success" => true,
               "message" => "Storage attached successfully",
@@ -673,6 +966,7 @@ module CogServer
           if storage
             storage.close
             @atomspace.detach_storage(storage)
+            @broadcaster.broadcast_storage(MonitorEventType::StorageDetached, storage_name, storage.class.name)
             response = {
               "success" => true,
               "message" => "Storage detached successfully",
@@ -763,12 +1057,42 @@ module CogServer
     property subscriptions : Set(String)
     property created_at : Time
     property last_activity : Time
+    # Messages waiting to be written to the client. Events are dropped when
+    # it is full; replies wait for room.
+    getter outbox : Channel(String)
+    # Events dropped because the client was not reading fast enough.
+    getter dropped : Int64 = 0_i64
+    # A monitor bound to a live connection is never reaped for inactivity.
+    getter? persistent : Bool
     @closed : Bool = false
 
-    def initialize(@session_id : String)
+    OUTBOX_CAPACITY = 256
+
+    def initialize(@session_id : String, @persistent : Bool = false)
       @subscriptions = Set(String).new
       @created_at = Time.utc
       @last_activity = Time.utc
+      @outbox = Channel(String).new(OUTBOX_CAPACITY)
+    end
+
+    # Queue an event without blocking; false when it had to be dropped.
+    def deliver(message : String) : Bool
+      return false if @closed
+      select
+      when @outbox.send(message)
+        true
+      else
+        @dropped += 1
+        false
+      end
+    rescue Channel::ClosedError
+      false
+    end
+
+    # Queue a reply to a client request, waiting for room if necessary.
+    def reply(message : String) : Nil
+      @outbox.send(message) unless @closed
+    rescue Channel::ClosedError
     end
 
     def subscribe(event_type : String)
@@ -790,7 +1114,9 @@ module CogServer
     end
 
     def close
+      return if @closed
       @closed = true
+      @outbox.close
     end
 
     def closed? : Bool
@@ -810,6 +1136,14 @@ module CogServer
     ServerStats
     AtomSpaceStats
     Heartbeat
+
+    # The canonical subscription name for `name` ("*" or an event type,
+    # matched without regard to case or underscores), or nil.
+    def self.resolve(name : String) : String?
+      return "*" if name == "*"
+      key = name.downcase.delete('_')
+      names.find { |candidate| candidate.downcase == key }
+    end
   end
 
   # Real-time event for WebSocket broadcasting
@@ -870,9 +1204,9 @@ module CogServer
       @running
     end
 
-    def register_monitor(session_id : String) : WebSocketMonitor
+    def register_monitor(session_id : String, persistent : Bool = false) : WebSocketMonitor
       @mutex.synchronize do
-        monitor = WebSocketMonitor.new(session_id)
+        monitor = WebSocketMonitor.new(session_id, persistent)
         @monitors[session_id] = monitor
         CogUtil::Logger.debug("WebSocket monitor registered: #{session_id}")
         monitor
@@ -892,9 +1226,20 @@ module CogServer
       @monitors[session_id]?
     end
 
+    # Queue an event for the subscribed monitors. Never blocks the caller
+    # (AtomSpace mutations call this): when the queue is full the event is
+    # dropped and counted.
     def broadcast(event : MonitorEvent)
-      @event_queue.send(event) if @running
+      return unless @running
+      select
+      when @event_queue.send(event)
+      else
+        @dropped_events += 1
+      end
     end
+
+    # Events dropped because the queue was full.
+    getter dropped_events : Int64 = 0_i64
 
     def broadcast_atom_added(atom : AtomSpace::Atom)
       data = Hash(String, JSON::Any).new
@@ -906,6 +1251,25 @@ module CogServer
         "confidence" => JSON::Any.new(atom.truth_value.confidence),
       })
       broadcast(MonitorEvent.new(MonitorEventType::AtomAdded, data))
+    end
+
+    def broadcast_atom_changed(event_type : MonitorEventType, atom : AtomSpace::Atom)
+      data = Hash(String, JSON::Any).new
+      data["handle"] = JSON::Any.new(atom.handle.to_i64)
+      data["type"] = JSON::Any.new(atom.type.to_s)
+      data["name"] = JSON::Any.new(atom.responds_to?(:name) ? atom.name : "")
+      data["truth_value"] = JSON::Any.new({
+        "strength"   => JSON::Any.new(atom.truth_value.strength),
+        "confidence" => JSON::Any.new(atom.truth_value.confidence),
+      })
+      broadcast(MonitorEvent.new(event_type, data))
+    end
+
+    def broadcast_storage(event_type : MonitorEventType, name : String, kind : String)
+      data = Hash(String, JSON::Any).new
+      data["name"] = JSON::Any.new(name)
+      data["storage_type"] = JSON::Any.new(kind)
+      broadcast(MonitorEvent.new(event_type, data))
     end
 
     def broadcast_atom_removed(atom : AtomSpace::Atom)
@@ -953,16 +1317,12 @@ module CogServer
 
     private def dispatch_event(event : MonitorEvent)
       event_type_str = event.event_type.to_s
-      @mutex.synchronize do
-        @monitors.each_value do |monitor|
-          next if monitor.closed?
-          if monitor.subscribed_to?(event_type_str)
-            # In a full implementation, this would send to the WebSocket connection
-            # For now, we log the event dispatch
-            CogUtil::Logger.debug("Event dispatched to #{monitor.session_id}: #{event_type_str}")
-          end
-        end
+      targets = @mutex.synchronize do
+        @monitors.values.select { |monitor| !monitor.closed? && monitor.subscribed_to?(event_type_str) }
       end
+      return if targets.empty?
+      message = event.to_json
+      targets.each(&.deliver(message))
     end
 
     private def send_heartbeats
@@ -979,7 +1339,7 @@ module CogServer
       now = Time.utc
       @mutex.synchronize do
         @monitors.reject! do |session_id, monitor|
-          if monitor.closed? || (now - monitor.last_activity) > stale_timeout
+          if monitor.closed? || (!monitor.persistent? && (now - monitor.last_activity) > stale_timeout)
             CogUtil::Logger.debug("Cleaning up stale monitor: #{session_id}")
             true
           else

@@ -91,7 +91,8 @@ echo ""
 echo "🔌 Testing WebSocket Protocol:"
 
 echo "   ⬆️  WebSocket upgrade..."
-response_code=$(curl -s -o /dev/null -w "%{http_code}" \
+# The upgraded connection stays open, so stop reading after the handshake.
+response_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
     -H "Connection: Upgrade" \
     -H "Upgrade: websocket" \
     -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \

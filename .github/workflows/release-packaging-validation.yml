@@ -1,0 +1,30 @@
+name: Release Packaging Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release*.yml'
+      - 'scripts/release/**'
+      - 'scripts/validation/test_release_packaging.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release*.yml'
+      - 'scripts/release/**'
+      - 'scripts/validation/test_release_packaging.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  packaging-regressions:
+    name: Portable packaging and failure propagation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: bash -n scripts/release/build-binaries.sh scripts/validation/test_release_packaging.sh
+      - name: Run deterministic packaging tests
+        run: bash scripts/validation/test_release_packaging.sh

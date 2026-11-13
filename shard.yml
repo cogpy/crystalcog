@@ -34,6 +34,10 @@ targets:
   crystalcog:
     main: src/bin/crystalcog.cr
 
+  # Native Crystal small-model inference server (port of aphrodite-jax)
+  aphrodite_jax_server:
+    main: src/bin/aphrodite_jax_server.cr
+
   # Core library components
   cogutil_bin:
     main: src/cogutil/cogutil.cr

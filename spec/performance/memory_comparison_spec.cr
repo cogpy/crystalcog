@@ -35,7 +35,7 @@ describe "CrystalCog Memory Usage Comparison Tests" do
       if result.memory_per_atom > 0.0
         result.memory_per_atom.should be < 4096.0 # RSS page noise on CI
       end
-      result.duration_ms.should be < 1000.0     # Should complete quickly
+      result.duration_ms.should be < 1000.0 # Should complete quickly
     end
 
     it "benchmarks link creation memory vs C++ implementation" do
@@ -107,41 +107,41 @@ describe "CrystalCog Memory Usage Comparison Tests" do
     end
 
     it "compares truth value memory overhead with C++" do
-      atomspace = AtomSpace::AtomSpace.new
-
-      # Test memory overhead of truth values (like C++ benchmark)
+      # Two fresh AtomSpaces hold the same atoms, one of them with truth
+      # values set, so the truth values are the only difference in what the
+      # two runs allocate.
       base_atoms = 1000
+      plain = AtomSpace::AtomSpace.new
+      valued = AtomSpace::AtomSpace.new
 
-      # Create atoms without truth values
       result_base = CogUtil::MemoryProfiler.benchmark_memory("atoms_without_tv") do
-        atoms = base_atoms.times.map { |i|
-          atomspace.add_concept_node("base_#{i}")
-        }.to_a
-        atoms.size
+        base_atoms.times { |i| plain.add_concept_node("atom_#{i}") }
+        base_atoms
       end
 
-      atomspace.clear
-
-      # Create atoms with truth values
       result_with_tv = CogUtil::MemoryProfiler.benchmark_memory("atoms_with_tv") do
-        atoms = base_atoms.times.map { |i|
-          atom = atomspace.add_concept_node("tv_#{i}")
-          tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
-          atom.truth_value = tv
-          atom
-        }.to_a
-        atoms.size
+        base_atoms.times do |i|
+          atom = valued.add_concept_node("atom_#{i}")
+          atom.truth_value = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+        end
+        base_atoms
       end
 
-      tv_overhead = result_with_tv.memory_per_atom - result_base.memory_per_atom
+      # Compare what each run allocated. The growth of the live heap
+      # (`memory_per_atom`) depends on how fragmented the heap already is,
+      # and the difference of two such readings swung by kilobytes per atom
+      # when the whole suite ran in one process.
+      tv_overhead = result_with_tv.allocated_per_atom - result_base.allocated_per_atom
 
       puts "Truth Value Memory Overhead Test:"
-      puts "  Base memory per atom: #{result_base.memory_per_atom.round(2)} bytes"
-      puts "  With TV memory per atom: #{result_with_tv.memory_per_atom.round(2)} bytes"
+      puts "  Base allocation per atom: #{result_base.allocated_per_atom.round(2)} bytes"
+      puts "  With TV allocation per atom: #{result_with_tv.allocated_per_atom.round(2)} bytes"
       puts "  Truth value overhead: #{tv_overhead.round(2)} bytes"
 
-      # TV overhead should be reasonable (C++ SimpleTruthValue is ~32 bytes)
-      # Use generous threshold since RSS-based measurement is unreliable on CI
+      # A SimpleTruthValue is two Float64 and a type id (C++: ~32 bytes).
+      # The allocator counts in batches, hence the margin on both sides.
+      result_base.allocated_bytes.should be > 0
+      tv_overhead.should be > -64.0
       tv_overhead.should be < 256.0
     end
 

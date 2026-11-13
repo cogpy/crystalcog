@@ -8,20 +8,23 @@ This document describes the complete AI system integration implemented for **Mil
 
 ### Components
 
-1. **C++ AI Backend** (`drawterm/`)
-   - `drawterm/include/drawterm/ai_models.h` - AI model interfaces and types
-   - `drawterm/src/ai/integration.cpp` - Core AI integration implementation
-   - Provides model loading, inference, session management
+1. **AI bridge** (`src/ai_integration/ai_bridge.cr`)
+   - `CrystalAIManager` loads models, keeps sessions (each with its conversation history) and runs inference.
+   - A model's path decides what serves it:
 
-2. **Crystal AI Bridge** (`src/ai_integration/`)
-   - `src/ai_integration/ai_bridge.cr` - Crystal-C++ bridge interface
-   - Wraps C++ AI functionality for Crystal consumption
-   - Provides high-level cognitive-AI integration
+     | `model_path` | Served by |
+     |---|---|
+     | `http://host:port` | An OpenAI-compatible server (`aphrodite_jax_server`, Aphrodite, llama.cpp) |
+     | A Qwen3 directory or cached repo id | The native Crystal engine, in this process |
+     | Anything else, with `ModelType::CUSTOM` | The knowledge model: it answers from the AtomSpace, with no neural network |
 
-3. **Integration Layer**
-   - `CognitiveAIIntegration` class connects cognitive systems with AI
-   - Supports knowledge enrichment and reasoning cycles
-   - Interactive session management
+   - `load_model` returns false (reason in `last_error`) when nothing can serve the model.
+   - `confidence_score` is the model's mean token probability, or the mean strength x confidence of the facts the knowledge model used. A remote server reports 0.
+
+2. **Integration layer**
+   - `CognitiveAIIntegration` connects the models with PLN and URE over one AtomSpace.
+   - Supports knowledge enrichment and reasoning cycles.
+   - The default workbench uses the knowledge model, so it works with no model files.
 
 ## Key Features
 

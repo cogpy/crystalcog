@@ -202,7 +202,9 @@ describe AIIntegration do
         response.success.should be_true
         response.text.should_not be_empty
         response.tokens_generated.should eq(response.text.split.size.to_u32)
-        response.confidence_score.should eq(0.85_f32)
+        # An empty knowledge base has no facts to be confident about.
+        response.confidence_score.should eq(0.0_f32)
+        response.text.should contain("holds nothing about: Hello")
       end
 
       it "creates session if not exists" do

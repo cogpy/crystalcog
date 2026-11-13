@@ -20,6 +20,7 @@
 #   nlp <text>                   Process text with NLP
 #   parse <text>                 Link-grammar parse
 #   tv <name> <strength> <conf>  Set truth value on named concept
+#   see <image> [scene]          Look at a PNG/PPM image; add what it shows
 #   quit / exit                  Leave the shell
 
 require "../cogutil/cogutil"
@@ -28,6 +29,7 @@ require "../pln/pln"
 require "../ure/ure"
 require "../nlp/nlp"
 require "../nlp/link_grammar"
+require "../vision/vision"
 
 module CogShell
   VERSION = "0.1.0"
@@ -162,6 +164,12 @@ module CogShell
           output.puts "Linkage ##{i + 1} (cost=#{linkage.cost}): #{linkage.words.join(" ")}"
           linkage.links.each { |link| output.puts "  #{link}" }
         end
+      when "see", "look"
+        path = args[0]? || raise "usage: see <image.png|ppm> [scene-name]"
+        scene = Vision.perceive_file(path, args[1]?)
+        atoms = scene.ground(@atomspace)
+        output.puts scene.describe
+        output.puts "Added #{atoms.size} atom(s) about scene:#{scene.name}"
       when "tv"
         raise "usage: tv <name> <strength> <confidence>" unless args.size >= 3
         atoms = @atomspace.get_nodes_by_name(args[0])
@@ -193,6 +201,7 @@ module CogShell
         nlp <text>                     NLP process text
         parse <text>                   Link Grammar parse
         tv <name> <s> <c>              Set truth value
+        see <image> [scene]            Look at an image (PNG/PPM); add what it shows
         help                           This help
         quit                           Exit
       HELP

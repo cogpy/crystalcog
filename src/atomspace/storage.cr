@@ -13,6 +13,7 @@
 require "./atom"
 require "./truthvalue"
 require "./scheme_storage_parser"
+require "./atom_wire"
 require "../cogutil/cogutil"
 require "../rocksdb"
 
@@ -333,6 +334,7 @@ module AtomSpace
       stats["type"] = "FileStorage"
       stats["path"] = @file_path
       stats["connected"] = @connected ? "true" : "false"
+      stats["atom_count"] = @atom_index.size.to_i64
 
       if File.exists?(@file_path)
         stats["file_size"] = File.size(@file_path)
@@ -1097,24 +1099,28 @@ module AtomSpace
       @connected
     end
 
+    # Handles are local to each AtomSpace, so atoms travel in their
+    # content form (AtomWire). The server's handle for each stored atom is
+    # remembered for later fetches and removals.
+    @remote_handles = Hash(Handle, Handle).new
+
     def store_atom(atom : Atom) : Bool
       return false unless @connected
 
       begin
-        data = {
-          "type"        => atom.type.to_s,
-          "name"        => atom.responds_to?(:name) ? atom.name : nil,
-          "outgoing"    => atom.responds_to?(:outgoing) ? atom.outgoing.map(&.handle.to_s) : nil,
-          "truth_value" => {
-            "strength"   => atom.truth_value.strength,
-            "confidence" => atom.truth_value.confidence,
-          },
-        }
-
+        body = JSON.build do |json|
+          json.object do
+            json.field "replace", true
+            json.field "atom" { AtomWire.write(json, atom) }
+          end
+        end
         headers = HTTP::Headers{"Content-Type" => "application/json"}
-        response = HTTP::Client.post("#{@base_url}/atoms", headers: headers, body: data.to_json)
+        response = HTTP::Client.post("#{@base_url}/atoms", headers: headers, body: body)
 
         if response.status_code == 201
+          if remote = JSON.parse(response.body)["atom"]?.try(&.["handle"]?).try(&.as_i64?)
+            @remote_handles[atom.handle] = remote.to_u64
+          end
           log_debug("Stored atom via network: #{atom}")
           true
         else
@@ -1127,20 +1133,19 @@ module AtomSpace
       end
     end
 
+    # Fetch by the handle this side stored the atom under, or by the
+    # server's own handle. The result is detached from any AtomSpace.
     def fetch_atom(handle : Handle) : Atom?
       return nil unless @connected
 
       begin
-        response = HTTP::Client.get("#{@base_url}/atoms/#{handle}")
+        remote = @remote_handles[handle]? || handle
+        response = HTTP::Client.get("#{@base_url}/atoms/#{remote}")
+        return nil unless response.status_code == 200
 
-        if response.status_code == 200
-          # Parse JSON response and recreate atom
-          # This would require proper JSON parsing and atom reconstruction
-          log_debug("Fetched atom via network: #{handle}")
-          nil # Simplified - would return actual atom
-        else
-          nil
-        end
+        atom = AtomWire.read(JSON.parse(response.body)["wire"])
+        log_debug("Fetched atom via network: #{handle}")
+        atom
       rescue ex
         log_error("Failed to fetch atom via network: #{ex.message}")
         nil
@@ -1151,8 +1156,15 @@ module AtomSpace
       return false unless @connected
 
       begin
-        response = HTTP::Client.delete("#{@base_url}/atoms/#{atom.handle}")
-
+        response = if remote = @remote_handles[atom.handle]?
+                     HTTP::Client.delete("#{@base_url}/atoms/#{remote}")
+                   else
+                     # Never stored from here: let the server find it by content.
+                     headers = HTTP::Headers{"Content-Type" => "application/json"}
+                     HTTP::Client.exec("DELETE", "#{@base_url}/atoms", headers: headers,
+                       body: {"atom" => JSON.parse(AtomWire.to_json(atom))}.to_json)
+                   end
+        @remote_handles.delete(atom.handle) if response.status_code == 200
         response.status_code == 200
       rescue ex
         log_error("Failed to remove atom via network: #{ex.message}")
@@ -1170,21 +1182,40 @@ module AtomSpace
 
       begin
         response = HTTP::Client.get("#{@base_url}/atoms")
+        return false unless response.status_code == 200
 
-        if response.status_code == 200
-          data = JSON.parse(response.body)
-          count = 0
+        # The listing names outgoing atoms by the server's handles; rebuild
+        # every atom from the listing itself, children first.
+        entries = Hash(Handle, JSON::Any).new
+        JSON.parse(response.body)["atoms"].as_a.each { |entry| entries[entry["handle"].as_i64.to_u64] = entry }
+        built = Hash(Handle, Atom).new
+        entries.each_key { |remote| load_entry(remote, entries, built, atomspace) }
 
-          # This would require proper JSON parsing and atom reconstruction
-          log_info("Loaded #{count} atoms from CogServer: #{@base_url}")
-          true
-        else
-          false
-        end
+        log_info("Loaded #{built.size} atoms from CogServer: #{@base_url}")
+        true
       rescue ex
         log_error("Failed to load AtomSpace from network: #{ex.message}")
         false
       end
+    end
+
+    private def load_entry(remote : Handle, entries : Hash(Handle, JSON::Any), built : Hash(Handle, Atom),
+                           atomspace : AtomSpace) : Atom
+      if atom = built[remote]?
+        return atom
+      end
+      entry = entries[remote]? || raise ArgumentError.new("listing refers to unknown atom #{remote}")
+      type = AtomType.parse(entry["type"].as_s)
+      tv = AtomWire.truth_value(entry["truth_value"]?)
+      atom = if type.node?
+               atomspace.add_node(type, entry["name"].as_s, tv)
+             else
+               outgoing = entry["outgoing"].as_a.map { |child| load_entry(child.as_i64.to_u64, entries, built, atomspace) }
+               atomspace.add_link(type, outgoing, tv)
+             end
+      atom.truth_value = tv if atom.truth_value != tv
+      @remote_handles[atom.handle] = remote
+      built[remote] = atom
     end
 
     def get_stats : Hash(String, String | Int32 | Int64)

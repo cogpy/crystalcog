@@ -293,7 +293,7 @@ accelerator:
 ```bash
 export COGPY_HOST="localhost"
 export COGPY_PORT="5000"
-export PYGMALION_API_URL="https://api.pygmalion.chat"
+export PYGMALION_API_URL="http://localhost:2242"   # Aphrodite/vLLM/llama.cpp (OpenAI-compatible)
 export GALATEA_PORT="3000"
 export PAPHOS_BACKEND_URL="http://localhost:4000"
 export PAPHOS_API_KEY="your-api-key"

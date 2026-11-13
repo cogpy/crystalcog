@@ -286,6 +286,12 @@ module AtomSpace
     @replica_map : Hash(String, Array(String)) # atom_handle -> replica_node_ids
     @lru_cache : LRUCache
     @partition_info_cache : PartitionInfoCache
+    # Handles are local to a process, so nodes name atoms to each other by
+    # content address (AtomWire.address).
+    @addresses = Hash(Handle, String).new    # local handle -> content address
+    @by_address = Hash(String, Atom).new     # content address -> atom held here
+    @book_handles = Hash(String, Handle).new # content address -> handle its bookkeeping is filed under
+    @index_mutex = Mutex.new
 
     def initialize(name : String, @cluster : DistributedAtomSpaceCluster,
                    local_storage_backend : String = "file",
@@ -314,6 +320,8 @@ module AtomSpace
         handle_cluster_event(event, node_id)
       })
 
+      register_message_handlers
+
       log_info("DistributedStorageNode created with #{partition_strategy} partitioning, #{replication_strategy} replication, compression=#{@enable_compression}, cache=#{@enable_cache}, partition_cache=#{@enable_partition_cache}")
     end
 
@@ -337,12 +345,20 @@ module AtomSpace
       @local_storage.connected?
     end
 
+    # The partition and replica maps hold one entry per atom, however many
+    # instances (and so handles) of the same content pass through this node.
+    private def book_key(atom : Atom, address : String) : String
+      @index_mutex.synchronize { @book_handles[address] ||= atom.handle }.to_s
+    end
+
     def store_atom(atom : Atom) : Bool
-      handle_str = atom.handle.to_s
+      address = AtomWire.address(atom)
+      @index_mutex.synchronize { @addresses[atom.handle] = address }
+      handle_str = book_key(atom, address)
 
       # Determine responsible node for this atom
-      responsible_node = determine_responsible_node(handle_str)
-      replica_nodes = determine_replica_nodes(handle_str, responsible_node)
+      responsible_node = determine_responsible_node(address, atom.type)
+      replica_nodes = determine_replica_nodes(address, responsible_node)
 
       # Update partition and replica maps
       @partition_map[handle_str] = responsible_node
@@ -359,6 +375,7 @@ module AtomSpace
       if is_single_node || is_responsible || is_replica
         if @local_storage.store_atom(atom)
           stored_somewhere = true
+          @index_mutex.synchronize { @by_address[address] = atom }
           log_debug("Stored atom locally: #{atom}")
 
           # Update LRU cache if enabled
@@ -393,35 +410,165 @@ module AtomSpace
 
     # Forward a store operation to another node
     private def forward_store_to_node(atom : Atom, node_id : String) : Bool
+      send_atom_to_node("store_atom", atom, node_id)
+    end
+
+    # Send an atom in its content form, compressed when that pays off.
+    private def send_atom_to_node(type : String, atom : Atom, node_id : String, await : Bool = false) : Bool
       node_info = find_cluster_node(node_id)
       return false unless node_info
 
       begin
-        atom_data = serialize_atom_for_replication(atom)
-        json_data = atom_data.to_json
-
-        # Compress if enabled and data is large enough
+        json_data = AtomWire.to_json(atom)
         message = if @enable_compression && NetworkCompression.should_compress?(json_data)
                     {
-                      "type"        => "store_atom",
-                      "compressed"  => true,
-                      "atom_data"   => Base64.strict_encode(NetworkCompression.compress(json_data)),
-                      "source_node" => @cluster.node_id,
+                      "type"        => JSON::Any.new(type),
+                      "compressed"  => JSON::Any.new(true),
+                      "atom_data"   => JSON::Any.new(Base64.strict_encode(NetworkCompression.compress(json_data))),
+                      "source_node" => JSON::Any.new(@cluster.node_id),
                     }
                   else
                     {
-                      "type"        => "store_atom",
-                      "compressed"  => false,
-                      "atom_data"   => atom_data,
-                      "source_node" => @cluster.node_id,
+                      "type"        => JSON::Any.new(type),
+                      "compressed"  => JSON::Any.new(false),
+                      "atom_data"   => JSON.parse(json_data),
+                      "source_node" => JSON::Any.new(@cluster.node_id),
                     }
                   end
 
-        send_message_to_node(node_info, message)
+        if await
+          response = send_message_to_node_with_response(node_info, message)
+          response.try(&.["status"]?) == "stored"
+        else
+          send_message_to_node(node_info, message)
+        end
       rescue ex
-        log_error("Failed to forward store to node #{node_id}: #{ex.message}")
+        log_error("Failed to send #{type} to node #{node_id}: #{ex.message}")
         false
       end
+    end
+
+    # The atom carried by a store/replicate/migrate message.
+    private def atom_from_message(message : JSON::Any) : Atom?
+      data = message["atom_data"]
+      if message["compressed"]?.try(&.as_bool?)
+        data = JSON.parse(NetworkCompression.decompress(Base64.decode(data.as_s)))
+      end
+      AtomWire.read(data)
+    rescue ex
+      log_error("Failed to decode atom from cluster message: #{ex.message}")
+      nil
+    end
+
+    # This node's instance of a received atom. Content already held here
+    # keeps its instance, so a link and a separately stored copy of one of
+    # its children never disagree.
+    private def localize(atom : Atom) : Atom
+      address = AtomWire.address(atom)
+      if existing = @by_address[address]?
+        return existing
+      end
+      local = atom.is_a?(Node) ? atom : Link.new(atom.type, atom.outgoing.map { |child| localize(child) }, atom.truth_value)
+      @by_address[address] = local
+      @addresses[local.handle] = address
+      local
+    end
+
+    # Store an atom another node sent. `owner` is the node responsible for it.
+    private def receive_atom(message : JSON::Any, owner : String, replicate : Bool) : Bool
+      incoming = atom_from_message(message) || return false
+      atom = @index_mutex.synchronize do
+        local = localize(incoming)
+        local.truth_value = incoming.truth_value unless local.same?(incoming)
+        local
+      end
+      return false unless @local_storage.store_atom(atom)
+
+      address = AtomWire.address(atom)
+      handle_str = book_key(atom, address)
+      @partition_map[handle_str] = owner
+      @lru_cache.put(atom) if @enable_cache
+      if replicate && owner == @cluster.node_id
+        replicas = determine_replica_nodes(address, owner).reject { |id| id == message["source_node"]?.try(&.as_s?) }
+        @replica_map[handle_str] = replicas
+        replicas.each { |node_id| replicate_atom_to_node(atom, node_id) }
+      end
+      true
+    end
+
+    private def register_message_handlers
+      @cluster.on_message("store_atom") do |message, _client|
+        receive_atom(message, @cluster.node_id, replicate: true)
+        nil
+      end
+      @cluster.on_message("replicate_atom") do |message, _client|
+        receive_atom(message, message["source_node"]?.try(&.as_s?) || @cluster.node_id, replicate: false)
+        nil
+      end
+      @cluster.on_message("migrate_atom") do |message, client|
+        stored = receive_atom(message, @cluster.node_id, replicate: false)
+        client.try(&.puts({"status" => stored ? "stored" : "failed"}.to_json))
+        nil
+      end
+      @cluster.on_message("fetch_atom") do |message, client|
+        atom = message["address"]?.try(&.as_s?).try { |address| @index_mutex.synchronize { @by_address[address]? } }
+        response = if atom
+                     {"status" => JSON::Any.new("found"), "atom_data" => JSON.parse(AtomWire.to_json(atom))}
+                   else
+                     {"status" => JSON::Any.new("not_found")}
+                   end
+        client.try(&.puts(response.to_json))
+        nil
+      end
+      @cluster.on_message("remove_atom") do |message, _client|
+        if address = message["address"]?.try(&.as_s?)
+          if atom = @index_mutex.synchronize { @by_address[address]? }
+            forget_local(atom, address)
+          end
+        end
+        nil
+      end
+      @cluster.on_message("fetch_all_atoms") do |_message, client|
+        atoms = @index_mutex.synchronize { @by_address.values }
+        client.try(&.puts({"status" => JSON::Any.new("success"),
+                           "atoms"  => JSON::Any.new(atoms.map { |atom| JSON.parse(AtomWire.to_json(atom)) })}.to_json))
+        nil
+      end
+      @cluster.on_message("migrate_request") do |message, client|
+        moved = false
+        if (address = message["address"]?.try(&.as_s?)) && (target = message["target_node"]?.try(&.as_s?))
+          if atom = @index_mutex.synchronize { @by_address[address]? }
+            moved = migrate_local_atom(atom, address, target)
+          end
+        end
+        client.try(&.puts({"status" => moved ? "migrated" : "failed"}.to_json))
+        nil
+      end
+    end
+
+    # Drop this node's copy of an atom (the atom may live on elsewhere).
+    private def forget_local(atom : Atom, address : String) : Bool
+      @lru_cache.invalidate(atom.handle) if @enable_cache
+      removed = @local_storage.fetch_atom(atom.handle) ? @local_storage.remove_atom(atom) : true
+      # The handle keeps its address: the atom may still be fetched from
+      # the node that holds it now.
+      @index_mutex.synchronize { @by_address.delete(address) }
+      removed
+    end
+
+    # Fetch an atom this node may never have held, by its content.
+    def fetch_atom_by_content(atom : Atom) : Atom?
+      address = AtomWire.address(atom)
+      if local = @index_mutex.synchronize { @by_address[address]? }
+        return local
+      end
+      @cluster.cluster_nodes.each do |node_info|
+        next if node_info.id == @cluster.node_id
+        if found = fetch_address_from_node(address, node_info.id)
+          return found
+        end
+      end
+      nil
     end
 
     def fetch_atom(handle : Handle) : Atom?
@@ -440,6 +587,12 @@ module AtomSpace
         # Update cache if enabled
         @lru_cache.put(atom) if @enable_cache
         return atom
+      end
+
+      # The same content may be held here under another handle (it arrived
+      # from another node after this handle was issued).
+      if held = @index_mutex.synchronize { @addresses[handle]?.try { |address| @by_address[address]? } }
+        return held
       end
 
       # In single-node cluster, if not found locally, it doesn't exist
@@ -491,7 +644,7 @@ module AtomSpace
     end
 
     def remove_atom(atom : Atom) : Bool
-      handle_str = atom.handle.to_s
+      handle_str = book_key(atom, AtomWire.address(atom))
       responsible_node = @partition_map[handle_str]?
       replica_nodes = @replica_map[handle_str]? || [] of String
 
@@ -505,12 +658,21 @@ module AtomSpace
       if @local_storage.fetch_atom(atom.handle)
         success = @local_storage.remove_atom(atom)
       end
+      @index_mutex.synchronize do
+        if address = @addresses.delete(atom.handle)
+          @by_address.delete(address)
+          @book_handles.delete(address)
+        end
+      end
 
-      # Remove from replica nodes if this is the responsible node (multi-node cluster)
-      if responsible_node == @cluster.node_id && @cluster.cluster_nodes.size > 1
-        replica_nodes.each do |node_id|
+      # Remove the other copies: the replicas when this node is responsible,
+      # otherwise the responsible node and its replicas.
+      if @cluster.cluster_nodes.size > 1
+        holders = replica_nodes.dup
+        holders << responsible_node if responsible_node && responsible_node != @cluster.node_id
+        holders.uniq.reject { |id| id == @cluster.node_id }.each do |node_id|
           unless remove_atom_from_node(atom, node_id)
-            log_error("Failed to remove atom from replica node #{node_id}")
+            log_error("Failed to remove atom from node #{node_id}")
             success = false
           end
         end
@@ -546,10 +708,21 @@ module AtomSpace
 
         node_atoms = fetch_all_atoms_from_node(node_info.id)
         node_atoms.each do |atom|
-          unless atomspace.contains?(atom)
-            atomspace.add_atom(atom)
-            cluster_count += 1
-          end
+          # Received atoms are detached trees; add them children first.
+          before = atomspace.size
+          AtomWire.intern(atom, atomspace)
+          cluster_count += atomspace.size - before
+        end
+      end
+
+      # Everything now in the AtomSpace that came from local storage is
+      # addressable by other nodes.
+      @index_mutex.synchronize do
+        atomspace.get_all_atoms.each do |atom|
+          next unless @local_storage.fetch_atom(atom.handle)
+          address = AtomWire.address(atom)
+          @addresses[atom.handle] = address
+          @by_address[address] = atom
         end
       end
 
@@ -700,34 +873,34 @@ module AtomSpace
       end
     end
 
-    private def determine_responsible_node(atom_handle : String) : String
+    # `key` is the atom's content address, so every node picks the same owner.
+    private def determine_responsible_node(key : String, type : AtomType? = nil) : String
       case @partition_strategy
       when PartitionStrategy::RoundRobin
-        node_index = atom_handle.hash.abs % @cluster.cluster_nodes.size
-        @cluster.cluster_nodes.to_a[node_index].id
+        nodes = @cluster.cluster_nodes.map(&.id).sort
+        nodes[(AtomWire.ring_position(key) % nodes.size).to_i]
       when PartitionStrategy::HashBased
-        consistent_hash_node(atom_handle)
+        consistent_hash_node(key)
       when PartitionStrategy::TypeBased
-        # Would need atom type information - simplified here
-        consistent_hash_node(atom_handle)
+        # All atoms of one type live together.
+        consistent_hash_node(type ? "type:#{type}" : key)
       when PartitionStrategy::LoadBalanced
         least_loaded_node
       else
-        consistent_hash_node(atom_handle)
+        consistent_hash_node(key)
       end
     end
 
+    # Node ids in hash-ring order.
+    private def ring : Array(String)
+      @cluster.cluster_nodes.map(&.id).sort_by { |id| {AtomWire.ring_position(id), id} }
+    end
+
+    # Consistent hashing: the first node at or after the key on the ring.
     private def consistent_hash_node(key : String) : String
-      # Simple consistent hashing implementation
-      node_list = @cluster.cluster_nodes.map(&.id).sort
-      hash_value = key.hash.abs.to_u64
-
-      node_list.each do |node_id|
-        node_hash = node_id.hash.abs.to_u64
-        return node_id if hash_value <= node_hash
-      end
-
-      node_list.first
+      position = AtomWire.ring_position(key)
+      nodes = ring
+      nodes.find { |id| AtomWire.ring_position(id) >= position } || nodes.first
     end
 
     private def least_loaded_node : String
@@ -751,37 +924,33 @@ module AtomSpace
       end
     end
 
+    # The nodes that follow `exclude_node` on the ring, so every node agrees
+    # on where an atom's backups are.
     private def select_backup_nodes(exclude_node : String, count : Int32) : Array(String)
-      available_nodes = @cluster.cluster_nodes.map(&.id).reject { |id| id == exclude_node }
-      available_nodes.sample(Math.min(count, available_nodes.size))
+      nodes = ring
+      start = nodes.index(exclude_node) || -1
+      successors = nodes.rotate(start + 1).reject { |id| id == exclude_node }
+      successors.first(Math.max(count, 0))
     end
 
     private def replicate_atom_to_node(atom : Atom, node_id : String) : Bool
-      node_info = find_cluster_node(node_id)
-      return false unless node_info
-
-      begin
-        message = {
-          "type"        => "replicate_atom",
-          "atom_data"   => serialize_atom_for_replication(atom),
-          "source_node" => @cluster.node_id,
-        }
-
-        send_message_to_node(node_info, message)
-      rescue ex
-        log_error("Failed to replicate atom to node #{node_id}: #{ex.message}")
-        false
-      end
+      send_atom_to_node("replicate_atom", atom, node_id)
     end
 
     private def fetch_atom_from_node(handle : Handle, node_id : String) : Atom?
+      # Another node cannot interpret this node's handle; ask by content.
+      address = @index_mutex.synchronize { @addresses[handle]? } || return nil
+      fetch_address_from_node(address, node_id)
+    end
+
+    private def fetch_address_from_node(address : String, node_id : String) : Atom?
       node_info = find_cluster_node(node_id)
       return nil unless node_info
 
       begin
         message = {
           "type"            => "fetch_atom",
-          "atom_handle"     => handle.to_s,
+          "address"         => address,
           "requesting_node" => @cluster.node_id,
         }
 
@@ -790,7 +959,7 @@ module AtomSpace
 
         if response["status"] == "found"
           if atom_data = response["atom_data"]?
-            return deserialize_atom_from_replication(atom_data.as_h)
+            return AtomWire.read(atom_data)
           end
         end
       rescue ex
@@ -807,7 +976,7 @@ module AtomSpace
       begin
         message = {
           "type"        => "remove_atom",
-          "atom_handle" => atom.handle.to_s,
+          "address"     => AtomWire.address(atom),
           "source_node" => @cluster.node_id,
         }
 
@@ -833,9 +1002,14 @@ module AtomSpace
 
         if response["status"] == "success"
           if atoms_data = response["atoms"]?
-            return atoms_data.as_a.compact_map { |atom_json|
-              deserialize_atom_from_replication(atom_json.as_h)
-            }
+            return atoms_data.as_a.compact_map do |atom_json|
+              begin
+                AtomWire.read(atom_json)
+              rescue ex
+                log_error("Skipping undecodable atom from node #{node_id}: #{ex.message}")
+                nil
+              end
+            end
           end
         end
       rescue ex
@@ -873,44 +1047,6 @@ module AtomSpace
       nil
     end
 
-    private def serialize_atom_for_replication(atom : Atom) : Hash(String, JSON::Any)
-      # Use the same serialization as the cluster
-      data = Hash(String, JSON::Any).new
-      data["handle"] = JSON::Any.new(atom.handle.to_s)
-      data["type"] = JSON::Any.new(atom.type.to_s)
-      data["truth_strength"] = JSON::Any.new(atom.truth_value.strength)
-      data["truth_confidence"] = JSON::Any.new(atom.truth_value.confidence)
-
-      if atom.is_a?(Node)
-        data["name"] = JSON::Any.new(atom.name)
-      elsif atom.is_a?(Link)
-        data["outgoing"] = JSON::Any.new(atom.outgoing.map { |a| JSON::Any.new(a.handle.to_s) })
-      end
-
-      data
-    end
-
-    private def deserialize_atom_from_replication(data : Hash(String, JSON::Any)) : Atom?
-      begin
-        type = AtomType.parse(data["type"].as_s)
-        strength = data["truth_strength"].as_f
-        confidence = data["truth_confidence"].as_f
-        tv = SimpleTruthValue.new(strength, confidence)
-
-        if type.node?
-          name = data["name"].as_s
-          return Node.new(type, name, tv)
-        else
-          # For links, we'd need to resolve outgoing atoms
-          # Simplified implementation
-          return Link.new(type, [] of Atom, tv)
-        end
-      rescue ex
-        log_error("Failed to deserialize atom from replication: #{ex.message}")
-        nil
-      end
-    end
-
     private def calculate_node_loads : Hash(String, Int32)
       loads = Hash(String, Int32).new
 
@@ -929,20 +1065,18 @@ module AtomSpace
 
     private def plan_migrations(overloaded : Hash(String, Int32), underloaded : Hash(String, Int32)) : Array(MigrationPlan)
       migrations = [] of MigrationPlan
+      avg_load = (@partition_map.size / @cluster.cluster_nodes.size).to_i
+      # How many more atoms each underloaded node should take.
+      room = underloaded.transform_values { |load| Math.max(avg_load - load, 0) }
 
       overloaded.each do |source_node, load|
-        target_nodes = underloaded.keys
-        next if target_nodes.empty?
-
-        # Calculate how many atoms to move
-        avg_load = (@partition_map.size / @cluster.cluster_nodes.size).to_i
-        atoms_to_move = load - avg_load
-
-        # Select atoms to migrate (simplified - would use better heuristics)
-        atoms_to_migrate = @partition_map.select { |_, node| node == source_node }.keys.first(atoms_to_move)
-
-        atoms_to_migrate.each_with_index do |atom_handle, index|
-          target_node = target_nodes[index % target_nodes.size]
+        candidates = @partition_map.select { |_, node| node == source_node }.keys
+        # Moving a link away from its children costs a remote fetch on every
+        # traversal, so move nodes without local links first, links last.
+        candidates.sort_by! { |handle| {migration_cost(handle), handle} }
+        candidates.first(Math.max(load - avg_load, 0)).each do |atom_handle|
+          target_node = room.max_by? { |_, free| free }.try { |(id, free)| free > 0 ? id : nil } || break
+          room[target_node] -= 1
           migrations << MigrationPlan.new(atom_handle, source_node, target_node)
         end
       end
@@ -950,15 +1084,53 @@ module AtomSpace
       migrations
     end
 
+    # Links held here that refer to the atom: what a migration would cut.
+    private def migration_cost(handle_str : String) : Int32
+      handle = handle_str.to_u64? || return 0
+      @index_mutex.synchronize do
+        @by_address.each_value.count { |atom| atom.link? && atom.outgoing.any? { |child| child.handle == handle } }
+      end
+    end
+
     private def execute_migration(migration : MigrationPlan) : Bool
-      # Move atom from source to target node
-      # This would involve coordination between nodes
       log_debug("Executing migration: #{migration.atom_handle} from #{migration.source_node} to #{migration.target_node}")
+      handle = migration.atom_handle.to_u64?
+      address = handle.try { |h| @index_mutex.synchronize { @addresses[h]? } }
+      unless handle && address
+        log_error("Cannot migrate #{migration.atom_handle}: no content address is known for it")
+        return false
+      end
 
-      # Update partition map
-      @partition_map[migration.atom_handle] = migration.target_node
+      moved = if migration.source_node == @cluster.node_id
+                atom = @index_mutex.synchronize { @by_address[address]? } || @local_storage.fetch_atom(handle)
+                atom ? migrate_local_atom(atom, address, migration.target_node) : false
+              else
+                # The data is on another node: ask it to hand the atom over.
+                node_info = find_cluster_node(migration.source_node)
+                response = node_info.try do |info|
+                  send_message_to_node_with_response(info, {"type" => "migrate_request", "address" => address,
+                                                            "target_node" => migration.target_node})
+                end
+                response.try(&.["status"]?) == "migrated"
+              end
 
-      true # Simplified - real implementation would handle actual data movement
+      if moved
+        @partition_map[migration.atom_handle] = migration.target_node
+        @partition_info_cache.put(migration.atom_handle, migration.target_node, verified: true) if @enable_partition_cache
+      end
+      moved
+    end
+
+    # Hand an atom held here to `target_node`, and drop the local copy once
+    # the target confirms it stored the atom (unless this node is a replica).
+    private def migrate_local_atom(atom : Atom, address : String, target_node : String) : Bool
+      return false unless send_atom_to_node("migrate_atom", atom, target_node, await: true)
+
+      handle_str = book_key(atom, address)
+      @partition_map[handle_str] = target_node
+      keeps_replica = @replica_map[handle_str]?.try(&.includes?(@cluster.node_id)) || false
+      forget_local(atom, address) unless keeps_replica
+      true
     end
 
     private def handle_cluster_event(event : ClusterEvent, node_id : String)
@@ -984,8 +1156,11 @@ module AtomSpace
 
       # Reassign orphaned atoms to other nodes
       orphaned_atoms.each do |atom_handle|
-        new_responsible_node = determine_responsible_node(atom_handle)
+        key = atom_handle.to_u64?.try { |handle| @index_mutex.synchronize { @addresses[handle]? } } || atom_handle
+        new_responsible_node = determine_responsible_node(key)
         @partition_map[atom_handle] = new_responsible_node
+        # A copy held here (as a replica) now answers for the atom.
+        @replica_map[atom_handle]?.try(&.delete(departed_node))
       end
     end
 

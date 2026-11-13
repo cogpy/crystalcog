@@ -122,13 +122,13 @@ agent.initialize_agent
 response = agent.chat("Tell me about artificial intelligence")
 puts response
 
-# Get cognitive context
+# With an AtomSpace attached, every reply stores the new turns as
+#   (Evaluation (Predicate "pygmalion:said") (List speaker utterance))
+#   (Evaluation (Predicate "pygmalion:mentions") (List utterance concept))
+# Concepts mentioned so far, most frequent first:
 context = agent.get_cognitive_context
 
-# Compute tensor signatures
-signatures = agent.compute_tensor_signatures
-
-# Store conversation in AtomSpace
+# Store explicitly (only turns not yet stored are written)
 agent.store_conversation_in_atomspace
 ```
 
@@ -265,7 +265,11 @@ You can also configure integrations using environment variables:
 ```bash
 export COGPY_HOST="localhost"
 export COGPY_PORT="5000"
-export PYGMALION_API_URL="https://api.pygmalion.chat"
+# Pygmalion: any OpenAI-compatible backend (Aphrodite, vLLM, ...);
+# read by PygmalionAgent.create_default_agent, which the Manager uses.
+export PYGMALION_API_URL="http://localhost:2242"
+export PYGMALION_API_KEY="sk-..."        # optional, sent as a Bearer token
+export PYGMALION_MODEL="pygmalion-2-7b"  # optional, defaults to "default"
 export GALATEA_PORT="3000"
 export PAPHOS_BACKEND_URL="http://localhost:4000"
 export PAPHOS_API_KEY="your-api-key"

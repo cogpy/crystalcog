@@ -134,11 +134,23 @@ module AtomSpace
       type.link?
     end
 
-    # Get all atoms in the incoming set (atoms that reference this one)
+    # The AtomSpace this atom was added to (nil while it is detached). An
+    # atom added to several AtomSpaces reports the most recent one.
+    getter atomspace : AtomSpace? = nil
+
+    # Called by AtomSpace when it takes the atom in or lets it go.
+    def attach_to(atomspace : AtomSpace) : Nil
+      @atomspace = atomspace
+    end
+
+    def detach_from(atomspace : AtomSpace) : Nil
+      @atomspace = nil if @atomspace.same?(atomspace)
+    end
+
+    # The links that refer to this atom in its AtomSpace (its incoming set).
+    # A detached atom has none.
     def incoming : Array(Atom)
-      # This would be maintained by the AtomSpace
-      # For now, return empty array
-      [] of Atom
+      @atomspace.try(&.get_incoming(self)) || [] of Atom
     end
 
     # Check equality based on type and content

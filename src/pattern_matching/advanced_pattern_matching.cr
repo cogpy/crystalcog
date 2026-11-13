@@ -281,14 +281,56 @@ module PatternMatching
       end
     end
 
-    # Temporal pattern matching for sequences and time-based patterns
+    # Temporal pattern matching for sequences and time-based patterns.
+    #
+    # Time comes from the atoms themselves: the matcher notes when each atom
+    # enters the AtomSpace, and `record` sets an explicit event time (for
+    # replayed logs or sensor timestamps). Atoms that were already present
+    # when the matcher was created all carry its creation time. A match
+    # happens when the last of its atoms does.
     class TemporalPatternMatcher
       getter atomspace : AtomSpace::AtomSpace
       getter time_window_ms : Int64
       getter temporal_cache : Hash(String, Array(TemporalMatch))
+      getter timestamps : Hash(AtomSpace::Handle, Int64)
+      getter created_ms : Int64
 
-      def initialize(@atomspace : AtomSpace::AtomSpace, @time_window_ms : Int64 = 5000)
+      # Upper bound on the sequences one query returns.
+      MAX_SEQUENCES = 1000
+
+      @observer : AtomSpace::AtomSpaceSignal
+
+      def initialize(@atomspace : AtomSpace::AtomSpace, @time_window_ms : Int64 = 5000,
+                     timestamps : Hash(AtomSpace::Handle, Int64)? = nil)
         @temporal_cache = Hash(String, Array(TemporalMatch)).new
+        @timestamps = timestamps || Hash(AtomSpace::Handle, Int64).new
+        @created_ms = Time.utc.to_unix_ms
+        stamps = @timestamps
+        @observer = AtomSpace::AtomSpaceSignal.new do |event, atom|
+          stamps[atom.handle] ||= Time.utc.to_unix_ms if event.atom_added?
+          nil
+        end
+        @atomspace.add_observer(@observer)
+      end
+
+      # Stop observing the AtomSpace.
+      def close
+        @atomspace.remove_observer(@observer)
+      end
+
+      # Set the time an atom's event happened.
+      def record(atom : AtomSpace::Atom, at_ms : Int64) : Nil
+        @timestamps[atom.handle] = at_ms
+      end
+
+      def timestamp_of(atom : AtomSpace::Atom) : Int64
+        @timestamps[atom.handle]? || @created_ms
+      end
+
+      # When a match happened: the time of its latest atom.
+      def time_of(result : MatchResult) : Int64
+        atoms = result.matched_atoms.empty? ? result.bindings.values : result.matched_atoms
+        atoms.max_of? { |atom| timestamp_of(atom) } || @created_ms
       end
 
       struct TemporalMatch
@@ -311,70 +353,83 @@ module PatternMatching
         end
       end
 
-      # Match sequences of patterns within a time window
+      # Sequences in which the patterns matched one after another: one match
+      # per pattern, each no earlier than the one before, all within the
+      # time window. Earliest sequences come first.
       def match_sequence(patterns : Array(Pattern), sequence_name : String = "default") : Array(TemporalMatch)
         cache_key = "SEQ_#{sequence_name}_#{patterns.size}"
-        return @temporal_cache[cache_key] if @temporal_cache.has_key?(cache_key)
+        return @temporal_cache[cache_key] = [] of TemporalMatch if patterns.empty?
 
-        current_time = Time.utc.to_unix_ms
-        temporal_matches = [] of TemporalMatch
+        matcher = PatternMatcher.new(@atomspace)
+        steps = patterns.map do |pattern|
+          matcher.match(pattern).map { |result| {time_of(result), result} }.sort_by!(&.[0])
+        end
 
-        # For demonstration, simulate temporal matching by running patterns in sequence
-        # In a real implementation, this would involve event timestamps
-        patterns.each_with_index do |pattern, index|
-          matcher = PatternMatcher.new(@atomspace)
-          results = matcher.match(pattern)
+        sequences = [] of TemporalMatch
+        unless steps.any?(&.empty?)
+          extend_sequence(steps, 0, [] of {Int64, MatchResult}, sequences, sequence_name)
+        end
+        # The cache holds the latest answer; time moves, so it is recomputed.
+        @temporal_cache[cache_key] = sequences
+      end
 
-          unless results.empty?
-            # Simulate temporal progression
-            timestamp = current_time + (index * 100)
-            sequence_id = "#{sequence_name}_#{index}_#{timestamp}"
+      private def extend_sequence(steps : Array(Array({Int64, MatchResult})), index : Int32,
+                                  chain : Array({Int64, MatchResult}), found : Array(TemporalMatch), name : String) : Nil
+        return if found.size >= MAX_SEQUENCES
+        if index == steps.size
+          times = chain.map(&.[0])
+          found << TemporalMatch.new(chain.map(&.[1]), times, "#{name}_#{found.size}_#{times.first}")
+          return
+        end
+        steps[index].each do |entry|
+          time = entry[0]
+          if previous = chain.last?
+            next if time < previous[0]                       # out of order
+            break if time - chain.first[0] > @time_window_ms # later entries are later still
+          end
+          chain << entry
+          extend_sequence(steps, index + 1, chain, found, name)
+          chain.pop
+          return if found.size >= MAX_SEQUENCES
+        end
+      end
 
-            temporal_match = TemporalMatch.new(results, [timestamp], sequence_id)
-            temporal_matches << temporal_match
+      # Bursts of the pattern: groups of matches that all fall within
+      # `interval_ms` of the group's first match.
+      def match_within_interval(pattern : Pattern, interval_ms : Int64) : Array(TemporalMatch)
+        timed = PatternMatcher.new(@atomspace).match(pattern).map { |result| {time_of(result), result} }.sort_by!(&.[0])
+        groups = [] of Array({Int64, MatchResult})
+        timed.each do |entry|
+          if (group = groups.last?) && entry[0] - group.first[0] <= interval_ms
+            group << entry
+          else
+            groups << [entry]
           end
         end
-
-        @temporal_cache[cache_key] = temporal_matches
-        temporal_matches
-      end
-
-      # Match patterns that occur within a specific time interval
-      def match_within_interval(pattern : Pattern, interval_ms : Int64) : Array(TemporalMatch)
-        matcher = PatternMatcher.new(@atomspace)
-        results = matcher.match(pattern)
-        current_time = Time.utc.to_unix_ms
-
-        # Group results that would occur within the time interval
-        temporal_matches = [] of TemporalMatch
-        unless results.empty?
-          # Simulate temporal clustering
-          sequence_id = "interval_#{current_time}_#{interval_ms}"
-          temporal_match = TemporalMatch.new(results, [current_time], sequence_id)
-          temporal_matches << temporal_match
+        groups.map do |group|
+          TemporalMatch.new(group.map(&.[1]), group.map(&.[0]), "interval_#{group.first[0]}_#{interval_ms}")
         end
-
-        temporal_matches
       end
 
-      # Detect repeating temporal patterns
+      # A pattern that keeps happening: at least `min_occurrences` matches
+      # at distinct times. The result lists every occurrence in time order.
       def detect_repeating_patterns(pattern : Pattern, min_occurrences : Int32 = 3) : Array(TemporalMatch)
-        repeating_matches = [] of TemporalMatch
+        timed = PatternMatcher.new(@atomspace).match(pattern).map { |result| {time_of(result), result} }.sort_by!(&.[0])
+        occurrences = timed.uniq(&.[0])
+        return [] of TemporalMatch if occurrences.size < min_occurrences || occurrences.empty?
 
-        # Simulate pattern detection across multiple time points
-        matcher = PatternMatcher.new(@atomspace)
-        base_results = matcher.match(pattern)
+        [TemporalMatch.new(occurrences.map(&.[1]), occurrences.map(&.[0]), "repeating_#{occurrences.first[0]}")]
+      end
 
-        if base_results.size >= min_occurrences
-          current_time = Time.utc.to_unix_ms
-          timestamps = (0...min_occurrences).map { |i| current_time + (i * 1000) }
-          sequence_id = "repeating_#{current_time}"
-
-          temporal_match = TemporalMatch.new(base_results, timestamps, sequence_id)
-          repeating_matches << temporal_match
-        end
-
-        repeating_matches
+      # How regular a repeating match is: 1.0 for evenly spaced occurrences,
+      # falling towards 0 as the gaps vary (1 / (1 + coefficient of variation)).
+      def regularity(match : TemporalMatch) : Float64
+        gaps = match.timestamps.each_cons(2).map { |(a, b)| (b - a).to_f64 }.to_a
+        return 0.0 if gaps.empty?
+        mean = gaps.sum / gaps.size
+        return 0.0 if mean == 0.0
+        deviation = Math.sqrt(gaps.sum { |gap| (gap - mean) ** 2 } / gaps.size)
+        1.0 / (1.0 + deviation / mean)
       end
     end
 
@@ -561,41 +616,50 @@ module PatternMatching
         patterns
       end
 
+      # Frequent link shapes. Links are grouped by type and arity; a group
+      # that is frequent becomes a template with a variable in every position,
+      # and when one position holds the same atom often enough, a second
+      # template keeps that atom fixed.
       private def discover_structural_patterns : Array(LearnedPattern)
         patterns = [] of LearnedPattern
+        links = @atomspace.get_all_atoms.select(&.link?)
+        return patterns if links.empty?
 
-        # Discover common structural patterns (links with specific outgoing sizes)
-        structure_frequency = Hash(Tuple(AtomSpace::AtomType, Int32), Int32).new(0)
-
-        @atomspace.get_all_atoms.each do |atom|
-          next unless atom.link?
-          key = {atom.type, atom.outgoing.size}
-          structure_frequency[key] += 1
-        end
-
-        total_structures = structure_frequency.values.sum.to_f64
-        return patterns if total_structures == 0
-
-        # Create patterns for frequent structures
-        structure_frequency.each do |key, count|
-          atom_type, outgoing_size = key
-          frequency = count.to_f64 / total_structures
+        by_type = links.group_by(&.type)
+        links.group_by { |link| {link.type, link.outgoing.size} }.each do |(type, arity), group|
+          next if arity == 0 || arity > MAX_STRUCTURAL_ARITY
+          frequency = group.size.to_f64 / links.size
           next unless frequency >= @frequency_threshold
 
-          # Create a structural pattern with variables
-          variables = (0...outgoing_size).map { |i| AtomSpace::VariableNode.new("$VAR_#{i}") }
+          # How consistently links of this type have this shape.
+          confidence = group.size.to_f64 / by_type[type].size
+          if confidence >= @confidence_threshold
+            variables = (0...arity).map { |i| AtomSpace::VariableNode.new("$VAR_#{i}").as(AtomSpace::Atom) }
+            patterns << structural_pattern(type, variables, frequency, confidence)
+          end
 
-          # We can't easily create arbitrary link types, so skip complex structures
-          next unless outgoing_size <= 3
-
-          confidence = frequency # Simplified confidence calculation
-          next unless confidence >= @confidence_threshold
-
-          # For now, just record the pattern exists - full implementation would
-          # create proper template atoms based on the atom_type
+          arity.times do |position|
+            anchor, count = group.map(&.outgoing[position]).tally.max_by { |_, n| n }
+            anchored_frequency = count.to_f64 / links.size
+            anchored_confidence = count.to_f64 / group.size
+            next unless count > 1 && anchored_frequency >= @frequency_threshold && anchored_confidence >= @confidence_threshold
+            outgoing = (0...arity).map do |i|
+              i == position ? anchor : AtomSpace::VariableNode.new("$VAR_#{i}").as(AtomSpace::Atom)
+            end
+            patterns << structural_pattern(type, outgoing, anchored_frequency, anchored_confidence)
+          end
         end
 
         patterns
+      end
+
+      MAX_STRUCTURAL_ARITY = 4
+
+      private def structural_pattern(type : AtomSpace::AtomType, outgoing : Array(AtomSpace::Atom),
+                                     frequency : Float64, confidence : Float64) : LearnedPattern
+        template = AtomSpace::Link.new(type, outgoing)
+        examples = PatternMatcher.new(@atomspace).match(Pattern.new(template))
+        LearnedPattern.new(template, frequency, confidence, examples)
       end
 
       private def calculate_inheritance_confidence(parent : AtomSpace::Atom,
@@ -623,8 +687,8 @@ module PatternMatching
       end
 
       private def generate_pattern_key(template : AtomSpace::Atom) : String
-        # Generate a unique key for the pattern template
-        "#{template.type}_#{template.hash}_#{Time.utc.to_unix_ms}"
+        # One entry per template: learning again refreshes it.
+        template.to_s
       end
     end
 
@@ -644,21 +708,39 @@ module PatternMatching
         getter confidence_intervals : Hash(String, Tuple(Float64, Float64))
         getter statistical_measures : Hash(String, Float64)
 
-        def initialize(@match_result : MatchResult, @probability : Float64)
+        # `evidence` is the number of observations behind the probability:
+        # Monte Carlo samples, or the evidence counts of the matched atoms.
+        def initialize(@match_result : MatchResult, @probability : Float64, @evidence : Float64 = 0.0)
           @confidence_intervals = Hash(String, Tuple(Float64, Float64)).new
           @statistical_measures = Hash(String, Float64).new
           calculate_statistics
         end
 
-        private def calculate_statistics
-          # Calculate basic statistical measures
-          @statistical_measures["entropy"] = -@probability * Math.log(@probability) if @probability > 0
-          @statistical_measures["certainty"] = @probability
-          @statistical_measures["uncertainty"] = 1.0 - @probability
+        getter evidence : Float64
 
-          # Simple confidence intervals (would be more sophisticated in practice)
-          margin = 0.1 * @probability
-          @confidence_intervals["95%"] = {@probability - margin, @probability + margin}
+        private def calculate_statistics
+          p = @probability.clamp(0.0, 1.0)
+          # Binary entropy in nats: 0 when certain either way, ln 2 at p = 0.5.
+          entropy = 0.0
+          entropy -= p * Math.log(p) if p > 0.0
+          entropy -= (1.0 - p) * Math.log(1.0 - p) if p < 1.0
+          @statistical_measures["entropy"] = entropy
+          @statistical_measures["certainty"] = p
+          @statistical_measures["uncertainty"] = 1.0 - p
+          @statistical_measures["evidence"] = @evidence
+
+          # Wilson score interval; with no evidence nothing is ruled out.
+          if @evidence > 0.0
+            z = 1.959963984540054
+            n = @evidence
+            denominator = 1.0 + z * z / n
+            centre = (p + z * z / (2.0 * n)) / denominator
+            margin = z * Math.sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n)) / denominator
+            @statistical_measures["standard_error"] = Math.sqrt(p * (1.0 - p) / n)
+            @confidence_intervals["95%"] = {(centre - margin).clamp(0.0, 1.0), (centre + margin).clamp(0.0, 1.0)}
+          else
+            @confidence_intervals["95%"] = {0.0, 1.0}
+          end
         end
 
         def is_significant?(alpha : Float64 = 0.05) : Bool
@@ -676,7 +758,7 @@ module PatternMatching
 
         probabilistic_results = base_results.map do |result|
           probability = calculate_match_probability(result, pattern)
-          ProbabilisticMatch.new(result, probability)
+          ProbabilisticMatch.new(result, probability, evidence_of(result))
         end
 
         # Filter by probability threshold
@@ -693,7 +775,7 @@ module PatternMatching
 
         # Convert to probabilistic matches
         fuzzy_results = exact_results.map do |result|
-          ProbabilisticMatch.new(result, 1.0) # Exact matches have probability 1.0
+          ProbabilisticMatch.new(result, 1.0, evidence_of(result)) # Exact matches have probability 1.0
         end
 
         # Add fuzzy matches by relaxing constraints
@@ -738,24 +820,68 @@ module PatternMatching
         ProbabilisticMatch.new(hypothesis_results.first, posterior_prob)
       end
 
-      # Monte Carlo sampling for complex pattern spaces
-      def monte_carlo_sampling(pattern : Pattern, num_samples : Int32 = 1000) : Array(ProbabilisticMatch)
-        sampled_matches = [] of ProbabilisticMatch
+      # Evidence count that a confidence stands for (confidence = n / (n + K)).
+      EVIDENCE_K   =  10.0
+      MAX_EVIDENCE = 1.0e6
 
-        (0...num_samples).each do |_|
-          # Perform sampling by introducing random variations
-          sample_result = sample_pattern_space(pattern)
-          if sample_result
-            probability = calculate_sample_probability(sample_result, pattern)
-            if probability >= @fuzzy_threshold
-              sampled_matches << ProbabilisticMatch.new(sample_result, probability)
-            end
-          end
+      # Monte Carlo estimate of how likely each match is to hold.
+      #
+      # Every matched atom is an uncertain proposition. Its chance of holding
+      # is drawn from Beta(1 + s*n, 1 + (1 - s)*n), where s is its strength
+      # and n the evidence its confidence stands for, and then decided by a
+      # coin flip. A match holds in a sample when all its atoms do; its
+      # probability is the fraction of samples in which it held.
+      def monte_carlo_sampling(pattern : Pattern, num_samples : Int32 = 1000,
+                               random : Random = Random.new) : Array(ProbabilisticMatch)
+        return [] of ProbabilisticMatch if num_samples <= 0
+
+        estimates = PatternMatcher.new(@atomspace).match(pattern).compact_map do |result|
+          atoms = result.matched_atoms.empty? ? result.bindings.values : result.matched_atoms
+          hits = num_samples.times.count { atoms.all? { |atom| sample_truth(atom, random) } }
+          probability = hits.to_f64 / num_samples
+          probability >= @fuzzy_threshold ? ProbabilisticMatch.new(result, probability, num_samples.to_f64) : nil
         end
 
-        # Remove duplicates and return top results
-        unique_matches = sampled_matches.uniq { |m| m.match_result.bindings.to_s }
-        unique_matches.sort_by(&.probability.-).first(100)
+        estimates.uniq { |m| m.match_result.bindings.to_s }.sort_by(&.probability.-).first(100)
+      end
+
+      private def evidence_count(atom : AtomSpace::Atom) : Float64
+        confidence = atom.truth_value.confidence.clamp(0.0, 1.0)
+        return MAX_EVIDENCE if confidence >= 1.0
+        Math.min(EVIDENCE_K * confidence / (1.0 - confidence), MAX_EVIDENCE)
+      end
+
+      # The evidence behind a match: that of its least supported atom.
+      private def evidence_of(result : MatchResult) : Float64
+        atoms = result.matched_atoms.empty? ? result.bindings.values : result.matched_atoms
+        atoms.min_of? { |atom| evidence_count(atom) } || 0.0
+      end
+
+      private def sample_truth(atom : AtomSpace::Atom, random : Random) : Bool
+        strength = atom.truth_value.strength.clamp(0.0, 1.0)
+        n = evidence_count(atom)
+        chance = n >= MAX_EVIDENCE ? strength : sample_beta(1.0 + strength * n, 1.0 + (1.0 - strength) * n, random)
+        random.rand < chance
+      end
+
+      private def sample_beta(alpha : Float64, beta : Float64, random : Random) : Float64
+        x = sample_gamma(alpha, random)
+        y = sample_gamma(beta, random)
+        x + y == 0.0 ? 0.5 : x / (x + y)
+      end
+
+      # Marsaglia-Tsang sampler for Gamma(shape, 1), shape >= 1.
+      private def sample_gamma(shape : Float64, random : Random) : Float64
+        d = shape - 1.0 / 3.0
+        c = 1.0 / Math.sqrt(9.0 * d)
+        loop do
+          # Standard normal by Box-Muller.
+          normal = Math.sqrt(-2.0 * Math.log(1.0 - random.rand)) * Math.cos(2.0 * Math::PI * random.rand)
+          v = (1.0 + c * normal) ** 3
+          next if v <= 0.0
+          u = 1.0 - random.rand
+          return d * v if Math.log(u) < 0.5 * normal * normal + d - d * v + d * Math.log(v)
+        end
       end
 
       private def calculate_match_probability(result : MatchResult, pattern : Pattern) : Float64
@@ -782,32 +908,18 @@ module PatternMatching
         (avg_strength * avg_confidence + avg_strength) / 2.0
       end
 
+      # Partial matches: bindings that fit the template but break some of
+      # the pattern's constraints. A match's probability is the share of
+      # constraints it does satisfy; full matches are left to the caller.
       private def find_relaxed_matches(pattern : Pattern, threshold : Float64) : Array(ProbabilisticMatch)
-        relaxed_matches = [] of ProbabilisticMatch
+        return [] of ProbabilisticMatch if pattern.constraints.empty?
 
-        # Implement relaxed matching by creating variations of the pattern
-        # This is a simplified version - full implementation would be more sophisticated
-
-        # Try matching with fewer constraints
-        relaxed_pattern = Pattern.new(pattern.template)
-        # Skip some constraints to create relaxed version
-        pattern.constraints.each_with_index do |constraint, index|
-          next if index % 2 == 0 # Skip every other constraint for relaxation
-          relaxed_pattern.add_constraint(constraint)
-        end
-
-        matcher = PatternMatcher.new(@atomspace)
-        relaxed_results = matcher.match(relaxed_pattern)
-
-        relaxed_results.each do |result|
-          # Calculate similarity to original pattern
+        template_only = PatternMatcher.new(@atomspace).match(Pattern.new(pattern.template))
+        template_only.compact_map do |result|
           similarity = calculate_pattern_similarity(result, pattern)
-          if similarity >= threshold
-            relaxed_matches << ProbabilisticMatch.new(result, similarity * 0.8) # Reduce prob for relaxed matches
-          end
+          next if similarity >= 1.0 || similarity < threshold
+          ProbabilisticMatch.new(result, similarity, pattern.constraints.size.to_f64)
         end
-
-        relaxed_matches
       end
 
       private def calculate_likelihood(evidence_patterns : Array(Pattern),
@@ -846,35 +958,13 @@ module PatternMatching
         total_evidence_matches.to_f64 / (@atomspace.size * evidence_patterns.size)
       end
 
-      private def sample_pattern_space(pattern : Pattern) : MatchResult?
-        # Simple sampling by running the pattern with slight modifications
-        matcher = PatternMatcher.new(@atomspace)
-        results = matcher.match(pattern)
-
-        return nil if results.empty?
-
-        # Return a random result (simplified sampling)
-        results[Random.rand(results.size)]?
-      end
-
-      private def calculate_sample_probability(result : MatchResult, pattern : Pattern) : Float64
-        # Simplified probability calculation for sampled results
-        base_prob = calculate_match_probability(result, pattern)
-
-        # Add some randomness to simulate sampling uncertainty
-        noise = (Random.rand - 0.5) * 0.2
-        [0.0, [1.0, base_prob + noise].min].max
-      end
-
       private def calculate_pattern_similarity(result : MatchResult, pattern : Pattern) : Float64
-        # Calculate how similar a result is to the original pattern
-        # This is simplified - would involve more sophisticated similarity measures
-
+        # The share of the pattern's constraints the bindings satisfy.
         satisfied_constraints = pattern.constraints.count do |constraint|
           constraint.satisfied?(result.bindings, @atomspace)
         end
 
-        return 0.5 if pattern.constraints.empty?
+        return 1.0 if pattern.constraints.empty?
 
         satisfied_constraints.to_f64 / pattern.constraints.size
       end

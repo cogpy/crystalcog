@@ -1,0 +1,576 @@
+# Paphos backend server: a Crystal implementation of the 9cog/paphos-backend
+# REST contract (/api/v1, Lucky-style param keys, HS256 JWT bearer auth,
+# {message,param,details} errors), extended with chat messages, which the
+# upstream skeleton does not have yet.
+#
+# Storage is in memory, optionally persisted to a JSON file so the server can
+# run without PostgreSQL.
+
+require "http/server"
+require "json"
+require "uuid"
+require "crypto/bcrypt/password"
+require "./jwt"
+require "../../cogutil/logger"
+
+module PaphosBackend
+  class Server
+    API_PREFIX   = "/api/v1"
+    VISIBILITIES = %w(public unlisted private)
+
+    class ApiError < Exception
+      getter status : Int32
+      getter param : String?
+
+      def initialize(@status : Int32, message : String, @param : String? = nil, @details : String? = nil)
+        super(message)
+      end
+
+      def details : String
+        @details || message.to_s
+      end
+    end
+
+    record User, id : Int64, email : String, password_hash : String
+
+    class Character
+      include JSON::Serializable
+      property slug : String
+      property owner_id : Int64
+      property name : String
+      property description : String
+      property avatar_id : String?
+      property greeting : String
+      property persona : String
+      property world_scenario : String?
+      property example_chats : String?
+      property visibility : String
+      property is_contentious : Bool
+
+      def initialize(@slug, @owner_id, @name, @description, @avatar_id, @greeting, @persona,
+                     @world_scenario, @example_chats, @visibility, @is_contentious)
+      end
+
+      def summary
+        {"slug" => slug, "name" => name, "description" => description, "avatar_id" => avatar_id}
+      end
+
+      def full
+        summary.merge({"greeting" => greeting, "persona" => persona, "world_scenario" => world_scenario,
+                       "example_chats" => example_chats, "visibility" => visibility,
+                       "is_contentious" => is_contentious})
+      end
+    end
+
+    class Chat
+      include JSON::Serializable
+      property id : String
+      property owner_id : Int64
+      property name : String?
+      property character_slugs : Array(String)
+
+      def initialize(@id, @owner_id, @name, @character_slugs)
+      end
+    end
+
+    class Message
+      include JSON::Serializable
+      property id : Int64
+      property chat_id : String
+      property sender : String # "user" | "character"
+      property character_slug : String?
+      property content : String
+      property created_at : Int64
+
+      def initialize(@id, @chat_id, @sender, @character_slug, @content, @created_at)
+      end
+
+      def to_h
+        {"id" => id, "sender" => sender, "character_slug" => character_slug,
+         "content" => content, "created_at" => created_at}
+      end
+    end
+
+    # A named document a user stores: cognitive state, an exported
+    # AtomSpace, any string fields. (Not part of upstream Paphos.)
+    class Snapshot
+      include JSON::Serializable
+      property key : String
+      property owner_id : Int64
+      property data : Hash(String, String)
+      property updated_at : Int64
+
+      def initialize(@key, @owner_id, @data, @updated_at)
+      end
+
+      def summary
+        {"key" => key, "updated_at" => updated_at, "bytes" => data.sum { |k, v| k.bytesize + v.bytesize }}
+      end
+
+      def full
+        {"key" => key, "updated_at" => updated_at, "data" => data}
+      end
+    end
+
+    class Store
+      include JSON::Serializable
+      property snapshots = [] of Snapshot
+      property users = [] of Hash(String, String)
+      property characters = [] of Character
+      property chats = [] of Chat
+      property messages = [] of Message
+      property next_user_id : Int64 = 1
+      property next_message_id : Int64 = 1
+
+      def initialize
+      end
+    end
+
+    getter port : Int32 = 0
+    @store : Store
+    @users = {} of Int64 => User
+    @mutex = Mutex.new
+    @server : HTTP::Server?
+
+    def initialize(@host : String = "127.0.0.1", @requested_port : Int32 = 3000,
+                   @secret : String = ENV["SECRET_KEY_BASE"]? || Random::Secure.hex(32),
+                   @data_file : String? = nil)
+      @store = load_store
+      @store.users.each do |u|
+        user = User.new(u["id"].to_i64, u["email"], u["password_hash"])
+        @users[user.id] = user
+      end
+    end
+
+    def url : String
+      url_for(@host, @port)
+    end
+
+    def url_for(host : String, port : Int32) : String
+      "http://#{host}:#{port}#{API_PREFIX}"
+    end
+
+    # Bind and serve in a background fiber; returns once the port is bound.
+    def start : self
+      server = HTTP::Server.new { |ctx| handle(ctx) }
+      address = server.bind_tcp(@host, @requested_port)
+      @port = address.port
+      @server = server
+      spawn { server.listen }
+      Fiber.yield
+      CogUtil::Logger.info("Paphos backend listening on #{url}")
+      self
+    end
+
+    def stop
+      @server.try(&.close)
+    end
+
+    # Issue a token for a user id (used by tests and trusted callers).
+    def token_for(user_id : Int64) : String
+      PygmalionPlatform::JWT.encode({"user_id" => JSON::Any.new(user_id)}, @secret)
+    end
+
+    def handle(ctx : HTTP::Server::Context)
+      ctx.response.content_type = "application/json"
+      path = ctx.request.path
+      unless path == API_PREFIX || path.starts_with?("#{API_PREFIX}/")
+        raise ApiError.new(404, "Not found", nil, "No route for #{path}")
+      end
+      route(ctx, path.lchop(API_PREFIX).rchop("/"), ctx.request.method)
+    rescue ex : ApiError
+      error(ctx, ex.status, ex.message, ex.param, ex.details)
+    rescue ex : JSON::ParseException
+      error(ctx, 400, "Invalid JSON", nil, ex.message)
+    rescue ex
+      CogUtil::Logger.error("Paphos request failed: #{ex.class}: #{ex.message}")
+      error(ctx, 500, "Something went wrong.", nil, ex.message)
+    end
+
+    private def error(ctx, status, message, param, details)
+      ctx.response.status_code = status
+      ctx.response.print({"message" => message, "param" => param, "details" => details}.to_json)
+    end
+
+    private def route(ctx, path : String, method : String)
+      seg = path.split('/', remove_empty: true)
+      case {method, seg.size, seg[0]?, seg[1]?, seg[2]?}
+      when {"GET", 0, nil, nil, nil}
+        respond(ctx, {"hello" => "Hello World from Home::Index"})
+      when {"POST", 2, "users", "register", nil}
+        register(ctx)
+      when {"POST", 2, "users", "login", nil}
+        login(ctx)
+      when {"GET", 1, "characters", nil, nil}
+        list_characters(ctx, current_user(ctx))
+      when {"POST", 1, "characters", nil, nil}
+        create_character(ctx, current_user(ctx))
+      when {"GET", 1, "chats", nil, nil}
+        list_chats(ctx, current_user(ctx))
+      when {"POST", 1, "chats", nil, nil}
+        create_chat(ctx, current_user(ctx))
+      else
+        if seg.size == 2 && seg[0] == "characters"
+          character_member(ctx, method, seg[1], current_user(ctx))
+        elsif seg.size == 2 && seg[0] == "chats"
+          chat_member(ctx, method, seg[1], current_user(ctx))
+        elsif seg.size == 3 && seg[0] == "chats" && seg[2] == "messages"
+          chat_messages(ctx, method, seg[1], current_user(ctx))
+        elsif seg.size == 1 && seg[0] == "snapshots" && method == "GET"
+          list_snapshots(ctx, current_user(ctx))
+        elsif seg.size == 2 && seg[0] == "snapshots"
+          snapshot_member(ctx, method, URI.decode(seg[1]), current_user(ctx))
+        else
+          not_found(ctx.request.path)
+        end
+      end
+    end
+
+    # ---------------------------------------------------------------- auth
+
+    private def register(ctx)
+      params = param_key(ctx, "user")
+      email = required_string(params, "email").strip.downcase
+      password = required_string(params, "password")
+      confirmation = params["password_confirmation"]?.try(&.as_s?)
+      raise ApiError.new(400, "Invalid params", "email", "email is invalid") unless email.includes?('@')
+      unless (6..72).includes?(password.size)
+        raise ApiError.new(400, "Invalid params", "password", "password must be 6-72 characters")
+      end
+      if confirmation && confirmation != password
+        raise ApiError.new(400, "Invalid params", "password_confirmation", "password_confirmation must match")
+      end
+
+      user = @mutex.synchronize do
+        if @users.values.any? { |u| u.email == email }
+          raise ApiError.new(400, "Invalid params", "email", "email is already taken")
+        end
+        u = User.new(@store.next_user_id, email, Crypto::Bcrypt::Password.create(password).to_s)
+        @store.next_user_id += 1
+        @users[u.id] = u
+        @store.users << {"id" => u.id.to_s, "email" => u.email, "password_hash" => u.password_hash}
+        persist
+        u
+      end
+      respond(ctx, {"token" => token_for(user.id)})
+    end
+
+    private def login(ctx)
+      params = param_key(ctx, "user")
+      email = required_string(params, "email").strip.downcase
+      password = required_string(params, "password")
+      user = @users.values.find { |u| u.email == email }
+      raise ApiError.new(400, "Invalid params", "email", "email is not in our system") unless user
+      unless Crypto::Bcrypt::Password.new(user.password_hash).verify(password)
+        raise ApiError.new(400, "Invalid params", "password", "password is wrong")
+      end
+      respond(ctx, {"token" => token_for(user.id)})
+    end
+
+    private def current_user(ctx) : User
+      raw = ctx.request.headers["Authorization"]? || ctx.request.query_params["auth_token"]?
+      token = raw.try(&.sub(/\A\s*Bearer\s*/i, "").strip)
+      raise ApiError.new(401, "Not authenticated.", nil, "missing auth token") if token.nil? || token.empty?
+      claims = PygmalionPlatform::JWT.decode(token, @secret)
+      user_id = claims["user_id"]?.try(&.as_i64?)
+      @users[user_id]? || raise ApiError.new(401, "Not authenticated.", nil, "unknown user")
+    rescue ex : PygmalionPlatform::JWT::Error
+      raise ApiError.new(401, "Not authenticated.", nil, ex.message)
+    end
+
+    # ---------------------------------------------------------- characters
+
+    private def visible_to?(character : Character, user : User) : Bool
+      character.visibility != "private" || character.owner_id == user.id
+    end
+
+    private def list_characters(ctx, user)
+      list = @store.characters.select { |c| c.visibility == "public" || c.owner_id == user.id }
+      respond(ctx, {"characters" => list.map(&.summary)})
+    end
+
+    private def create_character(ctx, user)
+      params = param_key(ctx, "character")
+      name = bounded(params, "name", 1, 32, required: true).not_nil!
+      character = Character.new(
+        slug: "",
+        owner_id: user.id,
+        name: name,
+        description: bounded(params, "description", 8, 64, required: true).not_nil!,
+        avatar_id: params["avatar_id"]?.try(&.as_s?),
+        greeting: bounded(params, "greeting", 2, 1024, required: true).not_nil!,
+        persona: bounded(params, "persona", 12, 1024, required: true).not_nil!,
+        world_scenario: bounded(params, "world_scenario", 0, 512),
+        example_chats: bounded(params, "example_chats", 0, 1024),
+        visibility: visibility(params) || "private",
+        is_contentious: params["is_contentious"]?.try(&.as_bool?) || false
+      )
+      @mutex.synchronize do
+        character.slug = unique_slug(name)
+        @store.characters << character
+        persist
+      end
+      respond(ctx, {"character" => character.full})
+    end
+
+    private def character_member(ctx, method, slug, user)
+      character = @store.characters.find { |c| c.slug == slug && visible_to?(c, user) }
+      raise ApiError.new(404, "Not found", nil, "character #{slug} not found") unless character
+      case method
+      when "GET"
+        respond(ctx, {"character" => character.full})
+      when "PATCH", "PUT"
+        require_owner(character.owner_id, user)
+        params = param_key(ctx, "character")
+        @mutex.synchronize do
+          bounded(params, "name", 1, 32).try { |v| character.name = v }
+          bounded(params, "description", 8, 64).try { |v| character.description = v }
+          bounded(params, "greeting", 2, 1024).try { |v| character.greeting = v }
+          bounded(params, "persona", 12, 1024).try { |v| character.persona = v }
+          character.world_scenario = bounded(params, "world_scenario", 0, 512) if params.has_key?("world_scenario")
+          character.example_chats = bounded(params, "example_chats", 0, 1024) if params.has_key?("example_chats")
+          character.avatar_id = params["avatar_id"]?.try(&.as_s?) if params.has_key?("avatar_id")
+          visibility(params).try { |v| character.visibility = v }
+          params["is_contentious"]?.try(&.as_bool?).try { |v| character.is_contentious = v }
+          persist
+        end
+        respond(ctx, {"character" => character.full})
+      when "DELETE"
+        require_owner(character.owner_id, user)
+        @mutex.synchronize do
+          @store.characters.delete(character)
+          persist
+        end
+        ctx.response.print ""
+      else
+        not_found(ctx.request.path)
+      end
+    end
+
+    private def unique_slug(name : String) : String
+      base = name.downcase.gsub(/[^a-z0-9]+/, "-").strip('-')
+      base = "character" if base.empty?
+      slug = base
+      n = 1
+      while @store.characters.any? { |c| c.slug == slug }
+        n += 1
+        slug = "#{base}-#{n}"
+      end
+      slug
+    end
+
+    # --------------------------------------------------------------- chats
+
+    private def chat_json(chat : Chat)
+      characters = chat.character_slugs.compact_map { |s| @store.characters.find { |c| c.slug == s } }
+      {"id" => chat.id, "name" => chat.name, "characters" => characters.map(&.summary)}
+    end
+
+    private def list_chats(ctx, user)
+      respond(ctx, {"chats" => @store.chats.select { |c| c.owner_id == user.id }.map { |c| chat_json(c) }})
+    end
+
+    private def create_chat(ctx, user)
+      params = param_key(ctx, "chat")
+      slugs = params["character_slugs"]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String
+      raise ApiError.new(400, "Invalid params", "character_slugs", "at least one character is required") if slugs.empty?
+      slugs.each do |slug|
+        unless @store.characters.any? { |c| c.slug == slug && visible_to?(c, user) }
+          raise ApiError.new(400, "Invalid params", "character_slugs", "unknown character #{slug}")
+        end
+      end
+      chat = Chat.new(UUID.random.to_s, user.id, bounded(params, "name", 1, 32), slugs)
+      @mutex.synchronize do
+        @store.chats << chat
+        # Seed the conversation with each character's greeting.
+        slugs.each do |slug|
+          if character = @store.characters.find { |c| c.slug == slug }
+            add_message(chat.id, "character", slug, character.greeting)
+          end
+        end
+        persist
+      end
+      respond(ctx, {"chat" => chat_json(chat)})
+    end
+
+    private def find_chat(id, user) : Chat
+      chat = @store.chats.find { |c| c.id == id }
+      raise ApiError.new(404, "Not found", nil, "chat #{id} not found") unless chat
+      require_owner(chat.owner_id, user)
+      chat
+    end
+
+    private def chat_member(ctx, method, id, user)
+      chat = find_chat(id, user)
+      case method
+      when "GET"
+        respond(ctx, {"chat" => chat_json(chat)})
+      when "PATCH", "PUT"
+        params = param_key(ctx, "chat")
+        @mutex.synchronize do
+          name = params["name"]?.try(&.as_s?)
+          chat.name = (name.nil? || name == "null") ? nil : bounded(params, "name", 1, 32)
+          persist
+        end
+        respond(ctx, {"chat" => chat_json(chat)})
+      when "DELETE"
+        @mutex.synchronize do
+          @store.chats.delete(chat)
+          @store.messages.reject! { |m| m.chat_id == chat.id }
+          persist
+        end
+        ctx.response.print ""
+      else
+        not_found(ctx.request.path)
+      end
+    end
+
+    private def chat_messages(ctx, method, id, user)
+      chat = find_chat(id, user)
+      case method
+      when "GET"
+        list = @store.messages.select { |m| m.chat_id == chat.id }
+        respond(ctx, {"messages" => list.map(&.to_h)})
+      when "POST"
+        params = param_key(ctx, "message")
+        content = required_string(params, "content")
+        raise ApiError.new(400, "Invalid params", "content", "content can't be blank") if content.strip.empty?
+        sender = params["sender"]?.try(&.as_s?) || "user"
+        unless {"user", "character"}.includes?(sender)
+          raise ApiError.new(400, "Invalid params", "sender", "sender must be user or character")
+        end
+        slug = params["character_slug"]?.try(&.as_s?)
+        if sender == "character" && !chat.character_slugs.includes?(slug)
+          raise ApiError.new(400, "Invalid params", "character_slug", "character is not in this chat")
+        end
+        message = @mutex.synchronize do
+          m = add_message(chat.id, sender, slug, content)
+          persist
+          m
+        end
+        respond(ctx, {"message" => message.to_h})
+      else
+        not_found(ctx.request.path)
+      end
+    end
+
+    # ----------------------------------------------------------- snapshots
+
+    SNAPSHOT_KEY = /\A[A-Za-z0-9._:-]{1,200}\z/
+
+    # GET /snapshots lists the caller's snapshots; query parameters keep
+    # only those whose data has the given field values.
+    private def list_snapshots(ctx, user)
+      filters = ctx.request.query_params.to_h
+      mine = @store.snapshots.select do |snapshot|
+        snapshot.owner_id == user.id && filters.all? { |field, value| snapshot.data[field]? == value }
+      end
+      respond(ctx, {"snapshots" => mine.sort_by(&.key).map(&.summary)})
+    end
+
+    private def snapshot_member(ctx, method, key : String, user)
+      unless key.matches?(SNAPSHOT_KEY)
+        raise ApiError.new(400, "Invalid params", "key", "key must be 1-200 characters of A-Z a-z 0-9 . _ : -")
+      end
+      existing = @store.snapshots.find { |snapshot| snapshot.owner_id == user.id && snapshot.key == key }
+      case method
+      when "GET"
+        respond(ctx, {"snapshot" => (existing || not_found(ctx.request.path)).full})
+      when "PUT"
+        params = param_key(ctx, "snapshot")
+        fields = params["data"]?.try(&.as_h?) || raise ApiError.new(400, "Invalid params", "data", "data must be an object")
+        data = fields.to_h do |field, value|
+          {field, value.as_s? || raise ApiError.new(400, "Invalid params", "data", "data.#{field} must be a string")}
+        end
+        snapshot = @mutex.synchronize do
+          saved = existing
+          if saved
+            saved.data = data
+            saved.updated_at = Time.utc.to_unix_ms
+          else
+            saved = Snapshot.new(key, user.id, data, Time.utc.to_unix_ms)
+            @store.snapshots << saved
+          end
+          persist
+          saved
+        end
+        respond(ctx, {"snapshot" => snapshot.summary})
+      when "DELETE"
+        found = existing || not_found(ctx.request.path)
+        @mutex.synchronize do
+          @store.snapshots.delete(found)
+          persist
+        end
+        respond(ctx, {"snapshot" => found.summary})
+      else
+        not_found(ctx.request.path)
+      end
+    end
+
+    private def add_message(chat_id, sender, slug, content) : Message
+      message = Message.new(@store.next_message_id, chat_id, sender, slug, content, Time.utc.to_unix_ms)
+      @store.next_message_id += 1
+      @store.messages << message
+      message
+    end
+
+    # ------------------------------------------------------------- helpers
+
+    private def respond(ctx, body)
+      ctx.response.print body.to_json
+    end
+
+    private def not_found(path)
+      raise ApiError.new(404, "Not found", nil, "No route for #{path}")
+    end
+
+    private def require_owner(owner_id : Int64, user : User)
+      return if owner_id == user.id
+      raise ApiError.new(401, "You're not authorized to perform that action.", nil, "not the owner")
+    end
+
+    private def param_key(ctx, key : String) : Hash(String, JSON::Any)
+      body = ctx.request.body.try(&.gets_to_end) || ""
+      json = body.empty? ? JSON::Any.new({} of String => JSON::Any) : JSON.parse(body)
+      json[key]?.try(&.as_h?) || raise ApiError.new(400, "Missing param key: #{key}", key, "expected {\"#{key}\": {...}}")
+    end
+
+    private def required_string(params, field) : String
+      params[field]?.try(&.as_s?) || raise ApiError.new(400, "Invalid params", field, "#{field} is required")
+    end
+
+    private def bounded(params, field, min, max, required = false) : String?
+      value = params[field]?.try(&.as_s?)
+      if value.nil?
+        raise ApiError.new(400, "Invalid params", field, "#{field} is required") if required
+        return nil
+      end
+      unless (min..max).includes?(value.size)
+        raise ApiError.new(400, "Invalid params", field, "#{field} must be #{min}-#{max} characters")
+      end
+      value
+    end
+
+    private def visibility(params) : String?
+      value = params["visibility"]?.try(&.as_s?)
+      return nil unless value
+      raise ApiError.new(400, "Invalid params", "visibility", "visibility is invalid") unless VISIBILITIES.includes?(value)
+      value
+    end
+
+    private def load_store : Store
+      if (path = @data_file) && File.exists?(path)
+        Store.from_json(File.read(path))
+      else
+        Store.new
+      end
+    end
+
+    private def persist
+      return unless path = @data_file
+      tmp = "#{path}.tmp"
+      File.write(tmp, @store.to_json)
+      File.rename(tmp, path)
+    end
+  end
+end

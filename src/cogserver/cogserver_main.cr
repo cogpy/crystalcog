@@ -2,6 +2,7 @@
 # This provides a standalone executable for running the CogServer
 
 require "./cogserver"
+require "./cogserver_shell"
 
 module CogServer
   # Main entry point for command-line usage

@@ -1,9 +1,20 @@
 # AI Integration Bridge
-# This module provides Crystal bindings to the C++ AI system in DrawTerm
+#
+# Runs language models for the cognitive system. A model's path decides
+# what serves it:
+#
+#   http://host:port     an OpenAI-compatible server (aphrodite_jax_server,
+#                        Aphrodite, llama.cpp, ...)
+#   a model directory    a Qwen3 snapshot (or cached repo id), run in this
+#                        process by the native Crystal engine
+#   anything else, with  the knowledge model: answers from the AtomSpace
+#   ModelType::CUSTOM    itself, with no neural network involved
 
 require "../atomspace/atomspace_main"
 require "../pln/pln"
 require "../ure/ure"
+require "../tools/cog_chat"
+require "../integrations/platform/aphrodite_jax_server"
 
 module AIIntegration
   # AI Model Types (matching C++ enum)
@@ -71,49 +82,161 @@ module AIIntegration
     end
   end
 
-  # Crystal AI Manager that interfaces with the C++ system
-  class CrystalAIManager
-    @initialized : Bool = false
-    @default_model : String = ""
-    @loaded_models : Set(String) = Set(String).new
-    @sessions : Hash(String, Time) = {} of String => Time
+  # What a backend produced for one request.
+  record ModelOutput, text : String, confidence : Float32, tokens : UInt32
 
-    def initialize
-      puts "Crystal AI Manager initialized"
+  # Something that can answer a prompt: a language model, or the knowledge base.
+  abstract class ModelBackend
+    # `history` holds the session's earlier turns as {role, text}.
+    abstract def generate(request : InferenceRequest, config : ModelConfig, history : Array({String, String})) : ModelOutput
+    abstract def describe : String
+  end
+
+  # A language model behind a CogChat engine (in-process or remote).
+  class EngineBackend < ModelBackend
+    def initialize(@engine : CrystalCog::CogChat::Engine)
     end
 
-    def load_model(model_name : String, config : ModelConfig) : Bool
-      puts "Loading AI model: #{model_name}"
+    def generate(request : InferenceRequest, config : ModelConfig, history : Array({String, String})) : ModelOutput
+      messages = (history + [{"user", request.prompt}]).map do |(role, text)|
+        JSON::Any.new({"role" => JSON::Any.new(role), "content" => JSON::Any.new(text)})
+      end
+      params = AphroditeJax::SamplingParams.new(temperature: request.temperature.to_f64,
+        max_tokens: Math.min(request.max_tokens, config.max_tokens).to_i32, stop: request.stop_sequences)
+      reply = @engine.chat(messages, nil, params) { }
+      tokens = begin
+        @engine.tokenize(reply.content).size
+      rescue
+        reply.content.split.size
+      end
+      ModelOutput.new(reply.content, reply.confidence.to_f32, tokens.to_u32)
+    end
 
-      # Validate configuration
-      unless File.exists?(config.model_path) || config.model_path.starts_with?("/models/")
-        puts "Warning: Model path may not exist: #{config.model_path}"
+    def describe : String
+      @engine.describe
+    end
+  end
+
+  # The knowledge model: it answers from what the AtomSpace holds about the
+  # words in the prompt. Its confidence is that of the facts it used.
+  class KnowledgeBackend < ModelBackend
+    MAX_FACTS = 8
+
+    def initialize(@atomspace : AtomSpace::AtomSpace)
+    end
+
+    def generate(request : InferenceRequest, config : ModelConfig, history : Array({String, String})) : ModelOutput
+      words = request.prompt.scan(/[\p{L}\p{N}_'-]+/).map(&.[0]).uniq
+      facts = [] of AtomSpace::Atom
+      known = [] of String
+      words.each do |word|
+        nodes = @atomspace.get_nodes_by_name(word)
+        nodes = @atomspace.get_nodes_by_name(word.downcase) if nodes.empty?
+        next if nodes.empty?
+        known << word
+        nodes.each { |node| facts.concat(@atomspace.get_incoming(node)) }
+      end
+      facts = facts.uniq(&.handle).sort_by { |fact| -(fact.truth_value.strength * fact.truth_value.confidence) }
+
+      text = if facts.empty? && known.empty?
+               "The knowledge base holds nothing about: #{words.first(6).join(", ")}."
+             elsif facts.empty?
+               "The knowledge base knows #{known.join(", ")}, but no relationships involving #{known.size == 1 ? "it" : "them"}."
+             else
+               lines = facts.first(MAX_FACTS).map do |fact|
+                 "#{fact} (strength #{fact.truth_value.strength.round(2)}, confidence #{fact.truth_value.confidence.round(2)})"
+               end
+               more = facts.size > MAX_FACTS ? "\n... and #{facts.size - MAX_FACTS} more." : ""
+               "About #{known.join(", ")}, the knowledge base holds:\n#{lines.join("\n")}#{more}"
+             end
+      used = facts.first(MAX_FACTS)
+      confidence = used.empty? ? 0.0 : used.sum { |fact| fact.truth_value.strength * fact.truth_value.confidence } / used.size
+      ModelOutput.new(text, confidence.to_f32, text.split.size.to_u32)
+    end
+
+    def describe : String
+      "knowledge model over an AtomSpace of #{@atomspace.size} atoms"
+    end
+  end
+
+  # Loads models, keeps sessions (each with its own conversation history)
+  # and runs inference on them.
+  class CrystalAIManager
+    @default_model : String = ""
+    @backends = {} of String => ModelBackend
+    @configs = {} of String => ModelConfig
+    @sessions : Hash(String, Time) = {} of String => Time
+    @histories = {} of String => Array({String, String})
+    @total_inferences : Int32 = 0
+    getter atomspace : AtomSpace::AtomSpace
+    getter last_error : String = ""
+
+    # Session turns kept as context for the next request.
+    HISTORY_TURNS = 16
+
+    def initialize(@atomspace : AtomSpace::AtomSpace = AtomSpace::AtomSpace.new)
+    end
+
+    # Load a model. Returns false, with the reason in `last_error`, when
+    # nothing can serve it.
+    def load_model(model_name : String, config : ModelConfig) : Bool
+      backend = build_backend(config)
+      unless backend
+        CogUtil::Logger.error("Cannot load AI model #{model_name}: #{@last_error}")
+        return false
+      end
+      @backends[model_name] = backend
+      @configs[model_name] = config
+      CogUtil::Logger.info("AI model #{model_name} loaded: #{backend.describe}")
+      true
+    end
+
+    private def build_backend(config : ModelConfig) : ModelBackend?
+      path = config.model_path
+      if path.starts_with?("http://") || path.starts_with?("https://")
+        return EngineBackend.new(CrystalCog::CogChat::RemoteEngine.new(path, config.custom_params["model"]?))
       end
 
-      # Simulate model loading (in real implementation, this would call C++ functions)
-      @loaded_models.add(model_name)
-      puts "Model #{model_name} loaded successfully"
-      true
+      model_dir = begin
+        AphroditeJax.resolve_model_dir(path)
+      rescue ArgumentError
+        nil
+      end
+      if model_dir && File.exists?(File.join(model_dir, "config.json"))
+        generator = AphroditeJax::Generator.load(model_dir, config.context_length.to_i32)
+        return EngineBackend.new(CrystalCog::CogChat::LocalEngine.new(generator, path))
+      end
+
+      return KnowledgeBackend.new(@atomspace) if config.type.custom?
+
+      @last_error = "#{path} is not a server URL or a Qwen3 model directory (only ModelType::CUSTOM falls back to the knowledge model)"
+      nil
+    rescue ex
+      @last_error = ex.message || ex.class.name
+      nil
     end
 
     def unload_model(model_name : String) : Bool
-      @loaded_models.delete(model_name)
-      puts "Model #{model_name} unloaded"
-      true
+      @configs.delete(model_name)
+      @default_model = "" if @default_model == model_name
+      !@backends.delete(model_name).nil?
     end
 
     def is_model_loaded?(model_name : String) : Bool
-      @loaded_models.includes?(model_name)
+      @backends.has_key?(model_name)
     end
 
     def list_models : Array(String)
-      @loaded_models.to_a
+      @backends.keys
+    end
+
+    def describe_model(model_name : String) : String?
+      @backends[model_name]?.try(&.describe)
     end
 
     def set_default_model(model_name : String)
       if is_model_loaded?(model_name)
         @default_model = model_name
-        puts "Default model set to: #{model_name}"
       else
         raise "Model #{model_name} is not loaded"
       end
@@ -125,12 +248,12 @@ module AIIntegration
 
     def create_session(session_id : String)
       @sessions[session_id] = Time.utc
-      puts "Created AI session: #{session_id}"
+      @histories[session_id] = [] of {String, String}
     end
 
     def destroy_session(session_id : String)
       @sessions.delete(session_id)
-      puts "Destroyed AI session: #{session_id}"
+      @histories.delete(session_id)
     end
 
     def has_session?(session_id : String) : Bool
@@ -141,31 +264,38 @@ module AIIntegration
       @sessions.keys
     end
 
+    # The session's conversation so far, as {role, text} turns.
+    def session_history(session_id : String) : Array({String, String})
+      @histories[session_id]? || [] of {String, String}
+    end
+
     def infer(model_name : String, request : InferenceRequest) : InferenceResponse
-      unless is_model_loaded?(model_name)
+      backend = @backends[model_name]?
+      unless backend
         response = InferenceResponse.new("", request.session_id, success: false)
         response.error_message = "Model #{model_name} is not loaded"
         return response
       end
 
-      unless has_session?(request.session_id)
-        create_session(request.session_id)
+      create_session(request.session_id) unless has_session?(request.session_id)
+      history = @histories[request.session_id]
+
+      start_time = Time.monotonic
+      output = begin
+        backend.generate(request, @configs[model_name], history)
+      rescue ex
+        response = InferenceResponse.new("", request.session_id, success: false)
+        response.error_message = "Inference failed: #{ex.message}"
+        return response
       end
+      @total_inferences += 1
+      history << {"user", request.prompt} << {"assistant", output.text}
+      history.shift(history.size - HISTORY_TURNS) if history.size > HISTORY_TURNS
 
-      # Simulate AI inference (in real implementation, this would call C++ AI functions)
-      start_time = Time.instant
-
-      # Generate a simple response based on the prompt
-      response_text = generate_demo_response(request.prompt)
-
-      end_time = Time.instant
-      inference_time = (end_time - start_time).total_milliseconds.to_u64
-
-      # InferenceResponse is a struct: a tap block receives a value copy.
-      response = InferenceResponse.new(response_text, request.session_id, success: true)
-      response.tokens_generated = response_text.split.size.to_u32
-      response.confidence_score = 0.85_f32
-      response.inference_time_ms = inference_time
+      response = InferenceResponse.new(output.text, request.session_id, success: true)
+      response.tokens_generated = output.tokens
+      response.confidence_score = output.confidence
+      response.inference_time_ms = (Time.monotonic - start_time).total_milliseconds.to_u64
       response
     end
 
@@ -178,27 +308,11 @@ module AIIntegration
       requests.map { |request| infer(model_name, request) }
     end
 
-    private def generate_demo_response(prompt : String) : String
-      # Simple demo response generation
-      case prompt.downcase
-      when .includes?("hello")
-        "Hello! I'm an AI assistant integrated with the CrystalCog cognitive architecture."
-      when .includes?("reasoning")
-        "I can perform logical reasoning using PLN (Probabilistic Logic Networks) and URE (Unified Rule Engine)."
-      when .includes?("knowledge")
-        "I work with knowledge represented in AtomSpace, enabling complex cognitive processing."
-      when .includes?("crystal")
-        "CrystalCog is built with Crystal language for performance and safety."
-      else
-        "I understand your input: '#{prompt}'. This is a demonstration of AI integration with CrystalCog."
-      end
-    end
-
     def get_stats : Hash(String, Int32)
       {
-        "loaded_models"    => @loaded_models.size,
+        "loaded_models"    => @backends.size,
         "active_sessions"  => @sessions.size,
-        "total_inferences" => 0, # Would track in real implementation
+        "total_inferences" => @total_inferences,
       }
     end
   end
@@ -212,9 +326,11 @@ module AIIntegration
     @integration_active : Bool = false
 
     def initialize(@atomspace : AtomSpace::AtomSpace)
-      @ai_manager = CrystalAIManager.new
-      puts "Cognitive AI Integration initialized"
+      # The knowledge model answers from this same AtomSpace.
+      @ai_manager = CrystalAIManager.new(@atomspace)
     end
+
+    getter ai_manager : CrystalAIManager
 
     def setup_cognitive_engines
       @pln_engine = PLN.create_engine(@atomspace)
@@ -272,7 +388,7 @@ module AIIntegration
       results = {} of String => String
 
       # Step 1: Use AI to understand and expand the query
-      ai_response = @ai_manager.infer_simple("demo_model",
+      ai_response = @ai_manager.infer_simple(@ai_manager.get_default_model,
         "Analyze this query for cognitive reasoning: #{query}",
         "cognitive_session")
 
@@ -291,7 +407,7 @@ module AIIntegration
 
       # Step 3: Synthesize results with AI
       synthesis_prompt = "Synthesize these cognitive reasoning results: #{results.values.join(". ")}"
-      synthesis_response = @ai_manager.infer_simple("demo_model", synthesis_prompt, "synthesis_session")
+      synthesis_response = @ai_manager.infer_simple(@ai_manager.get_default_model, synthesis_prompt, "synthesis_session")
       results["synthesis"] = synthesis_response.text
 
       results["status"] = "Complete cognitive-AI reasoning cycle"
@@ -307,7 +423,8 @@ module AIIntegration
 
       # Get AI insights about the concept
       ai_prompt = "Provide knowledge enrichment for the concept: #{concept}"
-      ai_response = @ai_manager.infer_simple("reasoning_model", ai_prompt, "enrichment_session")
+      enrichment_model = @ai_manager.is_model_loaded?("reasoning_model") ? "reasoning_model" : @ai_manager.get_default_model
+      ai_response = @ai_manager.infer_simple(enrichment_model, ai_prompt, "enrichment_session")
       enrichments << "AI Insight: #{ai_response.text}"
 
       # Add concept to AtomSpace if not exists
@@ -355,7 +472,7 @@ module AIIntegration
       responses = [] of String
 
       # AI understanding
-      ai_response = @ai_manager.infer_simple("demo_model", user_input, "interactive_session")
+      ai_response = @ai_manager.infer_simple(@ai_manager.get_default_model, user_input, "interactive_session")
       responses << "AI Response: #{ai_response.text}"
 
       # Cognitive processing
