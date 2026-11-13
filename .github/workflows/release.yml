@@ -11,12 +11,11 @@ on:
         required: true
         type: string
 
-env:
-  CRYSTAL_VERSION: '1.20.1'
-
-# Least-privilege token by default; jobs that write declare their own permissions.
 permissions:
   contents: read
+
+env:
+  CRYSTAL_VERSION: '1.20.1'
 
 # Trace every command so CI logs show exactly what ran and what it printed.
 defaults:
@@ -30,13 +29,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-15-intel]
         include:
-          - os: ubuntu-latest
-            artifact_name: crystalcog-linux-x86_64
+          - os: ubuntu-24.04
+            artifact_name: crystalcog-main-linux-x86_64
             binary_path: crystalcog
-          - os: macos-latest
-            artifact_name: crystalcog-macos-x86_64
+          - os: macos-15-intel
+            artifact_name: crystalcog-main-macos-x86_64
             binary_path: crystalcog
     
     steps:
@@ -57,12 +56,12 @@ jobs:
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install sqlite3 rocksdb libevent openssl
-        # Homebrew libraries are not on the default linker path on Apple Silicon
-        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
+        brew install sqlite3 rocksdb libevent openssl@3
+        echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install --verbose --production
+      run: shards install --frozen --production
 
     - name: Build release binary
       run: |
@@ -84,80 +83,6 @@ jobs:
         path: ${{ matrix.artifact_name }}.tar.gz
         retention-days: 30
 
-  # Create GitHub release
-  create-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: build-release
-    permissions:
-      contents: write
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: release-artifacts
-
-    - name: Get version
-      id: get_version
-      run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          VERSION="${{ github.event.inputs.version }}"
-        else
-          VERSION=${GITHUB_REF#refs/tags/}
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Release version: $VERSION"
-
-    - name: Generate release notes
-      run: |
-        cat > RELEASE_NOTES.md << 'EOF'
-        # CrystalCog ${{ steps.get_version.outputs.version }}
-        
-        ## What's New
-        
-        This release includes:
-        - Latest bug fixes and improvements
-        - Performance optimizations
-        - Enhanced stability
-        
-        ## Installation
-        
-        Download the appropriate binary for your platform:
-        - **Linux**: `crystalcog-linux-x86_64.tar.gz`
-        - **macOS**: `crystalcog-macos-x86_64.tar.gz`
-        
-        Extract and run:
-        ```bash
-        tar -xzf crystalcog-*.tar.gz
-        ./crystalcog --version
-        ```
-        
-        ## Changes
-        
-        See the [commit history](https://github.com/cogpy/crystalcog/commits/main) for detailed changes.
-        
-        ## Documentation
-        
-        - [README](https://github.com/cogpy/crystalcog/blob/main/README.md)
-        - [Examples](https://github.com/cogpy/crystalcog/tree/main/examples)
-        
-        EOF
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.get_version.outputs.version }}
-        name: CrystalCog ${{ steps.get_version.outputs.version }}
-        body_path: RELEASE_NOTES.md
-        draft: false
-        prerelease: false
-        files: |
-          release-artifacts/**/*.tar.gz
-
   # Build and push Docker image
   docker-build:
     name: Build and Push Docker Image
@@ -170,6 +95,29 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Download verified Linux release binary
+      uses: actions/download-artifact@v4
+      with:
+        name: crystalcog-main-linux-x86_64
+        path: cli-release/
+
+    - name: Create CLI runtime image definition
+      run: |
+        tar -xzf cli-release/crystalcog-main-linux-x86_64.tar.gz -C cli-release/
+        cat > Dockerfile.release-cli << 'EOF'
+        FROM ubuntu:24.04
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates libsqlite3-0 librocksdb8.9 libpq5 \
+            libevent-2.1-7t64 libevent-pthreads-2.1-7t64 libssl3t64 \
+            libgcc-s1 libstdc++6 libgmp10 libyaml-0-2 libpcre2-8-0 libgc1 \
+            && rm -rf /var/lib/apt/lists/* \
+            && useradd -m -u 10001 crystalcog
+        COPY cli-release/crystalcog /usr/local/bin/crystalcog
+        RUN chmod +x /usr/local/bin/crystalcog && crystalcog --version
+        USER crystalcog
+        ENTRYPOINT ["crystalcog"]
+        EOF
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -195,10 +143,11 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: Dockerfile.release-cli
         push: true
         tags: |
-          ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.version }}
-          ghcr.io/${{ github.repository }}:latest
+          ghcr.io/${{ github.repository }}/cli:${{ steps.get_version.outputs.version }}
+          ghcr.io/${{ github.repository }}/cli:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -206,7 +155,7 @@ jobs:
   publish-packages:
     name: Publish Packages
     runs-on: ubuntu-latest
-    needs: create-release
+    needs: build-release
     
     steps:
     - name: Checkout repository
@@ -227,7 +176,7 @@ jobs:
   notify:
     name: Deployment Notification
     runs-on: ubuntu-latest
-    needs: [build-release, create-release, docker-build, publish-packages]
+    needs: [build-release, docker-build, publish-packages]
     if: always()
     
     steps:
@@ -249,11 +198,11 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
         echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-        echo "| GitHub Release | ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build Release | ${{ needs.build-release.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Docker Image | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Package Publish | ${{ needs.publish-packages.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "## Release Links" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "- [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.get_version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
-        echo "- [Docker Image](https://ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        echo "- [Docker Image](https://ghcr.io/${{ github.repository }}/cli:${{ steps.get_version.outputs.version }})" >> $GITHUB_STEP_SUMMARY

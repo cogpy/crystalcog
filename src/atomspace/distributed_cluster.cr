@@ -186,6 +186,7 @@ module AtomSpace
     @membership_manager : ClusterMembershipManager
     @event_observers : Array(Proc(ClusterEvent, String, Nil))
     @previous_node_count : Int32 = 0
+    @message_handlers = Hash(String, Proc(JSON::Any, TCPSocket?, Nil)).new
 
     def initialize(@cluster_id : String, @local_atomspace : AtomSpace,
                    host : String = "localhost", port : Int32 = 0,
@@ -199,7 +200,7 @@ module AtomSpace
       @adaptive_heartbeat = AdaptiveHeartbeatConfig.new(enabled: adaptive_heartbeat_enabled)
 
       # Initialize cluster node info for this node
-      actual_port = port == 0 ? find_available_port : port
+      actual_port = port == 0 ? find_available_port(host) : port
       @local_node = ClusterNodeInfo.new(@node_id, host, actual_port)
       @local_node.status = NodeStatus::Initializing
       @cluster_nodes[@node_id] = @local_node
@@ -479,8 +480,19 @@ module AtomSpace
       when "conflict_resolution"
         handle_conflict_resolution(message)
       else
-        CogUtil::Logger.warn("Unknown cluster message type: #{message_type}")
+        if handler = @message_handlers[message_type]?
+          handler.call(message, client)
+        else
+          CogUtil::Logger.warn("Unknown cluster message type: #{message_type}")
+        end
       end
+    end
+
+    # Let another component (such as DistributedStorageNode) serve its own
+    # message types on this node's cluster port. The handler may answer on
+    # the client socket with one JSON line.
+    def on_message(type : String, &handler : JSON::Any, TCPSocket? -> Nil)
+      @message_handlers[type] = handler
     end
 
     private def handle_join_request(message : JSON::Any, client : TCPSocket?)
@@ -782,14 +794,18 @@ module AtomSpace
       Math.min(1.0, base_load + sync_load)
     end
 
-    private def find_available_port : Int32
-      (25000..26000).each do |port|
-        begin
-          server = TCPServer.new("localhost", port)
+    @@reserved_ports = Set(Int32).new
+    @@reserved_ports_mutex = Mutex.new
+
+    # A free port chosen by the OS. A port is not bound until `start`, so
+    # ports already handed out in this process are never offered twice.
+    private def find_available_port(host : String) : Int32
+      @@reserved_ports_mutex.synchronize do
+        20.times do
+          server = TCPServer.new(host, 0)
+          port = server.local_address.port
           server.close
-          return port
-        rescue
-          # Port in use, try next
+          return port if @@reserved_ports.add?(port)
         end
       end
       Random.rand(26000..30000)

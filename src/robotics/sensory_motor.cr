@@ -16,6 +16,7 @@ require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 require "../spatial/spatial"
 require "../temporal/temporal"
+require "../vision/vision"
 require "./ros_integration"
 
 module Robotics
@@ -135,6 +136,7 @@ module Robotics
     property resolution : Tuple(Int32, Int32)
     property field_of_view : Float64  # radians
     @image_data : Bytes?
+    @encoding : String = "rgb8"
 
     def initialize(name : String, frame_id : String = "camera_link",
                    @resolution : Tuple(Int32, Int32) = {640, 480},
@@ -143,11 +145,23 @@ module Robotics
       @image_data = nil
     end
 
+    # A reading carries the camera geometry and, once a frame has been
+    # set, what the frame shows: its brightness, the number of objects, and
+    # a description of them.
     def read : SensorReading
       reading = SensorReading.new(@name, @modality)
       reading.set("width", @resolution[0].to_f64)
       reading.set("height", @resolution[1].to_f64)
       reading.set("fov", @field_of_view)
+      if frame = image
+        scene = Vision.perceive(frame, @name)
+        reading.set("brightness", frame.mean_brightness)
+        reading.set("object_count", scene.detections.size.to_f64)
+        reading.set("objects", scene.detections.map(&.label).join(", "))
+        # Bearing of each object from the optical axis, in radians (left is positive).
+        reading.set("bearings", scene.detections.map { |d| bearing(d.center_x) })
+        reading.set("description", scene.describe)
+      end
       update
       reading
     end
@@ -164,8 +178,41 @@ module Robotics
       end
     end
 
-    def set_image_data(data : Bytes)
+    # Set the current frame: raw pixels in a ROS encoding (rgb8, bgr8,
+    # rgba8, bgra8 or mono8) at the sensor's resolution.
+    def set_image_data(data : Bytes, encoding : String = "rgb8")
       @image_data = data
+      @encoding = encoding
+    end
+
+    # Set the current frame from a decoded image; the resolution follows it.
+    def set_image(frame : Vision::Image)
+      @resolution = {frame.width, frame.height}
+      @image_data = frame.data
+      @encoding = frame.gray? ? "mono8" : "rgb8"
+    end
+
+    # The current frame, or nil when none has been set.
+    def image : Vision::Image?
+      data = @image_data || return nil
+      Vision::Image.from_raw(@resolution[0], @resolution[1], data, @encoding)
+    end
+
+    # What the current frame shows.
+    def perceive : Vision::Scene?
+      image.try { |frame| Vision.perceive(frame, @name) }
+    end
+
+    # Add what the current frame shows to the AtomSpace.
+    def perceive_into(atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
+      perceive.try(&.ground(atomspace)) || [] of AtomSpace::Atom
+    end
+
+    # The horizontal angle of image column `x` from the optical axis.
+    def bearing(x : Float64) : Float64
+      half_width = @resolution[0] / 2.0
+      focal = half_width / Math.tan(@field_of_view / 2.0)
+      Math.atan2(half_width - x, focal)
     end
   end
 

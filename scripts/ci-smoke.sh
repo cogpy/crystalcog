@@ -37,4 +37,12 @@ curl --fail --silent --show-error --max-time 5 -H 'Content-Type: application/jso
   -d '{"type":"CONCEPT_NODE","name":"ci_smoke"}' "$base/atoms" | jq -e '.success == true and .atom.handle > 0'
 curl --fail --silent --show-error --max-time 5 "$base/atoms" | jq -e '.count >= 1 and any(.atoms[]; .name == "ci_smoke")'
 curl --fail --silent --show-error --max-time 5 "$base/atomspace" | jq -e '.size >= 1 and (.atoms | length) >= 1'
-printf 'Compiled CLI, shell, and CogServer HTTP smoke checks passed.\n'
+# The telnet port also serves an interactive shell to raw TCP clients.
+printf 'inherit ci_cat ci_animal\nquit\n' | curl --silent --show-error --max-time 5 "telnet://127.0.0.1:$telnet_port" \
+  | grep 'INHERITANCELINK (CONCEPTNODE "ci_cat") (CONCEPTNODE "ci_animal")'
+# RFC 6455 handshake: this key must produce this accept value. The upgraded
+# connection stays open, so curl is cut off after the headers.
+{ curl --silent --include --max-time 2 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$base/" || true; } \
+  | grep -ai 'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo='
+printf 'Compiled CLI, shell, and CogServer HTTP, telnet and WebSocket smoke checks passed.\n'

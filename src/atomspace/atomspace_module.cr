@@ -186,43 +186,153 @@ module AtomSpace
 
   # Serialization utilities
   module Serialization
-    # Export AtomSpace to simple text format
+    class ParseError < Exception
+    end
+
+    # Export AtomSpace to simple text format: one atom per line, as an
+    # S-expression followed by its truth value.
+    #
+    #   (CONCEPTNODE "cat") (0.9, 0.8)
+    #   (INHERITANCELINK (CONCEPTNODE "cat") (CONCEPTNODE "animal")) (0.7, 0.6)
     def self.to_text(atomspace : AtomSpace) : String
       String.build do |str|
         atomspace.get_all_atoms.each do |atom|
-          str << atom.to_s << " "
+          write_atom(str, atom)
+          str << " "
           str << atom.truth_value.to_s << "\n"
         end
       end
     end
 
-    # Import atoms from simple text format (simplified parser)
-    def self.from_text(atomspace : AtomSpace, text : String)
-      text.each_line do |line|
+    private def self.write_atom(io : IO, atom : Atom) : Nil
+      io << '(' << atom.type
+      if atom.is_a?(Node)
+        io << " \""
+        atom.name.each_char do |char|
+          case char
+          when '"'  then io << "\\\""
+          when '\\' then io << "\\\\"
+          when '\n' then io << "\\n"
+          when '\r' then io << "\\r"
+          when '\t' then io << "\\t"
+          else           io << char
+          end
+        end
+        io << '"'
+      else
+        atom.outgoing.each do |child|
+          io << ' '
+          write_atom(io, child)
+        end
+      end
+      io << ')'
+    end
+
+    # Import atoms from the text format `to_text` writes: nodes and links
+    # of every type, each with its truth value. Blank lines and lines
+    # starting with '#' are skipped. Returns the number of atoms read;
+    # a malformed line raises ParseError naming the line.
+    def self.from_text(atomspace : AtomSpace, text : String) : Int32
+      count = 0
+      text.each_line.with_index(1) do |line, number|
         line = line.strip
         next if line.empty? || line.starts_with?('#')
 
-        # Very basic parsing - would need more sophisticated parser for real use
-        if match = line.match(/\((\w+)\s+"([^"]+)"\)\s+\(([^)]+)\)/)
-          type_str = match[1]
-          name = match[2]
-          tv_str = match[3]
+        begin
+          reader = Char::Reader.new(line)
+          atom = read_atom(reader, atomspace)
+          reader = atom[1]
+          rest = line.byte_slice(reader.pos).strip
+          tv = rest.empty? ? nil : read_truth_value(rest)
+          # A line states its atom's truth value outright.
+          atom[0].truth_value = tv if tv && atom[0].truth_value != tv
+          count += 1
+        rescue ex : ParseError | ArgumentError
+          raise ParseError.new("line #{number}: #{ex.message}")
+        end
+      end
+      count
+    end
 
-          # Parse truth value
-          if tv_match = tv_str.match(/([\d.]+),\s*([\d.]+)/)
-            strength = tv_match[1].to_f64
-            confidence = tv_match[2].to_f64
-            tv = SimpleTruthValue.new(strength, confidence)
+    TYPES_BY_TEXT = AtomType.values.to_h { |type| {type.to_s.delete('_').upcase, type} }
 
-            # Create atom based on type
-            case type_str.upcase
-            when "CONCEPTNODE"
-              atomspace.add_concept_node(name, tv)
-            when "PREDICATENODE"
-              atomspace.add_predicate_node(name, tv)
+    # Reads one S-expression, adding it (children first) to the AtomSpace.
+    private def self.read_atom(reader : Char::Reader, atomspace : AtomSpace) : {Atom, Char::Reader}
+      reader = skip_spaces(reader)
+      raise ParseError.new("expected '(' at column #{reader.pos + 1}") unless reader.current_char == '('
+      reader.next_char
+      type_name = String.build do |io|
+        while reader.has_next? && (reader.current_char.alphanumeric? || reader.current_char == '_')
+          io << reader.current_char
+          reader.next_char
+        end
+      end
+      type = TYPES_BY_TEXT[type_name.delete('_').upcase]? || raise ParseError.new("unknown atom type #{type_name.inspect}")
+      reader = skip_spaces(reader)
+
+      if type.node?
+        raise ParseError.new("expected a quoted name for #{type_name}") unless reader.current_char == '"'
+        reader.next_char
+        name = String.build do |io|
+          loop do
+            raise ParseError.new("unterminated name") unless reader.has_next?
+            char = reader.current_char
+            reader.next_char
+            break if char == '"'
+            if char == '\\'
+              raise ParseError.new("unterminated escape") unless reader.has_next?
+              escaped = reader.current_char
+              reader.next_char
+              io << case escaped
+              when 'n' then '\n'
+              when 'r' then '\r'
+              when 't' then '\t'
+              else          escaped
+              end
+            else
+              io << char
             end
           end
         end
+        reader = skip_spaces(reader)
+        raise ParseError.new("expected ')' after name") unless reader.current_char == ')'
+        reader.next_char
+        {atomspace.add_node(type, name), reader}
+      else
+        outgoing = [] of Atom
+        loop do
+          reader = skip_spaces(reader)
+          raise ParseError.new("unterminated #{type_name}") unless reader.has_next?
+          if reader.current_char == ')'
+            reader.next_char
+            break
+          end
+          child, reader = read_atom(reader, atomspace)
+          outgoing << child
+        end
+        {atomspace.add_link(type, outgoing), reader}
+      end
+    end
+
+    private def self.skip_spaces(reader : Char::Reader) : Char::Reader
+      while reader.has_next? && reader.current_char.whitespace?
+        reader.next_char
+      end
+      reader
+    end
+
+    # "(s, c)", "(s, c, count)" or "[lower, upper] (c)".
+    private def self.read_truth_value(text : String) : TruthValue
+      numbers = text.scan(/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/).map(&.[0].to_f64)
+      if text.starts_with?('[')
+        raise ParseError.new("malformed truth value #{text.inspect}") unless numbers.size == 3
+        IndefiniteTruthValue.new(numbers[0], numbers[1], numbers[2])
+      elsif numbers.size == 2
+        SimpleTruthValue.new(numbers[0], numbers[1])
+      elsif numbers.size == 3
+        CountTruthValue.new(numbers[0], numbers[1], numbers[2])
+      else
+        raise ParseError.new("malformed truth value #{text.inspect}")
       end
     end
   end

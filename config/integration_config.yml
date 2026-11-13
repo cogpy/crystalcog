@@ -17,9 +17,14 @@ pyg:
   use_gpu: false  # Set to true if GPU is available
 
 # Pygmalion Agent Configuration
+# The agent speaks the OpenAI-compatible API served by PygmalionAI's
+# Aphrodite engine (default port 2242), vLLM or llama.cpp. The hosted
+# pygmalion.chat site has no public API of that kind (api.pygmalion.chat
+# does not resolve), so point this at a self-hosted backend. At runtime
+# PYGMALION_API_URL / PYGMALION_API_KEY / PYGMALION_MODEL take effect.
 pygmalion:
-  api_url: "https://api.pygmalion.chat"
-  model_name: "pygmalion-13b"
+  api_url: "http://localhost:2242"
+  model_name: "pygmalion-2-7b"
   max_context_length: 2048
   temperature: 0.7
   echo_state_enabled: true

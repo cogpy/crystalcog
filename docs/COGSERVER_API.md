@@ -78,26 +78,33 @@ Returns all atoms in the AtomSpace with optional type filtering.
 ```
 
 ### POST /atoms
-Create a new atom in the AtomSpace.
+Create an atom. The body is the atom's content form, at the top level or under `"atom"`. A link's `outgoing` entries are nested atoms or the handles of existing atoms.
 
-**Request Body:**
 ```json
 {
-  "type": "ConceptNode",
-  "name": "cat"
+  "type": "INHERITANCE_LINK",
+  "truth_value": {"strength": 0.9, "confidence": 0.8},
+  "outgoing": [
+    {"type": "CONCEPT_NODE", "name": "cat"},
+    {"type": "CONCEPT_NODE", "name": "animal"}
+  ]
 }
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "atom": {
-    "type": "ConceptNode",
-    "string": "ConceptNode:cat"
-  }
-}
-```
+- Truth values merge with what is already stored. Send `"replace": true` to set them exactly.
+- The response has status 201 and `{"success": true, "atom": {"handle", "type", "name", "string"}}`.
+- A bad type or an unknown handle gets status 400, and nothing is added.
+
+### GET /atoms/:handle
+One atom: `handle`, `type`, `name`, `outgoing` (handles), `truth_value`, `string`, and `wire`, the atom's full content form with nested outgoing atoms. Status 404 when there is no such atom.
+
+### DELETE /atoms/:handle
+Remove an atom. Status 409 when other links still use it, 404 when there is no such atom.
+
+### DELETE /atoms
+Remove the atom described by the body (`{"atom": <content form>}`), for clients that know an atom's content and not the server's handle for it.
+
+`AtomSpace::CogStorageNode` uses these endpoints to store, fetch, load and remove atoms on a remote CogServer.
 
 ### GET /sessions
 Returns information about active sessions.
@@ -145,34 +152,69 @@ Returns server version information.
 
 ## WebSocket Protocol
 
-### Connection
-Connect to `ws://localhost:18080/` with proper WebSocket headers:
+Connect to `ws://localhost:18080/`. The server completes the RFC 6455 handshake and then exchanges JSON text frames. It selects the `json` subprotocol only when the client offers it.
 
 ```javascript
 const ws = new WebSocket('ws://localhost:18080/');
-ws.onopen = function() {
-    console.log('Connected to CogServer');
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
+ws.onopen = () => {
+  ws.send(JSON.stringify({action: 'subscribe', events: ['AtomAdded', 'TruthValueChanged']}));
+  ws.send(JSON.stringify({action: 'command', command: 'inherit cat animal', id: 1}));
 };
 ```
 
-### Upgrade Headers
-Required headers for WebSocket upgrade:
-- `Connection: Upgrade`
-- `Upgrade: websocket`
-- `Sec-WebSocket-Key: [base64-key]`
-- `Sec-WebSocket-Version: 13`
+### Client messages
+
+| Message | Reply |
+|---|---|
+| `{"action": "subscribe", "events": ["AtomAdded", "*"]}` | `{"type": "subscribed", "events": [...]}` with all current subscriptions |
+| `{"action": "unsubscribe", "events": [...]}` | `{"type": "subscribed", "events": [...]}` |
+| `{"action": "command", "command": "inherit cat animal"}` | `{"type": "result", "command": ..., "output": ...}` |
+| `{"action": "stats"}` | `{"type": "stats", "data": {...}}` |
+| `{"action": "ping"}` | `{"type": "pong"}` |
+
+- An optional `"id"` is echoed in the reply.
+- A frame that is not a JSON object is run as a shell command.
+- A bad request gets `{"type": "error", "message": ...}`.
+- On connect the server sends `{"type": "welcome", "session": ..., "version": ..., "events": [...]}`.
+
+### Events
+
+Subscribed events arrive as `{"type": "AtomAdded", "timestamp": "...", "data": {...}}`. Event names match without regard to case or underscores; `*` subscribes to everything.
+
+| Event | Data |
+|---|---|
+| `AtomAdded`, `TruthValueChanged`, `AttentionChanged` | `handle`, `type`, `name`, `truth_value` |
+| `AtomRemoved` | `handle`, `type` |
+| `StorageAttached`, `StorageDetached` | `name`, `storage_type` |
+| `AtomSpaceStats` | `size`, `nodes`, `links` (every 5 seconds) |
+| `Heartbeat` | `active_monitors` (every 10 seconds) |
+
+Each connection has a queue of 256 outgoing messages. When a client reads too slowly, further events are dropped for that client; replies wait for room.
 
 ## Telnet Interface
 
-### Connection
-Connect via HTTP with command query parameters:
+Port 17001 speaks two protocols on the same port.
+
+### Interactive shell
+
+A raw TCP client gets a line-based shell on the server's AtomSpace:
 
 ```bash
-# Basic connection
-curl "http://localhost:17001/"
+telnet localhost 17001
+# or
+printf 'inherit cat animal\nreason 2\nquit\n' | nc localhost 17001
+```
 
-# Execute a command
+It accepts the server commands below and every CogShell command (`concept`, `inherit`, `eval`, `imply`, `reason`, `ure`, `query`, `list <type>`, `size`, `tv`, `nlp`, `parse`, `see`, `clear`).
+
+### One-shot HTTP
+
+A client that opens with an HTTP request line gets the same commands through a query parameter:
+
+```bash
 curl "http://localhost:17001/?cmd=help"
+curl "http://localhost:17001/?cmd=inherit%20cat%20animal"
 ```
 
 ### Available Commands
@@ -182,6 +224,7 @@ curl "http://localhost:17001/?cmd=help"
 - `atomspace` - Show AtomSpace statistics
 - `list` - List atoms in AtomSpace (first 10)
 - `stats` - Show session statistics
+- `sessions` - Show open sessions
 - `quit/exit` - Close session
 
 ### Example Session
@@ -245,19 +288,9 @@ print(f"Created atom: {result['atom']['string']}")
 ```javascript
 const ws = new WebSocket('ws://localhost:18080/');
 
-ws.onopen = function() {
-    console.log('Connected to CogServer');
-    // Connection established successfully
-};
-
-ws.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log('Received:', data);
-};
-
-ws.onerror = function(error) {
-    console.error('WebSocket error:', error);
-};
+ws.onopen = () => ws.send(JSON.stringify({action: 'subscribe', events: ['*']}));
+ws.onmessage = (event) => console.log('Received:', JSON.parse(event.data));
+ws.onerror = (error) => console.error('WebSocket error:', error);
 ```
 
 ### Shell Scripts
@@ -286,7 +319,7 @@ curl -s http://localhost:18080/atomspace | jq '.size'
 
 ## Security Notes
 
-The current implementation provides basic functionality without authentication. For production use, consider:
+The server has no authentication, and its shell commands can change the AtomSpace and read image files on the server host (`see`). It listens on localhost by default; keep it there or behind something that authenticates. For production use, consider:
 
 - Adding authentication mechanisms
 - Implementing rate limiting

@@ -626,15 +626,89 @@ module AgentZero
       execution.results["total_agents"] = JSON::Any.new(execution.assigned_agents.size.to_i64)
     end
 
+    # Tighten the topology among the assigned agents: while two of them
+    # are more than two hops apart (or cannot reach each other at all),
+    # connect the farthest pair directly. Efficiency is the network's global
+    # efficiency: the mean of 1/distance over all pairs, 1.0 when everyone
+    # is one hop from everyone else.
     private def execute_network_optimization_task(execution : TaskExecution)
-      # Simulate network optimization metrics
-      original_efficiency = Random.rand(0.3..0.7)
-      optimized_efficiency = Random.rand(0.7..0.95)
+      agents = execution.assigned_agents
+      original_efficiency = TaskCoordinator.global_efficiency(agents)
 
+      links_added = 0
+      failed = Set({String, String}).new
+      loop do
+        distances = TaskCoordinator.hop_distances(agents)
+        worst = nil
+        worst_distance = 2
+        agents.each_with_index do |a, i|
+          agents.each_with_index do |b, j|
+            next if j <= i || failed.includes?({a.id, b.id})
+            distance = distances[i][j] || Int32::MAX
+            if distance > worst_distance
+              worst = {a, b}
+              worst_distance = distance
+            end
+          end
+        end
+        pair = worst || break
+        if pair[0].connect_to_peer(pair[1].host, pair[1].port, retries: 2)
+          links_added += 1
+        else
+          failed << {pair[0].id, pair[1].id}
+        end
+      end
+
+      optimized_efficiency = TaskCoordinator.global_efficiency(agents)
       execution.results["original_efficiency"] = JSON::Any.new(original_efficiency)
       execution.results["optimized_efficiency"] = JSON::Any.new(optimized_efficiency)
       execution.results["improvement"] = JSON::Any.new(optimized_efficiency - original_efficiency)
-      execution.results["participating_agents"] = JSON::Any.new(execution.assigned_agents.size.to_i64)
+      execution.results["links_added"] = JSON::Any.new(links_added.to_i64)
+      execution.results["participating_agents"] = JSON::Any.new(agents.size.to_i64)
+    end
+
+    # Hop counts between agents over their peer connections (a connection
+    # known to either end counts); nil where there is no path.
+    def self.hop_distances(agents : Array(AgentNode)) : Array(Array(Int32?))
+      index = agents.each_with_index.to_h { |agent, i| {agent.id, i} }
+      adjacent = Array.new(agents.size) { Set(Int32).new }
+      agents.each_with_index do |agent, i|
+        agent.peer_ids.each do |peer_id|
+          j = index[peer_id]? || next
+          adjacent[i] << j
+          adjacent[j] << i
+        end
+      end
+
+      agents.each_index.map do |start|
+        distances = Array(Int32?).new(agents.size, nil)
+        distances[start] = 0
+        queue = Deque{start}
+        until queue.empty?
+          current = queue.shift
+          adjacent[current].each do |neighbour|
+            next unless distances[neighbour].nil?
+            distances[neighbour] = distances[current].not_nil! + 1
+            queue << neighbour
+          end
+        end
+        distances
+      end.to_a
+    end
+
+    # Mean of 1/distance over all ordered pairs of agents; unreachable
+    # pairs contribute 0. A single agent, or none, is trivially efficient.
+    def self.global_efficiency(agents : Array(AgentNode)) : Float64
+      return 1.0 if agents.size < 2
+      distances = hop_distances(agents)
+      total = 0.0
+      agents.size.times do |i|
+        agents.size.times do |j|
+          next if i == j
+          distances[i][j].try { |d| total += 1.0 / d }
+        end
+      end
+      total / (agents.size * (agents.size - 1))
     end
 
     private def execute_generic_task(execution : TaskExecution)

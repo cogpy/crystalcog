@@ -415,28 +415,15 @@ module OpenCog
   module PatternMatcher
     # This contains the pattern matching engine
 
-    # Match a pattern against the AtomSpace
+    # Match a pattern against the AtomSpace. Each result maps variable
+    # names (as written, e.g. "$X") to the atoms they were bound to; a
+    # pattern without variables yields one empty binding per equal atom.
     def self.match(atomspace : AtomSpace::AtomSpace, pattern : AtomSpace::Atom) : Array(Hash(String, AtomSpace::Atom))
-      bindings = [] of Hash(String, AtomSpace::Atom)
-
-      # Simple pattern matching implementation
-      atomspace.get_all_atoms.each do |atom|
-        if match_result = try_match(atom, pattern)
-          bindings << match_result
-        end
+      PatternMatching::PatternMatcher.new(atomspace).match(PatternMatching::Pattern.new(pattern)).map do |result|
+        bindings = Hash(String, AtomSpace::Atom).new
+        result.bindings.each { |variable, bound| bindings[variable.name] = bound }
+        bindings
       end
-
-      bindings
-    end
-
-    private def self.try_match(atom : AtomSpace::Atom, pattern : AtomSpace::Atom) : Hash(String, AtomSpace::Atom)?
-      # This would contain sophisticated pattern matching logic
-      # For now, simple equality check
-      if atom == pattern
-        return Hash(String, AtomSpace::Atom).new
-      end
-
-      nil
     end
   end
 

@@ -193,6 +193,11 @@ module AgentZero
       false
     end
 
+    # Ids of the agents this one holds a connection to.
+    def peer_ids : Array(String)
+      @peers.keys
+    end
+
     # Send a message to a specific peer
     def send_message_to_peer(peer_id : String, message : Message) : Bool
       peer = @peers[peer_id]?

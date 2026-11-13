@@ -112,6 +112,7 @@ module AtomSpace
             @link_count += 1
           end
 
+          atom.attach_to(self)
           enqueue_event(AtomSpaceEvent::ATOM_ADDED, atom)
           atom
         end
@@ -191,6 +192,7 @@ module AtomSpace
           @link_count -= 1
         end
 
+        atom.detach_from(self)
         enqueue_event(AtomSpaceEvent::ATOM_REMOVED, atom)
         true
       end
@@ -307,6 +309,7 @@ module AtomSpace
     # Clear all atoms
     def clear
       @mutex.synchronize do
+        @atoms_by_handle.each_value(&.detach_from(self))
         @atoms_by_handle.clear
         @atoms_by_type.clear
         @atoms_by_name.clear

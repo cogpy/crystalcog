@@ -40,6 +40,44 @@ describe CogUtil::PerformanceRegression do
     end
   end
 
+  describe "history across restarts" do
+    it "keeps the recorded metrics when the history file is reloaded" do
+      with_temp_storage do |path|
+        recorder = CogUtil::PerformanceRegression.new(storage_path: path)
+        2.times do |i|
+          session = CogUtil::PerformanceProfiler::Session.new
+          session.all_metrics["op"] = CogUtil::PerformanceProfiler::Metrics.new.tap do |m|
+            m.wall_time = 1.0
+            m.call_count = 20_u64
+            m.memory_peak = 1000_u64
+          end
+          recorder.record_metrics(session, "v#{i}")
+        end
+
+        # A new process only has the file: the baseline must come from it.
+        reloaded = CogUtil::PerformanceRegression.new(storage_path: path)
+        slow = CogUtil::PerformanceProfiler::Session.new
+        slow.all_metrics["op"] = CogUtil::PerformanceProfiler::Metrics.new.tap do |m|
+          m.wall_time = 2.0
+          m.call_count = 20_u64
+          m.memory_peak = 1000_u64
+        end
+        regressions = reloaded.analyze_regressions(slow)
+        regressions.size.should eq(1)
+        regressions[0].function_name.should eq("op")
+        regressions[0].regression_type.should eq("execution_time")
+        regressions[0].baseline_value.should eq(1.0)
+        regressions[0].change_percentage.should eq(100.0)
+
+        entry = JSON.parse(File.read(path))["data"][0]
+        parsed = CogUtil::PerformanceRegression::HistoricalData.from_json(JSON::PullParser.new(entry.to_json))
+        parsed.version.should eq("v0")
+        parsed.metrics["op"].wall_time.should eq(1.0)
+        parsed.metrics["op"].call_count.should eq(20)
+      end
+    end
+  end
+
   describe "RegressionResult" do
     it "classifies critical and warning regressions" do
       critical = CogUtil::PerformanceRegression::RegressionResult.new(

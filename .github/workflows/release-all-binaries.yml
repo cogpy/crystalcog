@@ -18,18 +18,20 @@ on:
       build_static:
         description: 'Build static binaries (Linux only)'
         required: false
-        default: 'true'
+        default: 'false'
         type: boolean
 
-env:
-  CRYSTAL_VERSION: '1.14.0'
-
-# Define all binaries to build
-# This list matches shard.yml targets
-# Least-privilege token by default; jobs that write declare their own permissions.
 permissions:
   contents: read
 
+env:
+  CRYSTAL_VERSION: '1.14.0'
+  # 1.14 has no official Linux aarch64 release asset/image.
+  CRYSTAL_ARM64_VERSION: '1.22.0'
+  CRYSTAL_WORKERS: '1'
+
+# Define all binaries to build
+# This list matches shard.yml targets
 # Trace every command so CI logs show exactly what ran and what it printed.
 defaults:
   run:
@@ -39,7 +41,7 @@ jobs:
   # Build matrix for all binaries on Linux x86_64
   build-linux-x64:
     name: Build Linux x86_64 Binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
@@ -52,7 +54,7 @@ jobs:
         path: |
           ~/.cache/crystal
           lib
-        key: crystal-release-${{ env.CRYSTAL_VERSION }}-${{ hashFiles('shard.yml') }}
+        key: crystal-release-${{ runner.os }}-${{ runner.arch }}-${{ env.CRYSTAL_VERSION }}-${{ hashFiles('shard.yml', 'shard.lock') }}
 
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
@@ -65,6 +67,7 @@ jobs:
         sudo apt-get install -y \
           libsqlite3-dev \
           librocksdb-dev \
+          libpq-dev \
           libevent-dev \
           libssl-dev \
           libgmp-dev \
@@ -74,93 +77,12 @@ jobs:
           musl-dev
 
     - name: Install dependencies
-      run: shards install --verbose --production
+      run: shards install --frozen --production
 
-    - name: Build all binaries
-      run: |
-        mkdir -p dist/linux-x64
-
-        BUILD_FLAGS="--release --no-debug"
-        if [ "${{ github.event.inputs.build_static }}" = "true" ]; then
-          BUILD_FLAGS="$BUILD_FLAGS --static"
-        fi
-
-        echo "Building with flags: $BUILD_FLAGS"
-
-        # Define all targets
-        declare -A TARGETS=(
-          # Main application
-          ["crystalcog"]="src/bin/crystalcog.cr"
-
-          # Core libraries
-          ["cogutil"]="src/cogutil/cogutil.cr"
-          ["atomspace"]="src/atomspace/atomspace.cr"
-          ["atomspace_main"]="src/atomspace/atomspace_main.cr"
-          ["opencog"]="src/opencog/opencog.cr"
-
-          # Reasoning engines
-          ["pln"]="src/pln/pln.cr"
-          ["ure"]="src/ure/ure.cr"
-
-          # Specialized components
-          ["moses"]="src/moses/moses.cr"
-          ["moses_main"]="src/moses/moses_main.cr"
-          ["attention"]="src/attention/attention.cr"
-          ["attention_main"]="src/attention/attention_main.cr"
-          ["learning"]="src/learning/learning_main.cr"
-          ["ml"]="src/ml/ml_main.cr"
-          ["ai_bridge"]="src/ai_integration/ai_bridge.cr"
-
-          # Pattern processing
-          ["pattern_matching"]="src/pattern_matching/pattern_matching_main.cr"
-          ["pattern_mining"]="src/pattern_mining/pattern_mining_main.cr"
-
-          # NLP
-          ["nlp"]="src/nlp/nlp_main.cr"
-
-          # Server applications
-          ["cogserver"]="src/bin/cogserver.cr"
-
-          # Agent-Zero
-          ["distributed_network_demo"]="src/agent-zero/distributed_network_demo.cr"
-          ["agent_zero"]="src/agent-zero/agent_zero_main.cr"
-
-          # Phase 6-7 components
-          ["spatial"]="src/spatial/spatial.cr"
-          ["temporal"]="src/temporal/temporal.cr"
-          ["behavior"]="src/behavior/behavior.cr"
-        )
-
-        SUCCESS=0
-        FAILED=0
-
-        for target in "${!TARGETS[@]}"; do
-          source="${TARGETS[$target]}"
-          output="dist/linux-x64/$target"
-
-          echo ""
-          echo "Building $target from $source..."
-
-          if [ -f "$source" ]; then
-            if crystal build --verbose --stats $BUILD_FLAGS "$source" -o "$output" 2>&1; then
-              echo "  ✓ $target built successfully"
-              SUCCESS=$((SUCCESS + 1))
-            else
-              echo "  ✗ $target build failed"
-              FAILED=$((FAILED + 1))
-            fi
-          else
-            echo "  ⚠ Source file $source not found, skipping"
-          fi
-        done
-
-        echo ""
-        echo "=== Build Summary ==="
-        echo "Successful builds: $SUCCESS"
-        echo "Failed builds: $FAILED"
-        echo ""
-        echo "Built binaries:"
-        ls -lh dist/linux-x64/
+    - name: Build all declared binaries
+      env:
+        RELEASE_BUILD_STATIC: ${{ github.event_name == 'workflow_dispatch' && inputs.build_static || false }}
+      run: bash scripts/release/build-binaries.sh dist/linux-x64
 
     - name: Create tarball
       run: |
@@ -177,62 +99,31 @@ jobs:
           dist/crystalcog-linux-x86_64.tar.gz.sha256
         retention-days: 30
 
-  # Build for Linux ARM64
+  # Native ARM64 runner; Crystal 1.14's Alpine image is x86-only.
   build-linux-arm64:
     name: Build Linux ARM64 Binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+    - name: Install native ARM64 Crystal
+      uses: crystal-lang/install-crystal@v1
+      with:
+        crystal: ${{ env.CRYSTAL_ARM64_VERSION }}
 
-    - name: Build ARM64 binaries in Docker
+    - name: Install system dependencies
       run: |
-        mkdir -p dist/linux-arm64
+        sudo apt-get update
+        sudo apt-get install -y libsqlite3-dev librocksdb-dev libpq-dev libevent-dev libssl-dev libgmp-dev libyaml-dev libpcre2-dev
 
-        docker run --rm --platform linux/arm64 \
-          -v $(pwd):/workspace \
-          -w /workspace \
-          crystallang/crystal:1.14.0-alpine \
-          sh -c '
-            apk add --no-cache sqlite-dev libevent-dev openssl-dev yaml-dev pcre2-dev gmp-dev
+    - name: Install exact locked dependencies
+      run: shards install --frozen --production
 
-            shards install --verbose --production
-
-            mkdir -p dist/linux-arm64
-
-            # Build main binaries
-            for target in crystalcog cogserver nlp pattern_matching moses; do
-              case $target in
-                crystalcog)
-                  src="src/bin/crystalcog.cr"
-                  ;;
-                cogserver)
-                  src="src/bin/cogserver.cr"
-                  ;;
-                nlp)
-                  src="src/nlp/nlp_main.cr"
-                  ;;
-                pattern_matching)
-                  src="src/pattern_matching/pattern_matching_main.cr"
-                  ;;
-                moses)
-                  src="src/moses/moses_main.cr"
-                  ;;
-              esac
-
-              if [ -f "$src" ]; then
-                echo "Building $target..."
-                crystal build --verbose --stats --release --no-debug "$src" -o "dist/linux-arm64/$target" || echo "Failed: $target"
-              fi
-            done
-
-            ls -lh dist/linux-arm64/
-          '
+    - name: Build all declared ARM64 binaries
+      run: bash scripts/release/build-binaries.sh dist/linux-arm64
 
     - name: Create ARM64 tarball
       run: |
@@ -266,54 +157,15 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        brew install sqlite3 rocksdb libevent openssl gmp libyaml pcre2
-        # Homebrew libraries are not on the default linker path on Apple Silicon
-        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
+        brew install sqlite3 rocksdb libevent openssl@3 gmp libyaml pcre2
+        echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install --verbose --production
+      run: shards install --frozen --production
 
-    - name: Build all binaries
-      run: |
-        mkdir -p dist/macos-x64
-
-        BUILD_FLAGS="--release --no-debug"
-
-        declare -A TARGETS=(
-          ["crystalcog"]="src/bin/crystalcog.cr"
-          ["cogutil"]="src/cogutil/cogutil.cr"
-          ["atomspace"]="src/atomspace/atomspace.cr"
-          ["atomspace_main"]="src/atomspace/atomspace_main.cr"
-          ["opencog"]="src/opencog/opencog.cr"
-          ["pln"]="src/pln/pln.cr"
-          ["ure"]="src/ure/ure.cr"
-          ["moses"]="src/moses/moses.cr"
-          ["moses_main"]="src/moses/moses_main.cr"
-          ["attention"]="src/attention/attention.cr"
-          ["attention_main"]="src/attention/attention_main.cr"
-          ["learning"]="src/learning/learning_main.cr"
-          ["ml"]="src/ml/ml_main.cr"
-          ["ai_bridge"]="src/ai_integration/ai_bridge.cr"
-          ["pattern_matching"]="src/pattern_matching/pattern_matching_main.cr"
-          ["pattern_mining"]="src/pattern_mining/pattern_mining_main.cr"
-          ["nlp"]="src/nlp/nlp_main.cr"
-          ["cogserver"]="src/bin/cogserver.cr"
-          ["distributed_network_demo"]="src/agent-zero/distributed_network_demo.cr"
-          ["agent_zero"]="src/agent-zero/agent_zero_main.cr"
-          ["spatial"]="src/spatial/spatial.cr"
-          ["temporal"]="src/temporal/temporal.cr"
-          ["behavior"]="src/behavior/behavior.cr"
-        )
-
-        for target in "${!TARGETS[@]}"; do
-          source="${TARGETS[$target]}"
-          if [ -f "$source" ]; then
-            echo "Building $target..."
-            crystal build --verbose --stats $BUILD_FLAGS "$source" -o "dist/macos-x64/$target" 2>&1 || echo "Failed: $target"
-          fi
-        done
-
-        ls -lh dist/macos-x64/
+    - name: Build all declared binaries
+      run: bash scripts/release/build-binaries.sh dist/macos-x64
 
     - name: Create tarball
       run: |
@@ -347,54 +199,15 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        brew install sqlite3 rocksdb libevent openssl gmp libyaml pcre2
-        # Homebrew libraries are not on the default linker path on Apple Silicon
-        echo "LIBRARY_PATH=$(brew --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
+        brew install sqlite3 rocksdb libevent openssl@3 gmp libyaml pcre2
+        echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      run: shards install --verbose --production
+      run: shards install --frozen --production
 
-    - name: Build all binaries
-      run: |
-        mkdir -p dist/macos-arm64
-
-        BUILD_FLAGS="--release --no-debug"
-
-        declare -A TARGETS=(
-          ["crystalcog"]="src/bin/crystalcog.cr"
-          ["cogutil"]="src/cogutil/cogutil.cr"
-          ["atomspace"]="src/atomspace/atomspace.cr"
-          ["atomspace_main"]="src/atomspace/atomspace_main.cr"
-          ["opencog"]="src/opencog/opencog.cr"
-          ["pln"]="src/pln/pln.cr"
-          ["ure"]="src/ure/ure.cr"
-          ["moses"]="src/moses/moses.cr"
-          ["moses_main"]="src/moses/moses_main.cr"
-          ["attention"]="src/attention/attention.cr"
-          ["attention_main"]="src/attention/attention_main.cr"
-          ["learning"]="src/learning/learning_main.cr"
-          ["ml"]="src/ml/ml_main.cr"
-          ["ai_bridge"]="src/ai_integration/ai_bridge.cr"
-          ["pattern_matching"]="src/pattern_matching/pattern_matching_main.cr"
-          ["pattern_mining"]="src/pattern_mining/pattern_mining_main.cr"
-          ["nlp"]="src/nlp/nlp_main.cr"
-          ["cogserver"]="src/bin/cogserver.cr"
-          ["distributed_network_demo"]="src/agent-zero/distributed_network_demo.cr"
-          ["agent_zero"]="src/agent-zero/agent_zero_main.cr"
-          ["spatial"]="src/spatial/spatial.cr"
-          ["temporal"]="src/temporal/temporal.cr"
-          ["behavior"]="src/behavior/behavior.cr"
-        )
-
-        for target in "${!TARGETS[@]}"; do
-          source="${TARGETS[$target]}"
-          if [ -f "$source" ]; then
-            echo "Building $target..."
-            crystal build --verbose --stats $BUILD_FLAGS "$source" -o "dist/macos-arm64/$target" 2>&1 || echo "Failed: $target"
-          fi
-        done
-
-        ls -lh dist/macos-arm64/
+    - name: Build all declared binaries
+      run: bash scripts/release/build-binaries.sh dist/macos-arm64
 
     - name: Create tarball
       run: |
@@ -460,18 +273,14 @@ jobs:
     - name: Create production Dockerfile
       run: |
         cat > Dockerfile.release << 'EOF'
-        FROM alpine:3.19
+        FROM ubuntu:24.04
 
-        RUN apk add --no-cache \
-            sqlite-libs \
-            libevent \
-            openssl \
-            libgcc \
-            libstdc++ \
-            gmp \
-            yaml \
-            pcre2 \
-            && adduser -D -u 1000 crystalcog
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates curl libsqlite3-0 librocksdb8.9 libpq5 \
+            libevent-2.1-7t64 libevent-pthreads-2.1-7t64 libssl3t64 \
+            libgcc-s1 libstdc++6 libgmp10 libyaml-0-2 libpcre2-8-0 libgc1 \
+            && rm -rf /var/lib/apt/lists/* \
+            && useradd -m -u 10001 crystalcog
 
         WORKDIR /app
 
@@ -479,7 +288,8 @@ jobs:
         COPY dist/linux-x64/ /app/bin/
 
         # Make all binaries executable
-        RUN chmod +x /app/bin/*
+        RUN find /app/bin -type f ! -name BUILD-MANIFEST.txt -exec chmod +x {} \;
+        RUN /app/bin/crystalcog --version
 
         # Add to PATH
         ENV PATH="/app/bin:$PATH"
@@ -506,31 +316,27 @@ jobs:
     - name: Create CogServer Docker image
       run: |
         cat > Dockerfile.cogserver << 'EOF'
-        FROM alpine:3.19
+        FROM ubuntu:24.04
 
-        RUN apk add --no-cache \
-            sqlite-libs \
-            libevent \
-            openssl \
-            libgcc \
-            libstdc++ \
-            gmp \
-            yaml \
-            pcre2 \
-            && adduser -D -u 1000 cogserver
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates curl libsqlite3-0 librocksdb8.9 libpq5 \
+            libevent-2.1-7t64 libevent-pthreads-2.1-7t64 libssl3t64 \
+            libgcc-s1 libstdc++6 libgmp10 libyaml-0-2 libpcre2-8-0 libgc1 \
+            && rm -rf /var/lib/apt/lists/* \
+            && useradd -m -u 10001 cogserver
 
         WORKDIR /app
 
         COPY dist/linux-x64/cogserver /app/cogserver
 
-        RUN chmod +x /app/cogserver
+        RUN chmod +x /app/cogserver && ldd /app/cogserver
 
         USER cogserver
 
         EXPOSE 18080
 
         HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-          CMD wget --no-verbose --tries=1 --spider http://localhost:18080/status || exit 1
+          CMD curl --fail --silent http://localhost:18080/status || exit 1
 
         ENTRYPOINT ["/app/cogserver"]
         EOF
@@ -551,6 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-linux-x64, build-linux-arm64, build-macos-x64, build-macos-arm64, build-docker]
     permissions:
+      actions: read
       contents: write
 
     steps:
@@ -561,6 +368,44 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: release-artifacts/
+
+    - name: Wait for main release artifacts
+      if: github.event_name == 'push'
+      id: main_run
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        for attempt in $(seq 1 60); do
+          RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?event=push&head_sha=${GITHUB_SHA}&per_page=100" \
+            --jq '.workflow_runs | if length > 0 then sort_by(.created_at)[-1] else empty end')
+          if [ -n "$RUN" ]; then
+            STATUS=$(jq -r '.status // empty' <<< "$RUN")
+            CONCLUSION=$(jq -r '.conclusion // empty' <<< "$RUN")
+
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" != "success" ]; then
+                echo "Main release workflow completed with conclusion: $CONCLUSION" >&2
+                exit 1
+              fi
+              echo "run_id=$(jq -r '.id' <<< "$RUN")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "Waiting for main release workflow to complete (attempt $attempt/60)..."
+          sleep 30
+        done
+
+        echo "Timed out waiting for the main release workflow" >&2
+        exit 1
+
+    - name: Download main release artifacts
+      if: github.event_name == 'push'
+      uses: actions/download-artifact@v4
+      with:
+        run-id: ${{ steps.main_run.outputs.run_id }}
+        github-token: ${{ github.token }}
+        path: release-main-artifacts/
 
     - name: Get version
       id: get_version
@@ -586,36 +431,17 @@ jobs:
 
         ## What's Included
 
-        This release includes **23 binaries** built for multiple platforms:
+        This release builds the **21 targets declared in shard.yml** on each platform.
+        Each archive includes BUILD-MANIFEST.txt with the exact compiler, architecture, and executable names:
 
-        ### Core Components
-        - **crystalcog** - Main application
-        - **cogserver** - REST API server with WebSocket support
-        - **atomspace** - Hypergraph knowledge store
-        - **opencog** - Reasoning interface
+        Executable commands include `crystalcog`, `cogserver`, `cogshell`, `profiler`,
+        `nlp`, `pattern_matching`, `pattern_mining`, `distributed_network_demo`,
+        `spatial`, `temporal`, and `behavior`.
 
-        ### Reasoning Engines
-        - **pln** - Probabilistic Logic Networks
-        - **ure** - Unified Rule Engine
-        - **moses** - Meta-Optimizing Semantic Evolutionary Search
-        - **pattern_matching** - Pattern matching engine
-        - **pattern_mining** - Pattern discovery
-
-        ### AI Components
-        - **attention** - ECAN attention allocation
-        - **nlp** - Natural language processing
-        - **ml** - Machine learning integration
-        - **learning** - Concept learning
-        - **ai_bridge** - External AI system bridges
-
-        ### Distributed Systems
-        - **agent_zero** - Agent-Zero main
-        - **distributed_network_demo** - Distributed network demonstration
-
-        ### Phase 6-7 Components
-        - **spatial** - Spatial reasoning
-        - **temporal** - Temporal reasoning
-        - **behavior** - Goal-oriented behavior planning
+        The manifest also builds library entry-point artifacts named `cogutil_bin`,
+        `atomspace_bin`, `opencog_bin`, `pln_bin`, `ure_bin`, `moses_bin`,
+        `attention_bin`, `learning_bin`, `ml_bin`, and `ai_integration_bin`.
+        These artifacts are not promised to provide standalone interactive CLIs.
 
         ## Platform Support
 
@@ -671,6 +497,9 @@ jobs:
         mkdir -p release-files
         find release-artifacts/ -name "*.tar.gz" -exec cp {} release-files/ \;
         find release-artifacts/ -name "*.sha256" -exec cp {} release-files/ \;
+        if [ -d release-main-artifacts ]; then
+          find release-main-artifacts/ -name "*.tar.gz" -exec cp {} release-files/ \;
+        fi
         ls -lh release-files/
 
     - name: Create Release
@@ -704,7 +533,7 @@ jobs:
 
         # Pull and test images
         docker pull ghcr.io/${{ github.repository }}:$VERSION
-        docker run --rm ghcr.io/${{ github.repository }}:$VERSION --version || echo "Version check completed"
+        docker run --rm ghcr.io/${{ github.repository }}:$VERSION --version
 
         docker pull ghcr.io/${{ github.repository }}/cogserver:$VERSION
         echo "Docker images verified"
@@ -724,4 +553,4 @@ jobs:
         echo "- cogserver: ✅" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Binaries Included" >> $GITHUB_STEP_SUMMARY
-        echo "23 binaries across all platforms" >> $GITHUB_STEP_SUMMARY
+        echo "21 declared binaries per platform; inspect BUILD-MANIFEST.txt" >> $GITHUB_STEP_SUMMARY
