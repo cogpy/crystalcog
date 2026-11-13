@@ -96,6 +96,39 @@ describe "AtomWire content addresses" do
   end
 end
 
+describe "DistributedAtomSpaceCluster message delivery" do
+  it "serves every connection when several are waiting at once" do
+    cluster = AtomSpace::DistributedAtomSpaceCluster.new(cluster_id: "burst", local_atomspace: AtomSpace::AtomSpace.new,
+      host: "127.0.0.1", adaptive_heartbeat_enabled: false)
+    seen = [] of Int32
+    cluster.on_message("burst") do |message, _client|
+      seen << message["n"].as_i
+      nil
+    end
+    cluster.start
+    begin
+      sleep 100.milliseconds
+      port = cluster.local_node.port
+      # Each fiber stops inside its connect, so all twenty connections are
+      # queued on the port before the server gets to accept the first.
+      20.times do |n|
+        spawn do
+          socket = TCPSocket.new("127.0.0.1", port)
+          socket.puts({"type" => "burst", "n" => n}.to_json)
+          socket.close
+        end
+      end
+      deadline = Time.monotonic + 10.seconds
+      until seen.size == 20 || Time.monotonic > deadline
+        sleep 20.milliseconds
+      end
+      seen.sort.should eq((0...20).to_a)
+    ensure
+      cluster.stop
+    end
+  end
+end
+
 describe "DistributedStorageNode across two nodes" do
   it "partitions atoms so each lives on exactly one node and is reachable from both" do
     two_nodes(AtomSpace::PartitionStrategy::HashBased, AtomSpace::ReplicationStrategy::SingleCopy) do |nodes|

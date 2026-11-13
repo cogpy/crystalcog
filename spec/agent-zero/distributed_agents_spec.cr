@@ -627,12 +627,48 @@ describe "Distributed Agent Network Integration" do
     # Test with agents that stop unexpectedly
     agent = network.create_agent("UnstableAgent")
     if agent
-      agent.stop # Stop immediately
+      agent.stop        # Stop immediately
       sleep 0.2.seconds # Allow fibers to clean up
 
       # Network should handle this gracefully
       status = network.network_status
       status.agent_count.should eq(1) # Still counted but not active
+    end
+  end
+end
+
+describe "AgentZero::DiscoveryServer over the network" do
+  it "answers every request when several connections are waiting at once" do
+    port = TCPServer.open("127.0.0.1", 0) { |probe| probe.local_address.port }
+    server = AgentZero::DiscoveryServer.new("127.0.0.1", port)
+    server.start
+    begin
+      sleep 100.milliseconds
+      replies = Channel(String?).new(12)
+      12.times do |n|
+        spawn do
+          reply = begin
+            socket = TCPSocket.new("127.0.0.1", port)
+            socket.read_timeout = 5.seconds
+            socket.puts({"command" => "register", "agent" => {
+              "id" => "burst-#{n}", "name" => "Burst #{n}", "host" => "127.0.0.1", "port" => 20000 + n,
+              "capabilities" => ["reasoning"], "trust_level" => 0.5,
+            }}.to_json)
+            line = socket.gets
+            socket.close
+            line
+          rescue
+            nil
+          end
+          replies.send(reply)
+        end
+      end
+
+      statuses = Array.new(12) { replies.receive.try { |line| JSON.parse(line)["status"].as_s } }
+      statuses.should eq(["success"] * 12)
+      server.list_agents.map(&.agent_id).sort.should eq((0...12).map { |n| "burst-#{n}" }.sort)
+    ensure
+      server.stop
     end
   end
 end

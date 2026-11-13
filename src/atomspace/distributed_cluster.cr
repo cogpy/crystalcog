@@ -437,9 +437,10 @@ module AtomSpace
       while @running && (server = @server)
         begin
           client = server.accept
-          spawn do
-            handle_cluster_client(client)
-          end
+          # The call form hands this connection to the fiber. A `spawn do`
+          # block would share the loop's `client` variable, and when a
+          # second connection is already waiting the first is never served.
+          spawn handle_cluster_client(client)
         rescue ex
           break unless @running
           CogUtil::Logger.error("Cluster server error: #{ex.message}")

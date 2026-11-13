@@ -345,9 +345,10 @@ module AgentZero
       while @running && (server = @server)
         begin
           client = server.accept
-          spawn do
-            handle_client_connection(client)
-          end
+          # The call form hands this connection to the fiber. A `spawn do`
+          # block would share the loop's `client` variable, and when a
+          # second connection is already waiting the first is never served.
+          spawn handle_client_connection(client)
         rescue ex
           break unless @running
           CogUtil::Logger.error("Server accept error: #{ex.message}")
