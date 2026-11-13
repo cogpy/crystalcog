@@ -146,3 +146,53 @@ describe PLN::InferenceContext do
     elapsed.should be < 20.seconds
   end
 end
+
+describe "PLN rules with several second premises" do
+  it "draws a new conclusion on each application until none is left" do
+    space = AtomSpace::AtomSpace.new
+    tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+    a = space.add_concept_node("a")
+    b = space.add_concept_node("b")
+    premise = space.add_inheritance_link(a, b, tv)
+    targets = %w(c1 c2 c3).map { |name| space.add_concept_node(name) }
+    targets.each { |target| space.add_inheritance_link(b, target, tv) }
+    rule = PLN::DeductionRule.new
+
+    drawn = Array.new(3) { rule.apply(premise, space).not_nil!.to_s }
+    drawn.should eq(targets.map { |target| %((INHERITANCELINK (CONCEPTNODE "a") #{target})) })
+    size = space.size
+
+    # Nothing new is left: the first conclusion comes back and nothing is added.
+    rule.apply(premise, space).not_nil!.to_s.should eq(drawn.first)
+    space.size.should eq(size)
+    space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, targets.last]).not_nil!.truth_value.strength.should be_close(0.64, 1e-12)
+  end
+
+  it "does the same for abduction" do
+    space = AtomSpace::AtomSpace.new
+    tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
+    a = space.add_concept_node("a")
+    b = space.add_concept_node("b")
+    premise = space.add_inheritance_link(a, b, tv)
+    others = %w(c1 c2).map { |name| space.add_concept_node(name) }
+    others.each { |other| space.add_inheritance_link(other, b, tv) }
+    rule = PLN::AbductionRule.new
+
+    2.times { rule.apply(premise, space).should_not be_nil }
+    others.each { |other| space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, other]).should_not be_nil }
+  end
+
+  it "finds links without creating or changing anything" do
+    space = AtomSpace::AtomSpace.new
+    a = space.add_concept_node("a")
+    b = space.add_concept_node("b")
+    link = space.add_inheritance_link(a, b, AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    before = AtomSpace::ConceptNode.new("probe").handle
+    space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, b]).should be(link)
+    space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [b, a]).should be_nil
+    space.find_link(AtomSpace::AtomType::LIST_LINK, [a, b]).should be_nil
+    # No atom was built for the lookups.
+    (AtomSpace::ConceptNode.new("probe").handle - before).should eq(1)
+    link.truth_value.confidence.should eq(0.9)
+  end
+end

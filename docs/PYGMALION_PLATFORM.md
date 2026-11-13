@@ -125,7 +125,7 @@ The Paphos backend also has an event stream and named service functions, which u
 | `GET /actions` | The service functions: name and description. |
 | `POST /actions/:name` | Run one with `{"action": {"args": {...}}}`. A refusal is a 422, an unknown name a 404. |
 
-- Events belong to the user who published them. The server keeps the last 1,000 in memory.
+- Events belong to the user who published them. The server keeps the last 1,000; with a data file they survive a restart and ids go on counting, so a client's `after` stays valid.
 - Built-in functions are `echo`, `stats`, `snapshot.copy` and `events.clear`. A host program adds its own with `server.register_action(name, description) { |args, user_id| ... }` and refuses a call by raising `PaphosBackend::Server::ActionError`.
 - Every call records an `action_executed` event.
 

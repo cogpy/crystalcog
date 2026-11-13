@@ -198,37 +198,45 @@ module PLN
       apply_from_candidates(premise, atomspace, context.links_from(premise[1]))
     end
 
+    # Draws the first conclusion not yet in the AtomSpace, so every chain
+    # through B gets its turn over successive calls. When all of them are
+    # known already, the first chain's conclusion is returned, with its
+    # truth value merged in as `add_link` does.
     private def apply_from_candidates(premise : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, inheritance_links : Array(AtomSpace::Atom)) : AtomSpace::Atom?
       return nil unless premise.is_a?(AtomSpace::Link)
       return nil unless premise.arity == 2
 
       # Look for another inheritance link with matching middle term.
       a, b = premise[0], premise[1]
+      first_match : AtomSpace::Atom? = nil
 
       inheritance_links.each do |link|
         next unless link.is_a?(AtomSpace::Link)
         next unless link.arity == 2
+        next unless b == link[0] # Found matching chain A->B, B->C
 
-        b2, c = link[0], link[1]
-        next unless b == b2 # Found matching chain A->B, B->C
-
-        tv_ab = premise.truth_value
-        tv_bc = link.truth_value
-
-        new_strength = Formulas.deduction(tv_ab.strength, tv_bc.strength,
-          Formulas.term_probability(b), Formulas.term_probability(c))
-        new_confidence = tv_ab.confidence * tv_bc.confidence * 0.9 # Discount factor
-
-        new_tv = AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
-
-        return atomspace.add_link(
-          AtomSpace::AtomType::INHERITANCE_LINK,
-          [a, c],
-          new_tv
-        )
+        first_match ||= link
+        next if atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, link[1]])
+        return conclude(premise, link, atomspace)
       end
 
-      nil
+      first_match.try { |link| conclude(premise, link, atomspace) }
+    end
+
+    private def conclude(premise : AtomSpace::Atom, link : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
+      a, b, c = premise.outgoing[0], premise.outgoing[1], link.outgoing[1]
+      tv_ab = premise.truth_value
+      tv_bc = link.truth_value
+
+      new_strength = Formulas.deduction(tv_ab.strength, tv_bc.strength,
+        Formulas.term_probability(b), Formulas.term_probability(c))
+      new_confidence = tv_ab.confidence * tv_bc.confidence * 0.9 # Discount factor
+
+      atomspace.add_link(
+        AtomSpace::AtomType::INHERITANCE_LINK,
+        [a, c],
+        AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
+      )
     end
   end
 
@@ -380,42 +388,47 @@ module PLN
       apply_from_candidates(premise, atomspace, context.links_to(premise[1]))
     end
 
+    # As for deduction: the first conclusion that is new, or failing that
+    # the first pair's conclusion with its evidence merged in.
     private def apply_from_candidates(premise : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, inheritance_links : Array(AtomSpace::Atom)) : AtomSpace::Atom?
       return nil unless premise.is_a?(AtomSpace::Link)
       return nil unless premise.arity == 2
 
       # premise is A->B
       a, b = premise[0], premise[1]
+      first_match : AtomSpace::Atom? = nil
 
       inheritance_links.each do |link|
         next unless link.is_a?(AtomSpace::Link)
         next unless link.arity == 2
         next if link == premise # Don't use the same premise
 
-        c, b2 = link[0], link[1]
+        c = link[0]
         # Found C->B where B matches and C is different from A
-        next unless b == b2 && a != c
+        next unless b == link[1] && a != c
 
-        tv_ab = premise.truth_value
-        tv_cb = link.truth_value
-
-        new_strength = Formulas.abduction(tv_ab.strength, tv_cb.strength,
-          Formulas.term_probability(a), Formulas.term_probability(b), Formulas.term_probability(c))
-        new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
-
-        new_tv = AtomSpace::SimpleTruthValue.new(
-          new_strength.clamp(0.0, 1.0),
-          new_confidence.clamp(0.0, 1.0)
-        )
-
-        return atomspace.add_link(
-          AtomSpace::AtomType::INHERITANCE_LINK,
-          [a, c],
-          new_tv
-        )
+        first_match ||= link
+        next if atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, c])
+        return conclude(premise, link, atomspace)
       end
 
-      nil
+      first_match.try { |link| conclude(premise, link, atomspace) }
+    end
+
+    private def conclude(premise : AtomSpace::Atom, link : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
+      a, b, c = premise.outgoing[0], premise.outgoing[1], link.outgoing[0]
+      tv_ab = premise.truth_value
+      tv_cb = link.truth_value
+
+      new_strength = Formulas.abduction(tv_ab.strength, tv_cb.strength,
+        Formulas.term_probability(a), Formulas.term_probability(b), Formulas.term_probability(c))
+      new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
+
+      atomspace.add_link(
+        AtomSpace::AtomType::INHERITANCE_LINK,
+        [a, c],
+        AtomSpace::SimpleTruthValue.new(new_strength.clamp(0.0, 1.0), new_confidence.clamp(0.0, 1.0))
+      )
     end
   end
 

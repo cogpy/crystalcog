@@ -75,6 +75,33 @@ describe Vision::JPEG do
     end
   end
 
+  {
+    "scene_progressive"   => "chroma halved both ways",
+    "progressive_444"     => "full-resolution chroma",
+    "progressive_restart" => "restart markers",
+  }.each do |name, what|
+    it "decodes progressive #{name} (#{what})" do
+      bytes = fixture("#{name}.jpg")
+      # A progressive frame, sent over several scans.
+      bytes.to_a.each_cons(2).count { |pair| pair == [0xFF_u8, 0xC2_u8] }.should eq(1)
+      bytes.to_a.each_cons(2).count { |pair| pair == [0xFF_u8, 0xDA_u8] }.should be > 3
+      image = Vision::Image.from_jpeg(bytes)
+      largest_difference(image, Vision::Image.from_ppm(fixture("#{name}.ppm"))).should be <= 3
+    end
+  end
+
+  it "decodes a progressive grayscale file" do
+    image = Vision::Image.from_jpeg(fixture("progressive_gray.jpg"))
+    image.gray?.should be_true
+    largest_difference(image, Vision::Image.from_ppm(fixture("progressive_gray.pgm"))).should be <= 2
+  end
+
+  it "gives nearly the same picture for the progressive and the plain encoding" do
+    plain = Vision::Image.from_jpeg(fixture("scene_444.jpg"))
+    progressive = Vision::Image.from_jpeg(fixture("progressive_444.jpg"))
+    largest_difference(plain, progressive).should be <= 3
+  end
+
   it "decodes a grayscale file to one channel" do
     image = Vision::Image.from_jpeg(fixture("scene_gray.jpg"))
     image.gray?.should be_true
@@ -107,9 +134,18 @@ describe Vision::JPEG do
   end
 
   it "says which kinds of JPEG it does not read" do
-    expect_raises(Vision::ImageError, "progressive JPEG is not supported") do
-      Vision::Image.from_jpeg(fixture("scene_progressive.jpg"))
+    jpeg = fixture("scene_420.jpg")
+    frame = (0...jpeg.size - 1).find! { |i| jpeg[i] == 0xFF && jpeg[i + 1] == 0xC0 }
+    # The same file with its frame marked as arithmetic-coded, then as lossless.
+    {0xC9_u8, 0xC3_u8}.each do |marker|
+      other = jpeg.dup
+      other[frame + 1] = marker
+      expect_raises(Vision::ImageError, "lossless, hierarchical or arithmetic-coded") { Vision::Image.from_jpeg(other) }
     end
+    # Twelve bits per sample.
+    deep = jpeg.dup
+    deep[frame + 4] = 12_u8
+    expect_raises(Vision::ImageError, "only 8-bit JPEG is supported") { Vision::Image.from_jpeg(deep) }
     expect_raises(Vision::ImageError, "not a JPEG file") { Vision::Image.from_jpeg(fixture("scene.png")) }
   end
 

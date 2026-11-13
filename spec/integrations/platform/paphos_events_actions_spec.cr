@@ -94,6 +94,69 @@ describe "Paphos events API" do
   end
 end
 
+describe "Paphos events across a restart" do
+  it "keeps the events and goes on numbering after them" do
+    path = File.tempname("paphos-events", ".json")
+    begin
+      last_id = 0_i64
+      first = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path).start
+      begin
+        ada = client_for(first, "ada@example.com")
+        ada.publish_event("atom_updates", {"atom" => "cat"})
+        last_id = ada.publish_event("cognitive_state", {"mood" => "calm"})["id"].as_i64
+      ensure
+        first.stop
+      end
+
+      second = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path).start
+      begin
+        ada = PaphosBackend::Client.new(second.url)
+        ada.token = ada.login("ada@example.com", "secret123")
+        ada.events.map { |event| {event["type"].as_s, event["data"].as_h.values.first.as_s} }.should eq([
+          {"atom_updates", "cat"}, {"cognitive_state", "calm"},
+        ])
+        # A client that had read everything sees only what is new.
+        ada.events(after: last_id).should be_empty
+        ada.publish_event("atom_updates", {"atom" => "dog"})["id"].as_i64.should eq(last_id + 1)
+        ada.events(after: last_id).size.should eq(1)
+
+        ada.call_action("events.clear")["removed"].should eq("3")
+      ensure
+        second.stop
+      end
+
+      # Clearing is kept too; the action's own event came after the clear.
+      third = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path).start
+      begin
+        ada = PaphosBackend::Client.new(third.url)
+        ada.token = ada.login("ada@example.com", "secret123")
+        ada.events.map { |event| event["data"]["action"].as_s }.should eq(["events.clear"])
+      ensure
+        third.stop
+      end
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
+  it "reads a data file written before events were stored" do
+    path = File.tempname("paphos-old", ".json")
+    begin
+      File.write(path, %({"snapshots":[],"users":[],"characters":[],"chats":[],"messages":[],"next_user_id":1,"next_message_id":1}))
+      server = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path).start
+      begin
+        ada = client_for(server, "ada@example.com")
+        ada.events.should be_empty
+        ada.publish_event("atom_updates")["id"].as_i64.should eq(1)
+      ensure
+        server.stop
+      end
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+end
+
 describe "Paphos actions API" do
   it "lists and runs service functions" do
     with_paphos_server do |server|

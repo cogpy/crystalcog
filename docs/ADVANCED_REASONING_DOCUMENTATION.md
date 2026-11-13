@@ -20,7 +20,7 @@ The URE (Unified Rule Engine) now includes sophisticated reasoning capabilities 
 - **Goal-Directed Reasoning**: Prove specific targets through backward search
 
 #### Advanced Features
-- **Sophisticated Unification**: Handles variables and structural matching
+- **Unification** (`URE::Unifier`): first-order unification with variables on either side, one value per variable and the occurs check; `resolve` applies bindings
 - **Virtual Premise Creation**: Creates intermediate goals for backward search
 - **Proof Tree Generation**: Maintains inference paths and validation
 - **Meta-Rule Support**: Framework for rule expansion and composition
@@ -97,6 +97,8 @@ groundings.each do |binding|
   puts "Found: #{binding["$x"].name}"
 end
 ```
+
+Each grounding comes from one ground atom the pattern unifies with. Atoms that contain variables, the stored pattern included, are not groundings. A variable used twice must stand for the same atom both times.
 
 ### Mixed Inference Strategies
 ```crystal

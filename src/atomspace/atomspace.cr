@@ -352,6 +352,14 @@ module AtomSpace
       end
     end
 
+    # The stored link of this type over exactly these atoms, if there is
+    # one. Unlike `add_link` it changes nothing and builds no atom.
+    def find_link(type : AtomType, outgoing : Array(Atom)) : Atom?
+      @mutex.synchronize do
+        @atoms_by_outgoing[outgoing.map(&.handle)]?.try(&.find { |atom| atom.type == type })
+      end
+    end
+
     # Specific atom creation methods
     def add_concept_node(name : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
       node = ConceptNode.new(name, tv)
