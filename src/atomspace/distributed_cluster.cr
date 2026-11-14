@@ -29,6 +29,21 @@ module AtomSpace
     LEADER_LOST
   end
 
+  # One entry of a cluster's replicated log: the term of the leader that
+  # took it in, what kind of entry it is, and what it carries. A "command"
+  # is something a member proposed, an "atom" an atom to be placed in
+  # every member's AtomSpace, and a "term" entry is the one a new leader
+  # opens its term with.
+  record ClusterLogEntry, term : UInt64, kind : String, data : JSON::Any do
+    def to_h : Hash(String, JSON::Any)
+      {"term" => JSON::Any.new(term.to_i64), "kind" => JSON::Any.new(kind), "data" => data}
+    end
+
+    def self.from(raw : JSON::Any) : ClusterLogEntry
+      new(raw["term"].as_i64.to_u64, raw["kind"].as_s, raw["data"])
+    end
+  end
+
   # What a node is in the election of a leader.
   enum ClusterRole
     Follower
@@ -209,8 +224,10 @@ module AtomSpace
     # held in numbered terms: a node votes once per term, a candidate needs
     # more than half of the members it knows, and whoever sees a higher
     # term than its own gives way to it. Two leaders can therefore never
-    # hold the same term. (This is the election half of Raft; there is no
-    # replicated log.)
+    # hold the same term. A vote goes only to a candidate whose log is at
+    # least as far along as the voter's, so a new leader has every entry
+    # the members agreed on. (This is the election half of Raft; the log
+    # half is further down.)
     getter term : UInt64 = 0_u64
     getter role : ClusterRole = ClusterRole::Follower
     # The leader this node follows, itself when it leads, nil when it
@@ -224,6 +241,26 @@ module AtomSpace
     property election_timeout : Time::Span? = nil
     # How long a candidate waits for one member's vote.
     property vote_timeout : Time::Span = 1.second
+
+    # The replicated log. The leader takes in entries and hands them to
+    # the others; an entry is committed once more than half of the members
+    # hold it, and every member applies the committed entries in the same
+    # order. Entries are numbered from 1.
+    @log = [] of ClusterLogEntry
+    # How many entries, from the first, this node knows to be committed.
+    getter commit_index : UInt64 = 0_u64
+    # How many of them it has applied.
+    getter last_applied : UInt64 = 0_u64
+    # As leader: for each member, the entry to hand it next and how many
+    # entries it is known to hold.
+    @next_index = Hash(String, UInt64).new
+    @match_index = Hash(String, UInt64).new
+    @replication_locks = Hash(String, Mutex).new
+    @commit_handlers = [] of Proc(UInt64, JSON::Any, Nil)
+    @applying = false
+    @replicating = false
+    # How long the leader waits for one member to answer for the log.
+    property replication_timeout : Time::Span = 1.second
 
     def initialize(@cluster_id : String, @local_atomspace : AtomSpace,
                    host : String = "localhost", port : Int32 = 0,
@@ -397,6 +434,9 @@ module AtomSpace
         "term"                       => JSON::Any.new(@term.to_i64),
         "role"                       => JSON::Any.new(@role.to_s),
         "leader_id"                  => JSON::Any.new(@leader_id),
+        "log_size"                   => JSON::Any.new(@log.size.to_i64),
+        "commit_index"               => JSON::Any.new(@commit_index.to_i64),
+        "last_applied"               => JSON::Any.new(@last_applied.to_i64),
       }
 
       stats
@@ -515,6 +555,10 @@ module AtomSpace
         handle_vote_request(message, client)
       when "leader_announce"
         handle_leader_announce(message)
+      when "log_append"
+        handle_log_append(message, client)
+      when "log_propose"
+        handle_log_propose(message, client)
       when "conflict_resolution"
         handle_conflict_resolution(message)
       else
@@ -998,7 +1042,10 @@ module AtomSpace
         follow(@node_id)
         announce_leadership
         CogUtil::Logger.info("Node #{@node_id} leads cluster #{@cluster_id} in term #{term} with #{votes} of #{members.size} votes")
-        true
+        open_term
+        # Opening the term talks to the members; a higher term may have
+        # turned up meanwhile.
+        @term == term && leader?
       else
         @role = ClusterRole::Follower if @term == term && @role.candidate?
         false
@@ -1018,7 +1065,9 @@ module AtomSpace
         socket = TCPSocket.new(node.host, node.port, connect_timeout: @vote_timeout)
         begin
           socket.read_timeout = @vote_timeout
-          socket.puts({"type" => "vote_request", "term" => term.to_i64, "candidate_id" => @node_id}.to_json)
+          socket.puts({"type" => "vote_request", "term" => term.to_i64, "candidate_id" => @node_id,
+                       "last_log_index" => @log.size.to_i64,
+                       "last_log_term" => (@log.last?.try(&.term) || 0_u64).to_i64}.to_json)
           if line = socket.gets
             answer = JSON.parse(line)
             theirs = answer["term"].as_i64.to_u64
@@ -1034,14 +1083,19 @@ module AtomSpace
       answers.send(granted)
     end
 
-    # One vote per term, for whoever asks first. A candidate of an older
-    # term is told the newer one.
+    # One vote per term, for whoever asks first and has a log at least as
+    # far along as this node's: a later last term, or the same and no
+    # fewer entries. A candidate of an older term is told the newer one.
     private def handle_vote_request(message : JSON::Any, client : TCPSocket?)
       term = message["term"].as_i64.to_u64
       candidate = message["candidate_id"].as_s
       give_way(term) if term > @term
 
-      granted = term == @term && (@voted_for.nil? || @voted_for == candidate)
+      their_last = message["last_log_term"]?.try(&.as_i64.to_u64) || 0_u64
+      their_size = message["last_log_index"]?.try(&.as_i64.to_u64) || 0_u64
+      my_last = @log.last?.try(&.term) || 0_u64
+      far_enough = their_last > my_last || (their_last == my_last && their_size >= @log.size)
+      granted = term == @term && far_enough && (@voted_for.nil? || @voted_for == candidate)
       if granted
         @voted_for = candidate
         # Having voted, give the candidate time to win before standing.
@@ -1095,12 +1149,370 @@ module AtomSpace
         break unless @running
         if leader?
           announce_leadership
+          # Bring along whoever fell behind, without holding up the next
+          # announcement while a member is slow to answer.
+          spawn keep_up unless @replicating
         elsif Time.monotonic - @last_leader_contact >= patience
           @last_leader_contact = Time.monotonic
           patience = timeout * (1.0 + rand)
           start_election
         end
       end
+    end
+
+    # ------------------------------------------------------ replicated log
+
+    def log_size : UInt64
+      @log.size.to_u64
+    end
+
+    # The term of each log entry, in order.
+    def log_terms : Array(UInt64)
+      @log.map(&.term)
+    end
+
+    # The commands the members have agreed on, in the order every member
+    # applies them.
+    def committed : Array(JSON::Any)
+      @log.first(@commit_index).select { |entry| entry.kind == "command" }.map(&.data)
+    end
+
+    # Called on this node for every committed command, in log order, with
+    # the entry's number and the command.
+    def on_commit(&handler : UInt64, JSON::Any -> Nil)
+      @commit_handlers << handler
+    end
+
+    # Put a command to the cluster. The leader takes it into its log and
+    # hands it to the others; any other member passes it to the leader it
+    # follows. Returns the entry's number once more than half of the
+    # members hold it and those that answered have been told, or nil when
+    # that could not be established: no leader, no majority within the
+    # time allowed, or a change of leader on the way. After nil the
+    # command may still be committed later.
+    def propose(command) : UInt64?
+      data = command.is_a?(JSON::Any) ? command : JSON.parse(command.to_json)
+      submit("command", data)
+    end
+
+    # Add an atom to every member's AtomSpace through the log. All
+    # members place it in the same order, so they end with the same truth
+    # value without resolving conflicts: an atom that is already there
+    # takes the truth value given, and its parts are used as they are.
+    # Returns this node's atom once that is done, nil as `propose` does.
+    def add_atom_in_order(atom : Atom) : Atom?
+      index = submit("atom", JSON::Any.new(serialize_atom(atom))) || return nil
+      @last_applied >= index ? stored(atom) : nil
+    end
+
+    # As leader, hand every member the entries it lacks and the commit
+    # point. Returns how many of the others are up to date.
+    def replicate : Int32
+      return 0 unless @running && leader?
+      before = @commit_index
+      advance_commit
+      reached = sync(other_members)
+      reached = sync(reached) if @commit_index > before && leader?
+      reached.size
+    end
+
+    # The leader's regular round, one at a time.
+    private def keep_up : Nil
+      return if @replicating
+      @replicating = true
+      begin
+        replicate
+      ensure
+        @replicating = false
+      end
+    end
+
+    private def other_members : Array(ClusterNodeInfo)
+      @cluster_nodes.values.reject { |node| node.id == @node_id }
+    end
+
+    private def submit(kind : String, data : JSON::Any) : UInt64?
+      return nil unless @running
+      return take_in(kind, data) if leader?
+
+      target = leader || return nil
+      answer = request(target, {"type" => "log_propose", "kind" => kind, "data" => data}, @replication_timeout * 4) || return nil
+      answer["index"]?.try(&.as_i64?).try(&.to_u64)
+    end
+
+    # As leader: append an entry, hand it round, and say whether it was
+    # committed in this term.
+    private def take_in(kind : String, data : JSON::Any) : UInt64?
+      return nil unless @running && leader?
+      term = @term
+      @log << ClusterLogEntry.new(term, kind, data)
+      index = @log.size.to_u64
+      settle_log
+      @term == term && @commit_index >= index ? index : nil
+    end
+
+    # A new leader opens its term with an entry of its own. Entries are
+    # committed by counting only in the leader's own term, so this is what
+    # settles whatever earlier leaders left behind.
+    private def open_term : Nil
+      @next_index.clear
+      @match_index.clear
+      @log << ClusterLogEntry.new(@term, "term", JSON::Any.new(@node_id))
+      settle_log
+    end
+
+    # Hand the log round, and tell the members that answered when that
+    # moved the commit point.
+    private def settle_log : Nil
+      before = @commit_index
+      advance_commit
+      reached = sync(other_members)
+      sync(reached) if @commit_index > before && leader?
+    end
+
+    # Bring each of these members up to date, all at once; those that
+    # are, when it is done.
+    private def sync(nodes : Array(ClusterNodeInfo)) : Array(ClusterNodeInfo)
+      reached = [] of ClusterNodeInfo
+      return reached if nodes.empty?
+      term = @term
+      answers = Channel({ClusterNodeInfo, Bool}).new(nodes.size)
+      nodes.each { |node| spawn sync_node(node, term, answers) }
+      nodes.size.times do
+        node, up_to_date = answers.receive
+        reached << node if up_to_date
+      end
+      reached
+    end
+
+    private def sync_node(node : ClusterNodeInfo, term : UInt64, answers : Channel({ClusterNodeInfo, Bool})) : Nil
+      up_to_date = false
+      begin
+        up_to_date = bring_up_to_date(node, term)
+      rescue ex
+        CogUtil::Logger.debug("Log not handed to node #{node.id}: #{ex.message}")
+      end
+      answers.send({node, up_to_date})
+    end
+
+    # Hand one member what follows the entries it is known to hold. Each
+    # message names the entry before the new ones; a member whose log does
+    # not have that entry says how far its log goes, and the leader starts
+    # from there.
+    private def bring_up_to_date(node : ClusterNodeInfo, term : UInt64) : Bool
+      lock = @replication_locks[node.id] ||= Mutex.new
+      lock.synchronize do
+        loop do
+          return false unless @running && leader? && @term == term
+          size = @log.size.to_u64
+          following = Math.min(@next_index[node.id]? || size + 1, size + 1)
+          before = following - 1
+          entries = @log[before.to_i..]
+          message = {
+            "type"       => "log_append",
+            "term"       => term.to_i64,
+            "leader_id"  => @node_id,
+            "prev_index" => before.to_i64,
+            "prev_term"  => (before > 0 ? @log[before - 1].term : 0_u64).to_i64,
+            "entries"    => entries.map(&.to_h),
+            "commit"     => @commit_index.to_i64,
+          }
+          answer = request(node, message, @replication_timeout) || return false
+          theirs = answer["term"].as_i64.to_u64
+          if theirs > @term
+            give_way(theirs)
+            return false
+          end
+          return false unless leader? && @term == term
+
+          if answer["success"].as_bool
+            held = before + entries.size
+            @match_index[node.id] = Math.max(@match_index[node.id]? || 0_u64, held)
+            @next_index[node.id] = held + 1
+            advance_commit
+            return true
+          end
+          return false if before == 0
+          have = answer["have"]?.try(&.as_i64.to_u64) || before - 1
+          @next_index[node.id] = Math.min(before, have + 1)
+        end
+      end
+    end
+
+    # As leader: the furthest entry of this term that more than half of
+    # the members hold is committed, and with it all before it.
+    private def advance_commit : Nil
+      return unless leader?
+      needed = @cluster_nodes.size // 2 + 1
+      others = other_members
+      at = @log.size.to_u64
+      while at > @commit_index && @log[at - 1].term == @term
+        holders = 1 + others.count { |node| (@match_index[node.id]? || 0_u64) >= at }
+        if holders >= needed
+          @commit_index = at
+          apply_committed
+          break
+        end
+        at -= 1
+      end
+    end
+
+    # Apply what is committed and not yet applied, in order, once.
+    private def apply_committed : Nil
+      return if @applying
+      @applying = true
+      begin
+        while @last_applied < @commit_index
+          @last_applied += 1
+          index = @last_applied
+          entry = @log[index - 1]
+          case entry.kind
+          when "command"
+            @commit_handlers.each do |handler|
+              begin
+                handler.call(index, entry.data)
+              rescue ex
+                CogUtil::Logger.error("Commit handler failed on entry #{index}: #{ex.message}")
+              end
+            end
+          when "atom"
+            place(entry.data)
+          end
+        end
+      ensure
+        @applying = false
+      end
+    end
+
+    # A leader hands over entries. They are taken when this node's log
+    # has the entry they follow; an entry already there from another term
+    # goes, with all after it, since that leader did not prevail.
+    private def handle_log_append(message : JSON::Any, client : TCPSocket?)
+      term = message["term"].as_i64.to_u64
+      if term < @term
+        client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => @log.size.to_i64}.to_json))
+        return
+      end
+      give_way(term) if term > @term
+      @role = ClusterRole::Follower
+      @last_leader_contact = Time.monotonic
+      follow(message["leader_id"].as_s)
+
+      before = message["prev_index"].as_i64.to_u64
+      fits = before == 0 || (@log.size >= before && @log[before - 1].term == message["prev_term"].as_i64.to_u64)
+      unless fits
+        have = Math.min(@log.size.to_u64, before - 1)
+        client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => have.to_i64}.to_json))
+        return
+      end
+
+      entries = message["entries"].as_a
+      entries.each_with_index do |raw, i|
+        entry = ClusterLogEntry.from(raw)
+        index = before + i + 1
+        if @log.size >= index
+          next if @log[index - 1].term == entry.term
+          if index <= @commit_index
+            CogUtil::Logger.error("Node #{@node_id} was handed another entry #{index} than the one it committed")
+            client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => @commit_index.to_i64}.to_json))
+            return
+          end
+          @log.pop(@log.size - (index - 1).to_i)
+        end
+        @log << entry
+      end
+
+      # Committed is what the leader says, as far as this log is known to
+      # agree with the leader's.
+      known = Math.min(message["commit"].as_i64.to_u64, before + entries.size)
+      if known > @commit_index
+        @commit_index = known
+        apply_committed
+      end
+      client.try(&.puts({"term" => @term.to_i64, "success" => true, "have" => @log.size.to_i64}.to_json))
+    rescue ex
+      CogUtil::Logger.debug("Log entries not taken: #{ex.message}")
+    end
+
+    # A member passes on what was proposed to it.
+    private def handle_log_propose(message : JSON::Any, client : TCPSocket?)
+      kind = message["kind"].as_s
+      index = (kind == "command" || kind == "atom") ? take_in(kind, message["data"]) : nil
+      client.try(&.puts({"index" => index.try(&.to_i64)}.to_json))
+    rescue ex
+      CogUtil::Logger.debug("Proposal not answered: #{ex.message}")
+    end
+
+    # One JSON line to a member and its one-line answer, nil when there
+    # is none in time.
+    private def request(node : ClusterNodeInfo, message, timeout : Time::Span) : JSON::Any?
+      socket = TCPSocket.new(node.host, node.port, connect_timeout: timeout)
+      begin
+        socket.read_timeout = timeout
+        socket.puts(message.to_json)
+        socket.gets.try { |line| JSON.parse(line) }
+      ensure
+        socket.close
+      end
+    rescue ex
+      CogUtil::Logger.debug("No answer from node #{node.id}: #{ex.message}")
+      nil
+    end
+
+    # This node's atom of the same content, if it has one.
+    private def stored(atom : Atom) : Atom?
+      return @local_atomspace.get_nodes_by_name(atom.name, atom.type).first? unless atom.is_a?(Link)
+      parts = [] of Atom
+      atom.outgoing.each do |part|
+        parts << (stored(part) || return nil)
+      end
+      link_over(atom.type, parts)
+    end
+
+    private def link_over(type : AtomType, parts : Array(Atom)) : Atom?
+      first = parts.first? || return nil
+      handles = parts.map(&.handle)
+      @local_atomspace.get_incoming(first).find do |candidate|
+        candidate.type == type && candidate.outgoing.map(&.handle) == handles
+      end
+    end
+
+    # Put a committed atom in the local AtomSpace. One that is there
+    # takes the truth value given, with no merging; its parts are made
+    # where they are missing and otherwise left as they are.
+    private def place(data : JSON::Any, top : Bool = true) : Atom?
+      type = AtomType.parse(data["type"].as_s)
+      truth = SimpleTruthValue.new(data["truth_strength"].as_f, data["truth_confidence"].as_f)
+
+      existing = nil
+      parts = [] of Atom
+      if type.node?
+        existing = @local_atomspace.get_nodes_by_name(data["name"].as_s, type).first?
+      else
+        data["outgoing_atoms"].as_a.each do |part|
+          parts << (place(part, false) || return nil)
+        end
+        existing = link_over(type, parts)
+      end
+
+      if existing
+        existing.truth_value = truth if top
+        return existing
+      end
+      if type.node?
+        @local_atomspace.add_node(type, data["name"].as_s, truth)
+      elsif type == AtomType::INHERITANCE_LINK && parts.size == 2
+        @local_atomspace.add_inheritance_link(parts[0], parts[1], truth)
+      elsif type == AtomType::EVALUATION_LINK && parts.size == 2
+        @local_atomspace.add_evaluation_link(parts[0], parts[1], truth)
+      elsif type == AtomType::LIST_LINK
+        @local_atomspace.add_list_link(parts, truth)
+      else
+        @local_atomspace.add_link(type, parts, truth)
+      end
+    rescue ex
+      CogUtil::Logger.error("Committed atom not placed: #{ex.message}")
+      nil
     end
 
     private def handle_conflict_resolution(message : JSON::Any)
