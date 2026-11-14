@@ -153,7 +153,7 @@ other.leader          # => the leader's ClusterNodeInfo
 ```
 
 - Votes are held in numbered terms. A node that stands opens a new term and asks every member it knows for its vote.
-- A node votes once per term, for whoever asks first. A candidate of an older term is refused and told the newer one.
+- A node votes once per term, for whoever asks first and has a log at least as far along as its own (see below). A candidate of an older term is refused and told the newer one.
 - More than half of the known members, the candidate included, make a leader. It then tells the others, who follow it.
 - Whoever sees a higher term than its own gives way: a leader that hears of one becomes a follower. Two leaders can never hold the same term.
 - A member that left with `stop` is no longer counted. One that died without saying so is counted until the heartbeat drops it, so the rest can still elect while they are more than half.
@@ -168,7 +168,36 @@ node.start
 
 A leader then shows it is there three times per timeout. A node that hears from no leader for between one and two timeouts stands for election itself; the wait is drawn at random each time so that two nodes seldom stand at once. A leader that leaves or dies is replaced this way.
 
-This is the election half of Raft. There is no replicated log: the leader is agreed on, and nothing else is decided through it yet.
+### Agreeing on a Sequence of Commands
+
+Under a leader the members keep one log. Every member applies its entries in the same order.
+
+```crystal
+node.on_commit { |index, command| apply(command) }   # on every member
+
+index = node.propose({"set" => "colour", "to" => "red"})   # from any member
+index             # => the entry's number, or nil when it could not be committed
+node.committed    # => the commands agreed on so far, in order
+```
+
+- `propose` takes anything that turns into JSON. The leader appends it to its log and hands it to the others. Any other member passes it to the leader it follows.
+- An entry is committed once more than half of the known members hold it. `propose` returns its number then, after the members that answered have been told. It returns nil when there is no leader, no majority within `replication_timeout`, or a change of leader on the way; the command may still be committed later, so a caller that tries again has to cope with it being there twice.
+- `on_commit` handlers run on each member for every committed command, in log order, once.
+- Each message from the leader names the entry before the new ones. A member whose log does not have that entry says how far its own goes and is handed the rest from there: this is how a member that joined late or missed messages catches up. An entry left by a leader that did not prevail is replaced, with all after it. A committed entry is never replaced.
+- A vote goes only to a candidate whose log ends in a later term than the voter's, or in the same term with no fewer entries. So a new leader holds everything that was committed.
+- A new leader opens its term with an entry of its own. Entries are committed by counting only in the leader's own term, so this entry is what settles the ones earlier leaders left uncommitted. Entry numbers therefore count these too: the first command after the first election is entry 2.
+- `replicate` hands every member what it lacks and the commit point, and returns how many are up to date. With `election_timeout` set the leader does this at each of its regular rounds.
+- `cluster_stats` has `log_size`, `commit_index` and `last_applied`. `log_terms` lists the term of each entry.
+
+Atoms can go through the log too:
+
+```crystal
+node.add_atom_in_order(link)   # => this node's atom once every reachable member has placed it
+```
+
+Every member places the atom at the same point in the same order, so all end with the same truth value and no conflict has to be resolved: an atom that is already there takes the truth value given, and its parts are used as they are. `add_atom` still spreads by broadcast, with conflicts resolved at each node.
+
+This is Raft's election and log. What is not there: the log, the term and the vote are kept in memory, so a member that restarts comes back empty and is brought up to date as a new member; the log is never cut short by a snapshot; and members join and leave outside the log, by the membership messages.
 
 ## Configuration Options
 
