@@ -161,6 +161,15 @@ module URE
                           accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
       nil
     end
+
+    # For a rule that does not declare the shape of its conclusion: the
+    # premises from which it would conclude `goal`, each list ready for
+    # `apply`. `prove` proves a goal the rule needs and returns the atoms
+    # it found for it. nil: the rule cannot say.
+    def premises_for(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace,
+                     prove : AtomSpace::Atom -> Array(AtomSpace::Atom)) : Array(Array(AtomSpace::Atom))?
+      nil
+    end
   end
 
   # Finds what a rule's patterns fit.
@@ -238,7 +247,13 @@ module URE
     # are looked up first, so that what is there keeps its truth value.
     def self.intern(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, tv : AtomSpace::TruthValue) : AtomSpace::Atom
       if atom.is_a?(AtomSpace::Link)
-        atomspace.add_link(atom.type, atom.outgoing.map { |child| intern_part(child, atomspace) }, tv)
+        children = atom.outgoing.map { |child| intern_part(child, atomspace) }
+        if atomspace.find_link(atom.type, children)
+          # Known already: the truth value is merged into it.
+          atomspace.add_link(atom.type, children, tv)
+        else
+          add_typed(atomspace, atom.type, children, tv)
+        end
       else
         atomspace.add_node(atom.type, atom.name, tv)
       end
@@ -247,9 +262,25 @@ module URE
     private def self.intern_part(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
       if atom.is_a?(AtomSpace::Link)
         children = atom.outgoing.map { |child| intern_part(child, atomspace) }
-        atomspace.find_link(atom.type, children) || atomspace.add_link(atom.type, children)
+        atomspace.find_link(atom.type, children) || add_typed(atomspace, atom.type, children, AtomSpace::TruthValue::DEFAULT_TV)
       else
         atomspace.get_nodes_by_name(atom.name, atom.type).first? || atomspace.add_node(atom.type, atom.name)
+      end
+    end
+
+    # A new link as the class the AtomSpace gives links of its type, so
+    # that rules which ask for an EvaluationLink or its predicate accept
+    # what another rule concluded.
+    private def self.add_typed(atomspace : AtomSpace::AtomSpace, type : AtomSpace::AtomType,
+                               children : Array(AtomSpace::Atom), tv : AtomSpace::TruthValue) : AtomSpace::Atom
+      if type == AtomSpace::AtomType::EVALUATION_LINK && children.size == 2
+        atomspace.add_evaluation_link(children[0], children[1], tv)
+      elsif type == AtomSpace::AtomType::INHERITANCE_LINK && children.size == 2
+        atomspace.add_inheritance_link(children[0], children[1], tv)
+      elsif type == AtomSpace::AtomType::LIST_LINK
+        atomspace.add_list_link(children, tv)
+      else
+        atomspace.add_link(type, children, tv)
       end
     end
   end
@@ -522,6 +553,33 @@ module URE
           premises = [implication, antecedent]
           found << premises if accept.call(premises)
           return found if found.size >= limit
+        end
+      end
+      found
+    end
+
+    # Working back from a goal: an implication whose consequent can be the
+    # goal gives it, once its antecedent is a fact. For an implication
+    # between patterns the antecedent, with the goal's values in it, is
+    # proved first, and each fact found for it is a premise.
+    def premises_for(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace,
+                     prove : AtomSpace::Atom -> Array(AtomSpace::Atom)) : Array(Array(AtomSpace::Atom))?
+      found = [] of Array(AtomSpace::Atom)
+      atomspace.get_atoms_by_type(AtomSpace::AtomType::IMPLICATION_LINK).each do |implication|
+        next unless implication.is_a?(AtomSpace::Link) && implication.outgoing.size == 2
+        if_part, then_part = implication.outgoing[0], implication.outgoing[1]
+        next unless if_part.type == AtomSpace::AtomType::EVALUATION_LINK
+        next unless then_part.type == goal.type
+
+        if Unifier.ground?(if_part)
+          found << [implication, if_part] if Unifier.unifiable?(then_part, goal)
+        else
+          # The implication's variables are its own.
+          bindings = Unifier.unify(Unifier.rename(then_part, "~if"), goal) || next
+          wanted = Unifier.resolve(Unifier.rename(if_part, "~if"), bindings)
+          prove.call(wanted).each do |antecedent|
+            found << [implication, antecedent] unless antecedent.same?(if_part)
+          end
         end
       end
       found
@@ -925,10 +983,28 @@ module URE
       loop do
         size_before = @atomspace.size
         @rules.each_with_index do |rule, index|
+          break if @expansions >= PROOF_BUDGET
+          # A rule without a shape for its conclusion may still say which
+          # premises would give the goal.
+          below = ->(wanted : AtomSpace::Atom) { solve(wanted, Bindings.new, depth + 1, path).map(&.[0]) }
+          if candidates = rule.premises_for(goal, @atomspace, below)
+            @expansions += 1
+            candidates.each do |atoms|
+              key = {index, atoms.map(&.handle)}
+              conclusion = @concluded[key]? || begin
+                drawn = rule.apply(atoms, @atomspace) || next
+                @concluded[key] = drawn
+              end
+              extended = Unifier.unify(goal, conclusion, bindings) || next
+              proofs << {conclusion, extended} if proved.add?(conclusion.handle)
+            end
+            break if ground && !proofs.empty?
+            next
+          end
+
           patterns = rule.premise_patterns || next
           concluded = rule.conclusion_pattern || next
           next unless concluded.type == goal.type
-          break if @expansions >= PROOF_BUDGET
           @expansions += 1
 
           # The rule's variables are its own.
@@ -994,9 +1070,10 @@ module URE
 
     # Advanced backward chaining with BIT construction
     def do_chain(target : AtomSpace::Atom) : Array(AtomSpace::Atom)
-      # Rules that declare patterns can prove the target outright; what
-      # they conclude is then in the AtomSpace for the search below.
-      prove(target) if @rules.any?(&.premise_patterns)
+      # Rules that declare patterns, and modus ponens, can prove the target
+      # outright; what they conclude is then in the AtomSpace for the
+      # search below.
+      prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) }
 
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]

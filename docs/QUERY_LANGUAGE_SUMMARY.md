@@ -77,6 +77,11 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 "SELECT $x $double WHERE { $x price $p . BIND($p * 2 AS $double) . FILTER($double > 8) }"
 "SELECT $x WHERE { $x price $p . { $x ISA Fruit } UNION { $x ISA Vegetable } . FILTER($p < 5) }"
 
+# Leaving out, listing values, and a query inside a query
+"SELECT $x WHERE { $x ISA Fruit . MINUS { $x price 5 } }"
+"SELECT $x $p WHERE { VALUES $x { apple leek } . $x price $p }"
+"SELECT $x $n WHERE { $x ISA $kind . { SELECT $kind (COUNT($y) AS $n) WHERE { $y ISA $kind } GROUP BY $kind } }"
+
 # Counting and grouping
 "SELECT COUNT(*) AS $n WHERE { $x ISA Fruit }"
 "SELECT $kind COUNT($x) AS $n, AVG($p) AS $mean WHERE { $x ISA $kind . $x price $p } GROUP BY $kind HAVING($n > 2) ORDER BY $n DESC"
@@ -103,6 +108,10 @@ clause    := term ( ISA | inherits_from | "->" ) term
            | FILTER "(" condition ")"
            | BIND "(" value AS "$" name ")"
            | block { UNION block }
+           | "{" query "}"
+           | MINUS block
+           | VALUES "$" name "{" { term | UNDEF } "}"
+           | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
 term      := "$" name | name | "quoted name"
 condition := condition OR condition | condition AND condition
            | NOT condition | "(" condition ")"
@@ -160,6 +169,14 @@ key       := value [ ASC | DESC ]
 - A FILTER or BIND sees only what its own block matches. In the example above a `FILTER($p > 3)` inside `{ $x ISA Fruit }` would find `$p` without a value; write it in the outer block, or match the price inside the group.
 - `BIND` is not a reserved word.
 
+### MINUS, VALUES and subqueries
+
+- `MINUS { ... }` leaves out a result that shares a variable with a result of its block and agrees with it on every variable they share. A MINUS block that shares no variable with the rest removes nothing. What it matches cannot be selected.
+- `VALUES $x { apple pear }` binds `$x` to each value in turn. `VALUES ($x $y) { (apple 4) (leek UNDEF) }` gives rows for several variables; `UNDEF` leaves a place unbound. A value names the atom of that name; one the AtomSpace does not have is a node beside it, and nothing is added. VALUES can be a block's only content.
+- A whole query in braces is a subquery: `{ SELECT $kind (COUNT($y) AS $n) WHERE { $y ISA $kind } GROUP BY $kind }`. Its own grouping, HAVING, ORDER BY, LIMIT and OFFSET apply first, and what it selects is joined with the rest of the block. Only what it selects is seen outside.
+- Order within a block: clauses, VALUES, subqueries, groups, OPTIONAL, BIND, MINUS, then FILTER, wherever each is written.
+- `MINUS` and `VALUES` are not reserved words.
+
 ### Variable Types
 - `$var` - Generic variable
 - `$var:CONCEPT` - Concept node variable
@@ -181,6 +198,9 @@ key       := value [ ASC | DESC ]
 - **Arithmetic**: `+ - * /` in any value
 - **Computed variables**: `BIND(value AS $name)`
 - **Groups**: `{ ... } UNION { ... }` inside a block
+- **Exclusion**: `MINUS { ... }`
+- **Inline values**: `VALUES $x { ... }`
+- **Subqueries**: `{ SELECT ... WHERE { ... } }` inside a block
 
 ## Integration Points
 

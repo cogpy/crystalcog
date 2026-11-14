@@ -509,3 +509,109 @@ describe "URE proof search on a dense graph" do
     chainer.prove(relation("ancestor", concept("p7"), concept("p0"))).should be_empty
   end
 end
+
+describe "URE proof search through modus ponens" do
+  # human($x) implies mortal($x), mortal($x) implies finite($x).
+  thinkers = -> {
+    space = AtomSpace::AtomSpace.new
+    sure = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
+    space.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [fact(space, "human", "$x"), fact(space, "mortal", "$x")], sure)
+    space.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [fact(space, "mortal", "$x"), fact(space, "finite", "$x")], sure)
+    fact(space, "human", "socrates")
+    fact(space, "human", "plato")
+    fact(space, "god", "zeus")
+    space
+  }
+  holds = ->(predicate : String, who : AtomSpace::Atom) {
+    link(AtomSpace::AtomType::EVALUATION_LINK,
+      AtomSpace::Node.new(AtomSpace::AtomType::PREDICATE_NODE, predicate).as(AtomSpace::Atom),
+      link(AtomSpace::AtomType::LIST_LINK, who))
+  }
+
+  it "proves a goal from an implication and its antecedent" do
+    space = thinkers.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+    before = space.size
+
+    proofs = chainer.prove(holds.call("mortal", concept("socrates")))
+    proofs.size.should eq(1)
+    proofs.first[0].truth_value.confidence.should be > 0.0
+    URE::Unifier.ground?(proofs.first[0]).should be_true
+    # One new link: mortal(socrates). Nothing was concluded about plato.
+    space.size.should eq(before + 1)
+  end
+
+  it "answers a goal with a variable, and chains implications" do
+    space = thinkers.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+
+    mortals = chainer.prove(holds.call("mortal", var("$who"))).map { |(_, bindings)| bindings["$who"].name }.sort
+    mortals.should eq(["plato", "socrates"])
+    # finite needs mortal, which needs human.
+    chainer.prove(holds.call("finite", concept("plato"))).size.should eq(1)
+    finite = chainer.prove(holds.call("finite", var("$who"))).map { |(_, bindings)| bindings["$who"].name }.sort
+    finite.should eq(["plato", "socrates"])
+  end
+
+  it "does not prove what no implication gives" do
+    space = thinkers.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+    before = space.size
+    chainer.prove(holds.call("mortal", concept("zeus"))).should be_empty
+    chainer.prove(holds.call("wise", concept("socrates"))).should be_empty
+    space.size.should eq(before)
+  end
+
+  it "keeps a goal's variables apart from the implication's of the same name" do
+    space = thinkers.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+    # The implications are written with $x too.
+    mortals = chainer.prove(holds.call("mortal", var("$x"))).map { |(_, bindings)| bindings["$x"].name }.sort
+    mortals.should eq(["plato", "socrates"])
+  end
+
+  it "builds on what a pattern rule concluded" do
+    space = family
+    sure = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
+    space.add_link(AtomSpace::AtomType::IMPLICATION_LINK,
+      [fact(space, "grandparent", "$a", "$b"), fact(space, "elder", "$a", "$b")], sure)
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(grandparent_rule)
+    chainer.add_rule(URE::ModusPonensRule.new)
+
+    # elder(ann, cy) needs grandparent(ann, cy), which the pattern rule draws
+    # from two parent facts.
+    chainer.prove(relation("elder", concept("ann"), concept("cy"))).size.should eq(1)
+    elders = chainer.prove(relation("elder", var("$old"), var("$young"))).map { |(_, bindings)| {bindings["$old"].name, bindings["$young"].name} }.sort
+    elders.should eq([{"ann", "cy"}, {"bob", "dee"}])
+    chainer.do_chain(relation("elder", concept("bob"), concept("dee"))).should_not be_empty
+  end
+
+  it "draws each conclusion once however often it is proved" do
+    space = thinkers.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+    goal = holds.call("finite", var("$who"))
+    chainer.prove(goal).size.should eq(2)
+    size = space.size
+    values = space.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort
+    3.times { chainer.prove(goal).size.should eq(2) }
+    space.size.should eq(size)
+    space.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort.should eq(values)
+  end
+end
+
+describe "URE::RuleMatcher.intern" do
+  it "adds a conclusion as the class the AtomSpace gives links of its type" do
+    space = family
+    parents = space.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK)
+    conclusion = grandparent_rule.apply([parents[0], parents[1]], space).not_nil!
+    conclusion.should be_a(AtomSpace::EvaluationLink)
+    conclusion.as(AtomSpace::EvaluationLink).predicate.name.should eq("grandparent")
+    conclusion.as(AtomSpace::EvaluationLink).arguments.should be_a(AtomSpace::ListLink)
+  end
+end

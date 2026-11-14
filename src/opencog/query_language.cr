@@ -21,6 +21,10 @@
 #              | FILTER "(" condition ")"
 #              | BIND "(" value AS "$" name ")"
 #              | block { UNION block }             (a group inside the block)
+#              | "{" query "}"                     (a subquery)
+#              | MINUS block
+#              | VALUES "$" name "{" { term | UNDEF } "}"
+#              | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
 #   term      := "$" name | name | "quoted name"
 #   condition := condition OR condition | condition AND condition
 #              | NOT condition | "(" condition ")"
@@ -395,7 +399,22 @@ module OpenCog
       # Groups inside the block. Each is one block or several joined by
       # UNION, and its results are joined with the rest of this block.
       getter groups = [] of Array(QueryBlock)
+      # Whole queries inside the block; what each selects is joined in.
+      getter subqueries = [] of ParsedQuery
+      # Values given in the query itself.
+      getter values = [] of QueryInlineData
+      # MINUS blocks: a result that agrees with one of theirs is left out.
+      getter minus = [] of QueryBlock
+
+      # True when the block has something to start from.
+      def matches_something? : Bool
+        !(clauses.empty? && groups.empty? && subqueries.empty? && values.empty?)
+      end
     end
+
+    # VALUES: variables and rows of terms for them. nil is UNDEF, a place
+    # the row leaves unbound.
+    record QueryInlineData, names : Array(String), rows : Array(Array(String?))
 
     # One ORDER BY key.
     record QueryOrder, value : QueryOperand, descending : Bool
@@ -691,7 +710,7 @@ module OpenCog
         @position = 0
       end
 
-      def parse : ParsedQuery
+      def parse(nested : Bool = false) : ParsedQuery
         skip_newlines
         unless keyword?("SELECT")
           raise QueryParseException.new("Query must start with SELECT, found #{current.describe} at #{where(current)}")
@@ -799,7 +818,11 @@ module OpenCog
           advance
           skip_newlines
         end
-        fail("expected the end of the query, found #{current.describe}") unless current.kind == :end
+        if nested
+          fail("expected '}' to close the subquery, found #{current.describe}") unless punctuation?("}")
+        else
+          fail("expected the end of the query, found #{current.describe}") unless current.kind == :end
+        end
 
         if select_all
           variables = used.map { |name| QueryVariable.new(name) }
@@ -997,6 +1020,23 @@ module OpenCog
             advance
             bound_here << target
             block.binds << QueryBind.new(value, target.text)
+          elsif word?("MINUS") && next_is?("{")
+            fail("MINUS belongs to the block around the OPTIONAL") if nested
+            advance
+            # What a MINUS block matches is not there to be selected.
+            block.minus << parse_block(used.dup)
+          elsif word?("VALUES") && values_ahead?
+            fail("VALUES belongs to the block around the OPTIONAL") if nested
+            advance
+            block.values << parse_inline_data(used)
+          elsif punctuation?("{") && subquery_ahead?
+            fail("a subquery cannot be inside OPTIONAL") if nested
+            advance
+            subquery = parse(nested: true)
+            advance # the closing brace
+            # Only what the subquery selects is seen outside it.
+            subquery.columns.each { |name| used << name unless used.includes?(name) }
+            block.subqueries << subquery
           elsif punctuation?("{")
             fail("a group cannot be inside OPTIONAL") if nested
             alternatives = [parse_block(used)]
@@ -1027,7 +1067,7 @@ module OpenCog
 
         if nested
           fail("OPTIONAL needs at least one clause", closing) if block.optional_clauses.size == clauses_before
-        elsif block.clauses.empty? && block.groups.empty?
+        elsif !block.matches_something?
           fail("WHERE needs at least one clause", closing)
         end
 
@@ -1040,6 +1080,81 @@ module OpenCog
           used << target.text unless used.includes?(target.text)
         end
         block
+      end
+
+      # Is "{" here the start of a subquery: is SELECT the next thing in it?
+      private def subquery_ahead? : Bool
+        offset = 1
+        while (token = @tokens[@position + offset]?) && token.kind == :newline
+          offset += 1
+        end
+        token = @tokens[@position + offset]?
+        !token.nil? && token.kind == :keyword && token.text == "SELECT"
+      end
+
+      # Is VALUES here the keyword: followed by "$x {" or by "("?
+      private def values_ahead? : Bool
+        following = @tokens[@position + 1]? || return false
+        return true if following.kind == :punctuation && following.text == "("
+        return false unless following.kind == :variable
+        opening = @tokens[@position + 2]?
+        !opening.nil? && opening.kind == :punctuation && opening.text == "{"
+      end
+
+      # $x { a b }  or  ($x $y) { (a b) (c UNDEF) }
+      private def parse_inline_data(used : Array(String)) : QueryInlineData
+        names = [] of String
+        several = punctuation?("(")
+        if several
+          advance
+          while current.kind == :variable
+            names << advance.text
+          end
+          fail("expected a variable or ')', found #{current.describe}") unless punctuation?(")")
+          fail("VALUES needs at least one variable") if names.empty?
+          advance
+        else
+          names << advance.text
+        end
+        names.each { |name| used << name unless used.includes?(name) }
+
+        skip_newlines
+        fail("expected '{' after the variables of VALUES, found #{current.describe}") unless punctuation?("{")
+        advance
+        rows = [] of Array(String?)
+        loop do
+          skip_newlines
+          break if punctuation?("}")
+          if several
+            fail("expected '(' to start a row of VALUES, found #{current.describe}") unless punctuation?("(")
+            opening = advance
+            row = [] of String?
+            until punctuation?(")")
+              row << parse_inline_term
+            end
+            advance
+            fail("a row of VALUES needs #{names.size} values, found #{row.size}", opening) unless row.size == names.size
+            rows << row
+          else
+            rows << [parse_inline_term]
+          end
+        end
+        advance # the closing brace
+        QueryInlineData.new(names, rows)
+      end
+
+      private def parse_inline_term : String?
+        token = current
+        case token.kind
+        when :name
+          advance
+          token.text.upcase == "UNDEF" ? nil : token.text
+        when :string, :integer, :number
+          advance
+          token.text
+        else
+          fail("expected a value, found #{token.describe}")
+        end
       end
 
       private def clause_variables(clause : QueryClause) : Array(String)
@@ -1411,7 +1526,7 @@ module OpenCog
         var_map = Hash(String, AtomSpace::Atom).new
         pattern_atoms = block.clauses.flat_map(&.to_atoms(@atomspace, var_map))
         empty = [] of {Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)}
-        return empty if pattern_atoms.empty? && block.groups.empty?
+        return empty unless block.matches_something?
 
         # Typed query variables become constraints on every clause pattern.
         type_constraints = variables.compact_map do |var|
@@ -1425,6 +1540,26 @@ module OpenCog
         solutions = [{Hash(String, AtomSpace::Atom).new, Array(AtomSpace::Atom).new}]
         pattern_atoms.each do |template|
           solutions = join(solutions, solve(template, type_constraints))
+          return empty if solutions.empty?
+        end
+
+        # VALUES: each row binds its variables to the atoms of those names.
+        block.values.each do |data|
+          rows = data.rows.map do |row|
+            bound = Hash(String, AtomSpace::Atom).new
+            row.each_with_index do |term, i|
+              bound[data.names[i]] = QueryLanguage.resolve_term(term, @atomspace, var_map) if term
+            end
+            {bound, [] of AtomSpace::Atom}
+          end
+          solutions = join(solutions, rows)
+          return empty if solutions.empty?
+        end
+
+        # A subquery: what it selects, joined with what the block has.
+        block.subqueries.each do |subquery|
+          rows = execute(subquery).map { |result| {result.bindings, [] of AtomSpace::Atom} }
+          solutions = join(solutions, rows)
           return empty if solutions.empty?
         end
 
@@ -1455,6 +1590,24 @@ module OpenCog
           solutions = solutions.map do |(bound, matched)|
             atom = value_atom(bind.value, bound)
             atom ? {bound.merge({bind.name => atom}), matched} : {bound, matched}
+          end
+        end
+
+        # MINUS leaves out a result that shares a variable with a result
+        # of its block and agrees with it on all they share.
+        block.minus.each do |unwanted|
+          found = solve_block(unwanted, variables)
+          next if found.empty?
+          solutions.reject! do |(bound, _)|
+            found.any? do |(other, _)|
+              shared = 0
+              agrees = other.all? do |name, atom|
+                existing = bound[name]? || next true
+                shared += 1
+                existing.same?(atom) || identity(existing) == identity(atom)
+              end
+              agrees && shared > 0
+            end
           end
         end
 
