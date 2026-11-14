@@ -38,10 +38,13 @@ module URE
       end
     end
 
+    # Asked of every candidate in every search, so the parts are read in
+    # place: `outgoing` would copy them each time.
     def self.ground?(atom : AtomSpace::Atom) : Bool
       return false if variable?(atom)
       return true unless atom.is_a?(AtomSpace::Link)
-      atom.outgoing.all? { |child| ground?(child) }
+      atom.arity.times { |i| return false unless ground?(atom[i]) }
+      true
     end
 
     # The most general set of bindings that makes `a` and `b` the same
@@ -216,20 +219,48 @@ module URE
     end
 
     # The atoms a pattern could be: those of its type, or when one of its
-    # parts is already an atom of the AtomSpace, only the links that part
-    # is in. The part in the fewest links narrows the most.
+    # parts narrows the search, only the links that part is in. The part
+    # in the fewest links narrows the most.
     def self.candidates(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
       if goal.is_a?(AtomSpace::Link)
         narrowest = nil
         goal.outgoing.each do |child|
-          next unless Unifier.ground?(child)
-          known = canonical(child, atomspace) || return [] of AtomSpace::Atom
-          incoming = known.incoming
-          narrowest = incoming if narrowest.nil? || incoming.size < narrowest.size
+          holders = holders_of(child, atomspace) || next
+          narrowest = holders if narrowest.nil? || holders.size < narrowest.size
         end
         return narrowest.select { |atom| atom.type == goal.type } if narrowest
       end
       atomspace.get_atoms_by_type(goal.type)
+    end
+
+    # The stored links a part could be a part of, or nil when the part
+    # does not narrow the search. A part without variables is in the links
+    # of its incoming set, and in none when the AtomSpace does not have
+    # it. A part with variables in it, as (List john $who), is reached
+    # through what it holds: the lists john is in, and then the links
+    # those are in.
+    private def self.holders_of(part : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)?
+      if Unifier.ground?(part)
+        known = canonical(part, atomspace) || return [] of AtomSpace::Atom
+        return known.incoming
+      end
+      return nil unless part.is_a?(AtomSpace::Link)
+
+      inner = nil
+      part.outgoing.each do |child|
+        found = holders_of(child, atomspace) || next
+        inner = found if inner.nil? || found.size < inner.size
+      end
+      return nil unless inner
+
+      holders = [] of AtomSpace::Atom
+      inner.each do |link|
+        holders.concat(link.incoming) if link.type == part.type
+      end
+      # One link may hold two of them; and keep the order the atoms were made in.
+      holders.uniq!(&.handle)
+      holders.sort_by!(&.handle)
+      holders
     end
 
     # The AtomSpace's own atom for a ground atom, if it has one.
@@ -387,14 +418,17 @@ module URE
     def find_applications(atomspace : AtomSpace::AtomSpace, limit : Int32,
                           accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
       found = [] of Array(AtomSpace::Atom)
-      atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).each do |fact|
-        next if contains_variable?(fact)
+      # Asked once of each fact, not of each pair: looking into a link
+      # copies its parts.
+      facts = atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).reject { |fact| contains_variable?(fact) }
+      ground = facts.map(&.handle).to_set
+      facts.each do |fact|
         # Two facts with two atoms in common are still one pair.
         paired = Set(AtomSpace::Handle).new
         about(fact).each do |thing|
-          facts_about(thing, atomspace).each do |other|
+          each_fact_about(thing, atomspace) do |other|
             next unless other.handle > fact.handle
-            next if contains_variable?(other) || !paired.add?(other.handle)
+            next unless ground.includes?(other.handle) && paired.add?(other.handle)
             premises = [fact, other]
             found << premises if accept.call(premises)
             return found if found.size >= limit
@@ -436,38 +470,33 @@ module URE
 
     # The atoms a fact speaks of: the arguments of an evaluation.
     private def about(fact : AtomSpace::Atom) : Array(AtomSpace::Atom)
-      return [] of AtomSpace::Atom unless fact.is_a?(AtomSpace::Link) && fact.outgoing.size == 2
+      return [] of AtomSpace::Atom unless fact.is_a?(AtomSpace::Link) && fact.arity == 2
       arguments = fact.outgoing[1]
       arguments.type == AtomSpace::AtomType::LIST_LINK ? arguments.outgoing : [arguments]
     end
 
     # The evaluations that have an atom as an argument, or as their one
     # argument.
-    private def facts_about(thing : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
-      facts = [] of AtomSpace::Atom
+    private def each_fact_about(thing : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, & : AtomSpace::Atom ->) : Nil
       atomspace.get_incoming(thing).each do |parent|
         if parent.type == AtomSpace::AtomType::EVALUATION_LINK
-          facts << parent if parent.outgoing.size == 2 && parent.outgoing[1].handle == thing.handle
+          yield parent if argument_of?(thing, parent)
         elsif parent.type == AtomSpace::AtomType::LIST_LINK
           atomspace.get_incoming(parent).each do |holder|
-            next unless holder.type == AtomSpace::AtomType::EVALUATION_LINK
-            facts << holder if holder.outgoing.size == 2 && holder.outgoing[1].handle == parent.handle
+            yield holder if holder.type == AtomSpace::AtomType::EVALUATION_LINK && argument_of?(parent, holder)
           end
         end
       end
-      facts
     end
 
+    private def argument_of?(arguments : AtomSpace::Atom, fact : AtomSpace::Atom) : Bool
+      fact.arity == 2 && fact.outgoing[1].handle == arguments.handle
+    end
+
+    # No set of visited atoms is kept: a link cannot contain itself, and
+    # this is asked of every pair of facts at every step.
     private def contains_variable?(atom : AtomSpace::Atom) : Bool
-      visited = Set(UInt64).new
-      stack = [atom]
-      while node = stack.pop?
-        next unless visited.add?(node.handle)
-        return true if node.type == AtomSpace::AtomType::VARIABLE_NODE
-        next unless node.is_a?(AtomSpace::Link)
-        node.outgoing.each { |child| stack << child }
-      end
-      false
+      !Unifier.ground?(atom)
     end
   end
 
