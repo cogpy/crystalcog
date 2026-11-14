@@ -49,7 +49,7 @@ describe OpenCog::QueryLanguage::QueryLexer do
     parse_error("SELECT $x WHERE { $x ISA @ }").should eq("unexpected character '@' at line 1, column 26")
     parse_error("SELECT $ WHERE { }").should eq("a variable needs a name after '$' at line 1, column 9")
     parse_error("SELECT $x WHERE { $x ISA \"open }").should eq("unterminated quoted name at line 1, column 26")
-    parse_error("SELECT $x WHERE { $x - y }").should eq("expected '->' at line 1, column 22")
+    parse_error("SELECT $x WHERE { $x - y }").should eq(%[expected a predicate, ISA or '->', found "-" at line 1, column 22])
   end
 end
 
@@ -268,5 +268,204 @@ describe "OpenCog queries and the AtomSpace" do
     query.filters.should be_empty
     results = OpenCog::QueryLanguage::QueryExecutor.new(graded).execute(query)
     names(results, "x").should eq(["Fern", "Sundew"])
+  end
+end
+
+private def shop : AtomSpace::AtomSpace
+  space = AtomSpace::AtomSpace.new
+  price = space.add_predicate_node("price")
+  fruit = space.add_concept_node("Fruit")
+  vegetable = space.add_concept_node("Vegetable")
+  {"apple" => {fruit, "3"}, "pear" => {fruit, "5"}, "plum" => {fruit, "5"},
+   "leek" => {vegetable, "2"}, "kale" => {vegetable, nil}}.each do |name, (kind, cost)|
+    item = space.add_concept_node(name)
+    space.add_inheritance_link(item, kind)
+    next unless cost
+    space.add_evaluation_link(price, space.add_list_link([item, space.add_concept_node(cost)] of AtomSpace::Atom))
+  end
+  space
+end
+
+# The named values of each result, as text.
+private def table(results, *columns : String) : Array(Array(String?))
+  results.map { |result| columns.map { |column| result.bindings[column]?.try(&.name) }.to_a }
+end
+
+describe "OpenCog query arithmetic" do
+  it "reads + - * / and brackets as tokens" do
+    tokens = OpenCog::QueryLanguage::QueryLexer.new("($a + 2) * $b / 4 - $c -1 a-b").tokens
+    tokens.map(&.text).should eq(["(", "a", "+", "2", ")", "*", "b", "/", "4", "-", "c", "-1", "a-b", ""])
+  end
+
+  it "computes with the numbers that names stand for" do
+    space = shop
+    priced = ->(condition : String) { names(ask(space, "SELECT $x WHERE { $x price $p . FILTER(#{condition}) }"), "x") }
+    priced.call("$p * 2 > 8").should eq(["pear", "plum"])
+    priced.call("$p + 1 = 4").should eq(["apple"])
+    priced.call("$p / 2 = 1").should eq(["leek"])
+    priced.call("10 - $p >= 7").should eq(["apple", "leek"])
+    # Multiplication binds tighter; brackets override.
+    priced.call("$p + 2 * 2 = 7").should eq(["apple"])
+    priced.call("($p + 2) * 2 = 14").should eq(["pear", "plum"])
+    priced.call("($p - 1) / 2 >= 2").should eq(["pear", "plum"])
+    # A sign written against the number is still a subtraction.
+    priced.call("$p -1 = 2").should eq(["apple"])
+    priced.call("-$p < -4").should eq(["pear", "plum"])
+    priced.call("$p * $p = 25 AND $x != plum").should eq(["pear"])
+  end
+
+  it "has no value for text or a division by zero" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER($x + 1 > 0) }"), "x").should be_empty
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER($p / 0 > 0) }"), "x").should be_empty
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER($p / 0 <= 0) }"), "x").should be_empty
+    names(ask(space, "SELECT $x WHERE { $x ISA Vegetable . OPTIONAL { $x price $p } . FILTER($p * 2 = 4) }"), "x").should eq(["leek"])
+  end
+
+  it "still reads a bracket as a condition where it is one" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER(($x = apple OR $x = leek) AND $p < 3) }"), "x").should eq(["leek"])
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER(NOT ($p + 1 > 4)) }"), "x").should eq(["apple", "leek"])
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER((($p)) = 2) }"), "x").should eq(["leek"])
+    parse_error("SELECT $x WHERE { $x ISA $y . FILTER(($x + ) > 2) }").should eq(%[expected a value, found ")" at line 1, column 44])
+    parse_error("SELECT $x WHERE { $x ISA $y . FILTER(($x = a OR ) AND $x = b) }").should eq(%[expected a value, found ")" at line 1, column 49])
+    parse_error("SELECT $x WHERE { $x ISA $y . FILTER($x * > 2) }").should eq(%[expected a value, found ">" at line 1, column 43])
+  end
+
+  it "orders by a computed value" do
+    space = shop
+    ask(space, "SELECT $x WHERE { $x price $p } ORDER BY $p * -1, $x").map { |result| result.bindings["x"].name }.should eq(
+      ["pear", "plum", "apple", "leek"])
+    ask(space, "SELECT $x WHERE { $x price $p } ORDER BY 10 - $p DESC, $x DESC").map { |result| result.bindings["x"].name }.should eq(
+      ["leek", "apple", "plum", "pear"])
+  end
+end
+
+describe "OpenCog query OFFSET" do
+  it "leaves out results from the front, before LIMIT counts" do
+    space = shop
+    page = ->(tail : String) { ask(space, "SELECT $x WHERE { $x price $p } ORDER BY $x #{tail}").map { |result| result.bindings["x"].name } }
+    page.call("").should eq(["apple", "leek", "pear", "plum"])
+    page.call("OFFSET 1").should eq(["leek", "pear", "plum"])
+    page.call("LIMIT 2 OFFSET 1").should eq(["leek", "pear"])
+    page.call("OFFSET 1 LIMIT 2").should eq(["leek", "pear"])
+    page.call("OFFSET 3 LIMIT 5").should eq(["plum"])
+    page.call("OFFSET 9").should be_empty
+    page.call("offset 0").should eq(["apple", "leek", "pear", "plum"])
+  end
+
+  it "counts distinct results" do
+    space = shop
+    ask(space, "SELECT DISTINCT $p WHERE { $x price $p } ORDER BY $p OFFSET 1").map { |result| result.bindings["p"].name }.should eq(["3", "5"])
+  end
+
+  it "does not reserve the word" do
+    space = AtomSpace::AtomSpace.new
+    space.add_inheritance_link(space.add_concept_node("offset"), space.add_concept_node("group"))
+    names(ask(space, "SELECT $x WHERE { $x ISA group }"), "x").should eq(["offset"])
+    names(ask(space, "SELECT $x WHERE { offset ISA $x } OFFSET 0"), "x").should eq(["group"])
+  end
+
+  it "reports a misplaced LIMIT or OFFSET" do
+    parse_error("SELECT $x WHERE { $x ISA $y } LIMIT 2 LIMIT 3").should eq(%[expected the end of the query, found "LIMIT" at line 1, column 39])
+    parse_error("SELECT $x WHERE { $x ISA $y } OFFSET many").should eq(%[expected a number after OFFSET, found "many" at line 1, column 38])
+  end
+end
+
+describe "OpenCog query aggregates" do
+  it "counts all matches" do
+    space = shop
+    table(ask(space, "SELECT COUNT(*) AS $n WHERE { $x ISA Fruit }"), "n").should eq([["3"]])
+    # Without AS the result is named after the function.
+    table(ask(space, "SELECT COUNT(*) WHERE { $x ISA Vegetable }"), "count").should eq([["2"]])
+    # Nothing matched is still one answer.
+    table(ask(space, "SELECT COUNT(*) AS $n WHERE { $x ISA Mineral }"), "n").should eq([["0"]])
+  end
+
+  it "groups by a variable" do
+    space = shop
+    table(ask(space, "SELECT $kind COUNT($x) AS $n WHERE { $x ISA $kind } GROUP BY $kind ORDER BY $kind"), "kind", "n").should eq(
+      [["Fruit", "3"], ["Vegetable", "2"]])
+    # GROUP BY alone gives one result per group.
+    table(ask(space, "SELECT $kind WHERE { $x ISA $kind } GROUP BY $kind ORDER BY $kind DESC"), "kind").should eq([["Vegetable"], ["Fruit"]])
+    # No group, no answer.
+    ask(space, "SELECT $kind COUNT($x) AS $n WHERE { $x ISA $kind . $x price 99 } GROUP BY $kind").should be_empty
+  end
+
+  it "sums, averages and finds the smallest and largest" do
+    space = shop
+    rows = ask(space, "SELECT $kind (SUM($p) AS $total) (AVG($p) AS $mean) (MIN($p) AS $low) (MAX($p) AS $high) " \
+                      "WHERE { $x ISA $kind . $x price $p } GROUP BY $kind ORDER BY $kind")
+    table(rows, "kind", "total", "low", "high").should eq([["Fruit", "13", "3", "5"], ["Vegetable", "2", "2", "2"]])
+    rows.map { |row| row.bindings["mean"].name.to_f }.should eq([13 / 3, 2.0])
+    rows.first.bindings.keys.should eq(["kind", "total", "mean", "low", "high"])
+
+    table(ask(space, "SELECT SUM($p * 2) AS $doubled WHERE { $x price $p }"), "doubled").should eq([["30"]])
+    table(ask(space, "SELECT AVG($p + 0.5) AS $mean WHERE { $x ISA Vegetable . $x price $p }"), "mean").should eq([["2.5"]])
+  end
+
+  it "gives the atom itself as the smallest or largest of a variable" do
+    space = shop
+    result = ask(space, "SELECT (MIN($x) AS $first) (MAX($x) AS $last) WHERE { $x ISA Fruit }").first
+    result.bindings["first"].should be(space.get_nodes_by_name("apple").first)
+    result.bindings["last"].should be(space.get_nodes_by_name("plum").first)
+    # Prices are names that read as numbers, and compare as numbers.
+    space.add_evaluation_link(space.get_nodes_by_name("price").first,
+      space.add_list_link([space.get_nodes_by_name("kale").first, space.add_concept_node("10")] of AtomSpace::Atom))
+    table(ask(space, "SELECT MAX($p) AS $dearest WHERE { $x price $p }"), "dearest").should eq([["10"]])
+  end
+
+  it "counts what is bound, and distinct values once" do
+    space = shop
+    table(ask(space, "SELECT $kind COUNT($p) AS $priced COUNT(*) AS $all WHERE { $x ISA $kind . OPTIONAL { $x price $p } } " \
+                     "GROUP BY $kind ORDER BY $kind"), "kind", "priced", "all").should eq([["Fruit", "3", "3"], ["Vegetable", "1", "2"]])
+    table(ask(space, "SELECT COUNT(DISTINCT $p) AS $prices SUM(DISTINCT $p) AS $sum WHERE { $x price $p }"), "prices", "sum").should eq([["3", "10"]])
+  end
+
+  it "has no value for the smallest or the average of nothing" do
+    space = shop
+    result = ask(space, "SELECT (MAX($p) AS $high) (AVG($p) AS $mean) (SUM($p) AS $total) WHERE { $x ISA Mineral . $x price $p }").first
+    result.bindings.keys.should eq(["total"])
+    result.bindings["total"].name.should eq("0")
+  end
+
+  it "filters groups with HAVING and sorts by an aggregate" do
+    space = shop
+    table(ask(space, "SELECT $kind COUNT($x) AS $n WHERE { $x ISA $kind } GROUP BY $kind HAVING($n > 2)"), "kind", "n").should eq([["Fruit", "3"]])
+    table(ask(space, "SELECT $p COUNT($x) AS $n WHERE { $x price $p } GROUP BY $p ORDER BY $n DESC, $p LIMIT 2"), "p", "n").should eq(
+      [["5", "2"], ["2", "1"]])
+    table(ask(space, "SELECT $kind WHERE { $x ISA $kind . $x price $p } GROUP BY $kind HAVING($kind != Fruit)"), "kind").should eq([["Vegetable"]])
+  end
+
+  it "lists results in the order SELECT names them, and leaves the AtomSpace alone" do
+    space = shop
+    before = space.size
+    ask(space, "SELECT (COUNT($x) AS $n) $kind WHERE { $x ISA $kind } GROUP BY $kind").first.bindings.keys.should eq(["n", "kind"])
+    space.size.should eq(before)
+    space.get_nodes_by_name("3").size.should eq(1)
+  end
+
+  it "groups across the alternatives of a UNION" do
+    space = shop
+    table(ask(space, "SELECT COUNT(DISTINCT $x) AS $n WHERE { $x ISA Fruit } UNION { $x price $p }"), "n").should eq([["4"]])
+  end
+
+  it "keeps the function names usable as names" do
+    space = AtomSpace::AtomSpace.new
+    space.add_inheritance_link(space.add_concept_node("count"), space.add_concept_node("sum"))
+    names(ask(space, "SELECT $x WHERE { $x ISA sum }"), "x").should eq(["count"])
+    table(ask(space, "SELECT COUNT($x) AS $having WHERE { count ISA $x }"), "having").should eq([["1"]])
+  end
+
+  it "reports aggregates it cannot run" do
+    parse_error("SELECT $x COUNT($y) AS $n WHERE { $x ISA $y }").should eq("$x is selected beside an aggregate but is not in GROUP BY")
+    parse_error("SELECT * WHERE { $x ISA $y } GROUP BY $x").should eq("SELECT * cannot be used with GROUP BY")
+    parse_error("SELECT SUM(*) WHERE { $x ISA $y }").should eq("only COUNT takes * at line 1, column 12")
+    parse_error("SELECT COUNT($x) WHERE { $x ISA $y } GROUP BY $z").should eq("$z does not appear in WHERE at line 1, column 47")
+    parse_error("SELECT $x WHERE { $x ISA $y } GROUP BY x").should eq(%[GROUP BY takes variables, found "x" at line 1, column 40])
+    parse_error("SELECT $x WHERE { $x ISA $y } HAVING($x = a)").should eq("HAVING needs GROUP BY or an aggregate")
+    parse_error("SELECT (COUNT($x)) WHERE { $x ISA $y }").should eq(%[expected AS and a variable, found ")" at line 1, column 18])
+    parse_error("SELECT COUNT($x) AS n WHERE { $x ISA $y }").should eq(%[expected a variable after AS, found "n" at line 1, column 21])
+    parse_error("SELECT COUNT($x) AS $n, COUNT(*) AS $n WHERE { $x ISA $y }").should eq("$n is selected twice at line 1, column 25")
   end
 end
