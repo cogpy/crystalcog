@@ -389,8 +389,9 @@ module PatternMining
     # Variable names, in order of first appearance.
     getter variables : Array(String)
     getter support : Int32
-    # How far the clauses' overlap is from what independent clauses would
-    # give, from 0 (as expected) to 1.
+    # How far the support is from what the best account of it by smaller
+    # parts would give, from 0 (as expected) to 1. Every way of splitting
+    # the clauses into independent blocks is tried and the closest counts.
     getter surprisingness : Float64
     # Every joint grounding: variable name => atom.
     getter groundings : Array(Hash(String, AtomSpace::Atom))
@@ -422,12 +423,18 @@ module PatternMining
       raise MiningException.new("a conjunction needs at least two clauses") if @max_clauses < 2
       @calculator = SupportCalculator.new(@atomspace)
       @scorer = SurprisingnessScorer.new(@atomspace)
+      # Groundings of single clauses and supports of blocks, kept while
+      # mining: the same ones are asked for again and again.
+      @clause_rows = {} of String => Array(Hash(String, AtomSpace::Atom))
+      @block_supports = {} of String => Float64
     end
 
     # Conjunctions of the given patterns, most supported first. A pattern
     # that is a bare variable matches everything and is not used.
     def mine(patterns : Array(PatternMatching::Pattern)) : Array(ConjunctionSupport)
       started = Time.monotonic
+      @clause_rows.clear
+      @block_supports.clear
       parts = patterns.compact_map do |pattern|
         next if pattern.variables.empty? || PatternMatching::Pattern.variable?(pattern.template)
         rows = @calculator.valuations(pattern).map do |valuation|
@@ -525,23 +532,105 @@ module PatternMining
       ConjunctionSupport.new(canonical, names.values, groundings.size, surprisingness(canonical, groundings), groundings)
     end
 
-    # Compares, for a variable shared by all clauses, how many atoms satisfy
-    # every clause with how many would if the clauses were independent.
+    # I-surprisingness: the support of the conjunction against the support
+    # it would have if its clauses fell into blocks that had nothing to do
+    # with one another. A block's groundings are counted on their own; a
+    # variable two blocks share is then right by chance once in as many
+    # tries as there are atoms. A conjunction is only as surprising as its
+    # best explanation leaves it, so the smallest distance over every
+    # split into two or more blocks is the score.
     private def surprisingness(clauses : Array(AtomSpace::Atom), groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
       universe = @atomspace.size.to_f
-      return 0.0 if universe <= 0.0
-      shared = variable_names(clauses.first).find do |name|
-        clauses.all? { |clause| variable_names(clause).includes?(name) }
-      end
-      return 0.0 unless shared
+      return 0.0 if universe <= 0.0 || clauses.size < 2
+      observed = groundings.size.to_f
+      variables = variable_count(clauses)
 
-      together = groundings.map { |row| row[shared].handle }.uniq.size / universe
-      separately = clauses.map do |clause|
-        pattern = PatternMatching::Pattern.new(clause)
-        variable = pattern.variables.find! { |candidate| candidate.name == shared }
-        @calculator.valuations(pattern).map { |valuation| valuation.grounding.bindings[variable].handle }.uniq.size / universe
+      least = 1.0
+      each_partition(clauses) do |blocks|
+        expected = blocks.product(1.0) { |block| block_support(block) }
+        # Each variable is chosen once per block that uses it; all but one
+        # of those choices have to hit the same atom.
+        expected /= universe ** (blocks.sum { |block| variable_count(block) } - variables)
+        least = Math.min(least, @scorer.deviation(observed, expected))
+        break if least <= 0.0
       end
-      @scorer.i_surprisingness(together, separately)
+      least
+    end
+
+    private def variable_count(clauses : Array(AtomSpace::Atom)) : Int32
+      names = [] of String
+      clauses.each { |clause| variable_names(clause, names) }
+      names.size
+    end
+
+    # Every way of putting the clauses into two or more blocks.
+    private def each_partition(clauses : Array(AtomSpace::Atom), & : Array(Array(AtomSpace::Atom)) ->) : Nil
+      # Restricted growth strings: clause i goes to a block numbered at
+      # most one above the highest used before it.
+      assignment = Array(Int32).new(clauses.size, 0)
+      loop do
+        blocks = assignment.max + 1
+        if blocks > 1
+          yield Array.new(blocks) { |block| clauses.each_index.select { |i| assignment[i] == block }.map { |i| clauses[i] }.to_a }
+        end
+
+        position = clauses.size - 1
+        while position > 0
+          highest = assignment[0, position].max
+          if assignment[position] <= highest
+            assignment[position] += 1
+            ((position + 1)...clauses.size).each { |i| assignment[i] = 0 }
+            break
+          end
+          position -= 1
+        end
+        break if position == 0
+      end
+    end
+
+    # How many groundings the clauses of a block have together. Clauses
+    # that share no variable, directly or through others, are counted
+    # apart and multiplied.
+    private def block_support(block : Array(AtomSpace::Atom)) : Float64
+      key = block.map(&.to_s).sort!.join(" ")
+      @block_supports[key] ||= begin
+        remaining = block.dup
+        support = 1.0
+        until remaining.empty?
+          rows = clause_rows(remaining.shift)
+          names = rows.first?.try(&.keys) || [] of String
+          # Join in every clause that shares a variable with what is joined.
+          while index = remaining.index { |clause| variable_names(clause).any? { |name| names.includes?(name) } }
+            rows = join(rows, clause_rows(remaining.delete_at(index)))
+            names = rows.first?.try(&.keys) || names
+            break if rows.empty?
+          end
+          support *= rows.size
+        end
+        support
+      end
+    end
+
+    private def clause_rows(clause : AtomSpace::Atom) : Array(Hash(String, AtomSpace::Atom))
+      @clause_rows[clause.to_s] ||= @calculator.valuations(PatternMatching::Pattern.new(clause)).map do |valuation|
+        valuation.grounding.bindings.to_h { |variable, atom| {variable.name, atom} }
+      end
+    end
+
+    # Rows of both sides that agree on the variables they share.
+    private def join(left : Array(Hash(String, AtomSpace::Atom)), right : Array(Hash(String, AtomSpace::Atom))) : Array(Hash(String, AtomSpace::Atom))
+      empty = [] of Hash(String, AtomSpace::Atom)
+      return empty if left.empty? || right.empty?
+      shared = left.first.keys & right.first.keys
+      index = Hash(Array(AtomSpace::Handle), Array(Hash(String, AtomSpace::Atom))).new
+      right.each do |row|
+        (index[shared.map { |name| row[name].handle }] ||= [] of Hash(String, AtomSpace::Atom)) << row
+      end
+      joined = [] of Hash(String, AtomSpace::Atom)
+      left.each do |row|
+        index[shared.map { |name| row[name].handle }]?.try &.each { |other| joined << row.merge(other) }
+      end
+      joined
     end
 
     private def variable_names(atom : AtomSpace::Atom, names = [] of String) : Array(String)
@@ -632,6 +721,15 @@ module PatternMining
       return 0.0 if max_freq <= 0.0
 
       ((observed_frequency - expected).abs / max_freq).clamp(0.0, 1.0)
+    end
+
+    # How far an observed count or frequency is from the expected one, as
+    # a share of the larger of the two: 0 when they agree, 1 when one of
+    # them is nothing beside the other.
+    def deviation(observed : Float64, expected : Float64) : Float64
+      larger = Math.max(observed, expected)
+      return 0.0 if larger <= 0.0
+      ((observed - expected).abs / larger).clamp(0.0, 1.0)
     end
 
     # Score a discovered pattern's surprisingness relative to the database.
