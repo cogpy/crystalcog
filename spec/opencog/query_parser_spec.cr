@@ -469,3 +469,122 @@ describe "OpenCog query aggregates" do
     parse_error("SELECT COUNT($x) AS $n, COUNT(*) AS $n WHERE { $x ISA $y }").should eq("$n is selected twice at line 1, column 25")
   end
 end
+
+describe "OpenCog query BIND" do
+  it "gives a variable a computed value" do
+    space = shop
+    table(ask(space, "SELECT $x $double WHERE { $x price $p . BIND($p * 2 AS $double) } ORDER BY $x"), "x", "double").should eq(
+      [["apple", "6"], ["leek", "4"], ["pear", "10"], ["plum", "10"]])
+    # Text, and the atom itself for a plain variable.
+    result = ask(space, %[SELECT $x $label $same WHERE { $x ISA Vegetable . BIND(NAME($x) AS $label) . BIND($x AS $same) } ORDER BY $x]).first
+    result.bindings["label"].name.should eq("kale")
+    result.bindings["same"].should be(space.get_nodes_by_name("kale").first)
+    result.bindings["label"].should_not be(space.get_nodes_by_name("kale").first)
+  end
+
+  it "can be filtered, sorted and grouped on" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x price $p . BIND($p * 2 AS $d) . FILTER($d > 8) }"), "x").should eq(["pear", "plum"])
+    # A FILTER written before the BIND still sees it: both belong to the block.
+    names(ask(space, "SELECT $x WHERE { $x price $p . FILTER($d < 5) . BIND($p * 2 AS $d) }"), "x").should eq(["leek"])
+    ask(space, "SELECT $x WHERE { $x price $p . BIND(10 - $p AS $left) } ORDER BY $left, $x").map { |r| r.bindings["x"].name }.should eq(
+      ["pear", "plum", "apple", "leek"])
+    table(ask(space, "SELECT $d COUNT($x) AS $n WHERE { $x price $p . BIND($p * 2 AS $d) } GROUP BY $d ORDER BY $d"), "d", "n").should eq(
+      [["4", "1"], ["6", "1"], ["10", "2"]])
+    table(ask(space, "SELECT DISTINCT $d WHERE { $x price $p . BIND($p * 2 AS $d) } ORDER BY $d"), "d").should eq([["4"], ["6"], ["10"]])
+  end
+
+  it "leaves the variable unbound where the value does not exist" do
+    space = shop
+    rows = ask(space, "SELECT $x $d WHERE { $x ISA Vegetable . OPTIONAL { $x price $p } . BIND($p * 2 AS $d) } ORDER BY $x")
+    table(rows, "x", "d").should eq([["kale", nil], ["leek", "4"]])
+    names(ask(space, "SELECT $x WHERE { $x ISA Vegetable . OPTIONAL { $x price $p } . BIND($p * 2 AS $d) . FILTER(NOT BOUND($d)) }"), "x").should eq(["kale"])
+  end
+
+  it "builds on an earlier BIND and labels the branches of a UNION" do
+    space = shop
+    table(ask(space, "SELECT $x $q WHERE { $x ISA Vegetable . $x price $p . BIND($p * 2 AS $d) . BIND($d + 1 AS $q) }"), "x", "q").should eq([["leek", "5"]])
+    rows = ask(space, %[SELECT $x $kind WHERE { $x ISA Fruit . BIND("sweet" AS $kind) } UNION { $x ISA Vegetable . BIND("green" AS $kind) } ORDER BY $kind, $x])
+    table(rows, "x", "kind").should eq([["kale", "green"], ["leek", "green"], ["apple", "sweet"], ["pear", "sweet"], ["plum", "sweet"]])
+    table(ask(space, %[SELECT $kind COUNT(*) AS $n WHERE { $x ISA Fruit . BIND("sweet" AS $kind) } UNION { $x ISA Vegetable . BIND("green" AS $kind) } GROUP BY $kind ORDER BY $kind]),
+      "kind", "n").should eq([["green", "2"], ["sweet", "3"]])
+  end
+
+  it "adds nothing to the AtomSpace and keeps the word usable as a name" do
+    space = shop
+    before = space.size
+    ask(space, %[SELECT $x $d $t WHERE { $x price $p . BIND($p * 7 AS $d) . BIND("a new name" AS $t) }]).size.should eq(4)
+    space.size.should eq(before)
+    space.get_nodes_by_name("a new name").should be_empty
+
+    other = AtomSpace::AtomSpace.new
+    other.add_inheritance_link(other.add_concept_node("bind"), other.add_concept_node("as"))
+    names(ask(other, "SELECT $x WHERE { bind ISA $x }"), "x").should eq(["as"])
+  end
+
+  it "reports a BIND it cannot make" do
+    parse_error("SELECT $x WHERE { $x price $p . BIND($p * 2 AS $p) }").should eq("$p already has a value in this block at line 1, column 48")
+    parse_error("SELECT $x WHERE { $x price $p . BIND(1 AS $d) . BIND(2 AS $d) }").should eq("$d already has a value in this block at line 1, column 59")
+    parse_error("SELECT $x WHERE { $x price $p . BIND($p * 2) }").should eq(%[expected AS in BIND, found ")" at line 1, column 44])
+    parse_error("SELECT $x WHERE { $x price $p . BIND($p AS d) }").should eq(%[expected a variable after AS, found "d" at line 1, column 44])
+    parse_error("SELECT $x WHERE { $x price $p . BIND($p AS $d }").should eq(%[expected ')' to close BIND, found "}" at line 1, column 47])
+    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { $x price $p . BIND($p AS $d) } }").should eq(
+      "BIND belongs to the block around the OPTIONAL at line 1, column 55")
+  end
+end
+
+describe "OpenCog query groups" do
+  it "joins a UNION inside a block with the rest of the block" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x price $p . { $x ISA Fruit . FILTER($x != apple) } UNION { $x ISA Vegetable } }"), "x").should eq(["leek", "pear", "plum"])
+    # The outer FILTER applies to every alternative.
+    names(ask(space, "SELECT $x WHERE { { $x ISA Fruit } UNION { $x ISA Vegetable } . $x price $p . FILTER($p < 5) }"), "x").should eq(["apple", "leek"])
+    # A block may be nothing but a group.
+    names(ask(space, "SELECT $x WHERE { { $x ISA Fruit } UNION { $x ISA Vegetable } }"), "x").should eq(["apple", "kale", "leek", "pear", "plum"])
+  end
+
+  it "lets a FILTER see only what its own block matches" do
+    space = shop
+    # $p is matched outside the group, so inside it has no value and the
+    # comparison fails for every fruit.
+    names(ask(space, "SELECT $x WHERE { $x price $p . { $x ISA Fruit . FILTER($p > 3) } UNION { $x ISA Vegetable } }"), "x").should eq(["leek"])
+    names(ask(space, "SELECT $x WHERE { { $x ISA Fruit . $x price $p . FILTER($p > 3) } UNION { $x ISA Vegetable } }"), "x").should eq(["kale", "leek", "pear", "plum"])
+    names(ask(space, "SELECT $x WHERE { $x price $p . { $x ISA Fruit } UNION { $x ISA Vegetable } . FILTER($p > 3) }"), "x").should eq(["pear", "plum"])
+  end
+
+  it "reads a group without UNION as part of the block" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . { $x price $p . FILTER($p = 5) } }"), "x").should eq(["pear", "plum"])
+    names(ask(space, "SELECT $x WHERE { { { $x ISA Fruit } } }"), "x").should eq(["apple", "pear", "plum"])
+  end
+
+  it "combines several groups" do
+    space = shop
+    rows = ask(space, "SELECT $x $y WHERE { { $x ISA Fruit } UNION { $x ISA Vegetable } . { $y price 5 } UNION { $y price 2 } . FILTER($x = kale OR $x = apple) } ORDER BY $x, $y")
+    table(rows, "x", "y").should eq([["apple", "leek"], ["apple", "pear"], ["apple", "plum"], ["kale", "leek"], ["kale", "pear"], ["kale", "plum"]])
+    # No alternative matches: nothing does.
+    ask(space, "SELECT $x WHERE { $x ISA Fruit . { $x price 99 } UNION { $x ISA Mineral } }").should be_empty
+  end
+
+  it "takes UNION on a later line and OPTIONAL inside a group" do
+    space = shop
+    text = "SELECT $x $p WHERE {\n  { $x ISA Vegetable . OPTIONAL { $x price $p } }\n  UNION\n  { $x ISA Fruit . $x price $p . FILTER($p = 3) }\n}\nORDER BY $x"
+    table(ask(space, text), "x", "p").should eq([["apple", "3"], ["kale", nil], ["leek", "2"]])
+    parsed = parse(text)
+    parsed.blocks.size.should eq(1)
+    parsed.blocks.first.groups.map(&.size).should eq([2])
+    parsed.variables.map(&.name).should eq(["x", "p"])
+  end
+
+  it "still joins the top-level alternatives of WHERE" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . { $x price 5 } } UNION { $x ISA Vegetable . { $x price 2 } }"), "x").should eq(["leek", "pear", "plum"])
+  end
+
+  it "reports groups it cannot read" do
+    parse_error("SELECT $x WHERE { $x ISA y . { } }").should eq(%[WHERE needs at least one clause at line 1, column 32])
+    parse_error("SELECT $x WHERE { $x ISA y . { $x ISA z } UNION }").should eq(%[expected '{', found "}" at line 1, column 49])
+    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { { $x ISA z } } }").should eq("a group cannot be inside OPTIONAL at line 1, column 41")
+    parse_error("SELECT $x WHERE { $x ISA y . { $x ISA z }").should eq(%[expected '}' to close the block, found the end of the query at line 1, column 42])
+  end
+end

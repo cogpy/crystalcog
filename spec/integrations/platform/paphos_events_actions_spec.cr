@@ -410,9 +410,11 @@ describe "Paphos event stream" do
     end
   end
 
-  it "lets go of a stream whose client went away" do
+  it "lets go of a stream as soon as its client goes away" do
     with_paphos_server do |server|
-      server.stream_keepalive = 30.milliseconds
+      # No keep-alive is due for a long time: the stream has to notice
+      # the closed connection itself.
+      server.stream_keepalive = 10.minutes
       ada = client_for(server, "ada@example.com")
       follow = ada.follow_events { }
       server.active_streams.should eq(1)
@@ -423,6 +425,51 @@ describe "Paphos event stream" do
         sleep 20.milliseconds
       end
       server.active_streams.should eq(0)
+    end
+  end
+
+  it "keeps a quiet stream open with keep-alive lines" do
+    with_paphos_server do |server|
+      server.stream_keepalive = 30.milliseconds
+      ada = client_for(server, "ada@example.com")
+      uri = URI.parse(server.url + "/events/stream")
+      headers = HTTP::Headers{"Authorization" => "Bearer #{ada.token}"}
+      lines = [] of String
+      http = HTTP::Client.new(uri)
+      http.get(uri.request_target, headers: headers) do |response|
+        response.headers["Connection"].should eq("close")
+        response.body_io.each_line do |line|
+          lines << line unless line.empty?
+          break if lines.size == 4
+        end
+      end
+      http.close
+      lines.should eq([": stream open", ": keep-alive", ": keep-alive", ": keep-alive"])
+    end
+  end
+
+  it "serves many streams and lets each go when it closes" do
+    with_paphos_server do |server|
+      server.stream_keepalive = 10.minutes
+      ada = client_for(server, "ada@example.com")
+      seen = Channel(Int64).new(40)
+      follows = Array.new(5) { ada.follow_events { |event| seen.send(event["id"].as_i64) } }
+      server.active_streams.should eq(5)
+
+      ada.publish_event("atom_updates", {"atom" => "cat"})
+      5.times { take(seen).should eq(1) }
+
+      follows.first(3).each(&.close)
+      deadline = Time.monotonic + 5.seconds
+      while server.active_streams > 2 && Time.monotonic < deadline
+        sleep 10.milliseconds
+      end
+      server.active_streams.should eq(2)
+
+      # The two that are left still get events.
+      ada.publish_event("atom_updates", {"atom" => "dog"})
+      2.times { take(seen).should eq(2) }
+      follows.last(2).each(&.close)
     end
   end
 

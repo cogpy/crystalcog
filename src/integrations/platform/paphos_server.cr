@@ -707,28 +707,61 @@ module PaphosBackend
       response.content_type = "text/event-stream"
       response.headers["Cache-Control"] = "no-cache"
       response.headers["X-Accel-Buffering"] = "no"
+      # The stream has no length and ends when the connection does.
+      response.headers["Connection"] = "close"
 
-      # Counted before the first write, so a client that has the response
-      # can rely on the count.
+      # Counted before the headers go out, so a client that has the
+      # response can rely on the count.
       @active_streams += 1
       # Registered before the first look, so an event published between a
       # look and the wait still wakes this stream.
       waiter = wait_for(user.id)
+      owner_id = user.id
+
+      # The connection itself is taken over, so that it can be read as
+      # well as written: a client that hangs up is seen at once, not at
+      # the next write.
+      response.upgrade do |io|
+        serve_stream(io, owner_id, after, types, waiter)
+      end
+    end
+
+    private def serve_stream(io : IO, owner_id : Int64, after : Int64, types : Array(String)?,
+                             waiter : Channel(Nil)) : Nil
+      gone = false
+      # A client has nothing more to say, so the end of what it sends, or
+      # an error reading it, means it has left.
+      spawn do
+        begin
+          scratch = Bytes.new(64)
+          while io.read(scratch) > 0
+          end
+        rescue IO::Error
+        ensure
+          gone = true
+          select
+          when waiter.send(nil)
+          else
+          end
+        end
+      end
+
       last_write = Time.monotonic
       begin
-        response.print ": stream open\n\n"
-        response.flush
-        until @stopped
-          pending = events_for(user.id, after, types, EVENT_LIMIT)
+        io << ": stream open\n\n"
+        io.flush
+        until @stopped || gone
+          pending = events_for(owner_id, after, types, EVENT_LIMIT)
           if pending.empty?
             quiet = @stream_keepalive - (Time.monotonic - last_write)
             if quiet <= Time::Span.zero
-              response.print ": keep-alive\n\n"
-              response.flush
+              io << ": keep-alive\n\n"
+              io.flush
               last_write = Time.monotonic
               next
             end
-            # Sleeps until this user has a new event or a keep-alive is due.
+            # Sleeps until this user has a new event, the client leaves or
+            # a keep-alive is due.
             select
             when waiter.receive
             when timeout(quiet)
@@ -737,16 +770,16 @@ module PaphosBackend
           end
 
           pending.each do |event|
-            response.print "id: #{event.id}\nevent: #{event.type}\ndata: #{event.to_h.to_json}\n\n"
+            io << "id: " << event.id << "\nevent: " << event.type << "\ndata: " << event.to_h.to_json << "\n\n"
             after = event.id
           end
-          response.flush
+          io.flush
           last_write = Time.monotonic
         end
       rescue IO::Error
         # The client closed the connection.
       ensure
-        leave(user.id, waiter)
+        leave(owner_id, waiter)
         @active_streams -= 1
       end
     end

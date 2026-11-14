@@ -128,9 +128,13 @@ end
 
 - **Truth value**: without a block the strengths and confidences of the premises are multiplied and the confidence loses a tenth. A block takes the premises' truth values and returns the conclusion's.
 - **Forward**: `ForwardChainer` offers such a rule only the atoms that fit its premises together. They are found by unification, starting from the links a part already bound is in, and each application is made once, so running more steps does not pile up confidence.
-- **Backward**: `BackwardChainer#prove(goal)` works back from a goal that may contain variables. A rule is tried when its conclusion unifies with the goal, and its premises become goals in turn. It returns each atom proved with the values of the goal's variables, and adds what it concludes on the way to the AtomSpace. A goal of the same shape further up the proof is answered from what is known, which keeps a recursive rule such as transitivity from going round for ever. Depth is limited by `max_depth`.
+- **Backward**: `BackwardChainer#prove(goal)` works back from a goal that may contain variables. A rule is tried when its conclusion unifies with the goal, and its premises become goals in turn. It returns each atom proved with the values of the goal's variables, and adds what it concludes on the way to the AtomSpace. Depth is limited by `max_depth`.
+  - A goal without variables that is in the AtomSpace is its own proof; nothing is searched.
+  - A goal of the same shape further up the proof is answered from what is known so far. A goal's rules are gone through again while a pass concludes something new, and the whole search repeats until it concludes nothing, so a recursive rule such as `ancestor(A, C)` from `ancestor(A, B)` and `parent(B, C)` is followed all the way and still ends.
+  - A goal nothing has been concluded for since it was last worked on is answered from the AtomSpace, which keeps the search short on graphs full of circles.
+  - A rule draws its conclusion from the same premises once per chainer, so proving a thing twice does not merge its truth value in twice.
 - `do_chain` proves its target this way first. `variable_fulfillment_query(pattern, derive: true)` does the same for a pattern before listing its groundings.
-- A rule written as a class can declare shapes too, by defining `premise_patterns` and `conclusion_pattern`; `InheritanceTransitivityRule` does. A rule that declares types only is offered pairs of atoms of those types, as before.
+- A rule written as a class can declare shapes too, by defining `premise_patterns` and `conclusion_pattern`; `InheritanceTransitivityRule` and `EvaluationTransitivityRule` do. A rule whose premises have no single shape can define `find_applications(atomspace, limit, accept)` and look for them its own way: `ModusPonensRule` goes from each implication to its antecedent, or for an implication between patterns to the facts the antecedent fits. A rule that does neither, as `ConjunctionRule`, is offered pairs of atoms of its premise types, as before.
 
 ### Mixed Inference Strategies
 ```crystal
