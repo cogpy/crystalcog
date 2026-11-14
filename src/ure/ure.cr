@@ -152,6 +152,15 @@ module URE
     def conclusion_pattern : AtomSpace::Atom?
       nil
     end
+
+    # For a rule whose premises do not have one shape: the premises it
+    # can be applied to, found its own way, up to `limit`. `accept` says
+    # whether a found application is wanted; ones it turns down do not
+    # count. nil: leave it to the patterns, or failing those the types.
+    def find_applications(atomspace : AtomSpace::AtomSpace, limit : Int32,
+                          accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
+      nil
+    end
   end
 
   # Finds what a rule's patterns fit.
@@ -484,6 +493,40 @@ module URE
       premises.map(&.truth_value.strength).min
     end
 
+    # Each implication with what it can be applied to: its own antecedent
+    # when that is a fact, or for an implication between patterns, the
+    # facts with the antecedent's predicate that the antecedent fits.
+    # Found through the antecedent, not by pairing every implication with
+    # every evaluation.
+    def find_applications(atomspace : AtomSpace::AtomSpace, limit : Int32,
+                          accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
+      found = [] of Array(AtomSpace::Atom)
+      atomspace.get_atoms_by_type(AtomSpace::AtomType::IMPLICATION_LINK).each do |implication|
+        next unless implication.is_a?(AtomSpace::Link) && implication.outgoing.size == 2
+        if_part = implication.outgoing[0]
+        next unless if_part.type == AtomSpace::AtomType::EVALUATION_LINK
+
+        antecedents = if Unifier.ground?(if_part)
+                        [if_part]
+                      elsif if_part.is_a?(AtomSpace::EvaluationLink)
+                        pattern = if_part
+                        pattern.predicate.incoming.select do |candidate|
+                          candidate.is_a?(AtomSpace::EvaluationLink) && !candidate.same?(pattern) &&
+                            Unifier.ground?(candidate) && !unify_atoms(pattern.arguments, candidate.arguments).nil?
+                        end
+                      else
+                        [] of AtomSpace::Atom
+                      end
+
+        antecedents.each do |antecedent|
+          premises = [implication, antecedent]
+          found << premises if accept.call(premises)
+          return found if found.size >= limit
+        end
+      end
+      found
+    end
+
     # Unify pattern atom against ground atom; returns variable bindings or nil
     private def unify_atoms(pattern : AtomSpace::Atom, ground : AtomSpace::Atom) : Hash(String, AtomSpace::Atom)?
       bindings = {} of String => AtomSpace::Atom
@@ -559,6 +602,25 @@ module URE
 
     def conclusion : AtomSpace::AtomType
       AtomSpace::AtomType::EVALUATION_LINK
+    end
+
+    # P(A, B) and P(B, C) give P(A, C). ("on" is the exception `apply`
+    # makes: stacked things are "above" one another.)
+    PATTERNS = begin
+      p, a, b, c = {"$P", "$A", "$B", "$C"}.map { |name| AtomSpace::VariableNode.new(name).as(AtomSpace::Atom) }
+      holds = ->(first : AtomSpace::Atom, second : AtomSpace::Atom) {
+        list = AtomSpace::Link.new(AtomSpace::AtomType::LIST_LINK, [first, second]).as(AtomSpace::Atom)
+        AtomSpace::Link.new(AtomSpace::AtomType::EVALUATION_LINK, [p, list]).as(AtomSpace::Atom)
+      }
+      {[holds.call(a, b), holds.call(b, c)], holds.call(a, c)}
+    end
+
+    def premise_patterns : Array(AtomSpace::Atom)?
+      PATTERNS[0]
+    end
+
+    def conclusion_pattern : AtomSpace::Atom?
+      PATTERNS[1]
     end
 
     def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
@@ -683,13 +745,15 @@ module URE
     end
 
     private def find_rule_applications(rule : Rule) : Array(Array(AtomSpace::Atom))
-      # A rule that says what its premises look like gets the atoms that
-      # fit, found by unification, and each such application once.
+      # A rule that finds its own premises, or says what they look like,
+      # gets the atoms that fit, and each such application once.
+      index = @rules.index(rule) || 0
+      untried = ->(premises : Array(AtomSpace::Atom)) { @tried.add?({index, premises.map(&.handle)}) }
+      if own = rule.find_applications(@atomspace, MAX_APPLICATIONS_PER_RULE, untried)
+        return own
+      end
       if patterns = rule.premise_patterns
-        index = @rules.index(rule) || 0
-        return RuleMatcher.applications(patterns, @atomspace, MAX_APPLICATIONS_PER_RULE) do |premises|
-          @tried.add?({index, premises.map(&.handle)})
-        end
+        return RuleMatcher.applications(patterns, @atomspace, MAX_APPLICATIONS_PER_RULE) { |premises| untried.call(premises) }
       end
 
       applications = [] of Array(AtomSpace::Atom)

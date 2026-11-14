@@ -307,3 +307,124 @@ describe "URE::Unifier.rename" do
     URE::Unifier.rename(ground, "~1").should be(ground)
   end
 end
+
+private def fact(space : AtomSpace::AtomSpace, predicate : String, *names : String, tv = AtomSpace::SimpleTruthValue.new(0.9, 0.9)) : AtomSpace::Atom
+  arguments = names.to_a.map { |name| name.starts_with?("$") ? space.add_node(AtomSpace::AtomType::VARIABLE_NODE, name) : space.add_concept_node(name) }
+  space.add_evaluation_link(space.add_predicate_node(predicate), space.add_list_link(arguments), tv)
+end
+
+describe URE::EvaluationTransitivityRule do
+  it "declares the shapes of a chain" do
+    rule = URE::EvaluationTransitivityRule.new
+    rule.premise_patterns.not_nil!.map { |pattern| URE::Unifier.variables(pattern) }.should eq([["$P", "$A", "$B"], ["$P", "$B", "$C"]])
+    URE::Unifier.variables(rule.conclusion_pattern.not_nil!).should eq(["$P", "$A", "$C"])
+  end
+
+  it "is applied to the links that chain, however many do not" do
+    space = AtomSpace::AtomSpace.new
+    # Forty unrelated facts make 1,560 ordered pairs, none a chain.
+    40.times { |i| fact(space, "knows", "left-#{i}", "right-#{i}") }
+    fact(space, "bigger_than", "elephant", "dog")
+    fact(space, "bigger_than", "dog", "cat")
+
+    chainer = URE::ForwardChainer.new(space)
+    chainer.add_rule(URE::EvaluationTransitivityRule.new)
+    chainer.run.size.should eq(1)
+    pairs(space, "bigger_than").should eq([{"dog", "cat"}, {"elephant", "cat"}, {"elephant", "dog"}])
+  end
+
+  it "does not chain facts of different predicates" do
+    space = AtomSpace::AtomSpace.new
+    fact(space, "bigger_than", "elephant", "dog")
+    fact(space, "older_than", "dog", "cat")
+    chainer = URE::ForwardChainer.new(space)
+    chainer.add_rule(URE::EvaluationTransitivityRule.new)
+    chainer.run.should be_empty
+  end
+
+  it "is chosen for a goal it can conclude" do
+    space = AtomSpace::AtomSpace.new
+    fact(space, "bigger_than", "elephant", "horse")
+    fact(space, "bigger_than", "horse", "dog")
+    fact(space, "bigger_than", "dog", "cat")
+    fact(space, "older_than", "cat", "mouse")
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::EvaluationTransitivityRule.new)
+
+    chainer.prove(relation("bigger_than", concept("elephant"), concept("cat"))).size.should eq(1)
+    smaller = chainer.prove(relation("bigger_than", concept("elephant"), var("$what"))).map { |(_, bindings)| bindings["$what"].name }.sort
+    smaller.should eq(["cat", "dog", "horse"])
+    chainer.prove(relation("bigger_than", concept("elephant"), concept("mouse"))).should be_empty
+    chainer.prove(relation("older_than", concept("elephant"), concept("mouse"))).should be_empty
+  end
+
+  it "still says that stacked things are above one another" do
+    space = AtomSpace::AtomSpace.new
+    fact(space, "on", "cup", "book")
+    fact(space, "on", "book", "table")
+    chainer = URE::ForwardChainer.new(space)
+    chainer.add_rule(URE::EvaluationTransitivityRule.new)
+    chainer.run.size.should eq(1)
+    pairs(space, "above").should eq([{"cup", "table"}])
+    pairs(space, "on").should eq([{"book", "table"}, {"cup", "book"}])
+  end
+end
+
+describe URE::ModusPonensRule do
+  it "finds an implication's antecedent among many facts and implications" do
+    space = AtomSpace::AtomSpace.new
+    sure = AtomSpace::SimpleTruthValue.new(0.9, 0.9)
+    # Thirty implications between unrelated facts come first.
+    30.times do |i|
+      space.add_link(AtomSpace::AtomType::IMPLICATION_LINK,
+        [fact(space, "seen", "thing-#{i}"), fact(space, "noted", "thing-#{i}")], sure)
+    end
+    human = fact(space, "human", "$x")
+    mortal = fact(space, "mortal", "$x")
+    rule_link = space.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [human, mortal], sure)
+    socrates = fact(space, "human", "socrates")
+    fact(space, "human", "plato")
+
+    rule = URE::ModusPonensRule.new
+    found = rule.find_applications(space, 500, ->(_premises : Array(AtomSpace::Atom)) { true }).not_nil!
+    found.size.should eq(32)
+    found.count { |premises| premises[0].same?(rule_link) }.should eq(2)
+    found.should contain([rule_link, socrates])
+    # The pattern is not a fact about itself.
+    found.any? { |premises| premises[1].same?(human) }.should be_false
+
+    chainer = URE::ForwardChainer.new(space)
+    chainer.add_rule(rule)
+    chainer.run
+    mortals = space.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).select do |atom|
+      atom.outgoing[0].name == "mortal" && URE::Unifier.ground?(atom)
+    end
+    mortals.map { |atom| atom.outgoing[1].outgoing[0].name }.sort.should eq(["plato", "socrates"])
+  end
+
+  it "stops at the limit and leaves out what is not wanted" do
+    space = AtomSpace::AtomSpace.new
+    links = Array.new(6) do |i|
+      space.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [fact(space, "seen", "thing-#{i}"), fact(space, "noted", "thing-#{i}")])
+    end
+    rule = URE::ModusPonensRule.new
+    rule.find_applications(space, 4, ->(_premises : Array(AtomSpace::Atom)) { true }).not_nil!.size.should eq(4)
+    later = rule.find_applications(space, 4, ->(premises : Array(AtomSpace::Atom)) { !premises[0].same?(links[0]) }).not_nil!
+    later.map(&.[0]).should eq(links[1, 4])
+  end
+
+  it "draws each conclusion once, so more steps do not pile up confidence" do
+    space = AtomSpace::AtomSpace.new
+    rain = fact(space, "raining", "city", tv: AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    wet = fact(space, "wet", "street", tv: AtomSpace::SimpleTruthValue.new(0.5, 0.1))
+    space.add_link(AtomSpace::AtomType::IMPLICATION_LINK, [rain, wet], AtomSpace::SimpleTruthValue.new(0.9, 0.9))
+    chainer = URE::ForwardChainer.new(space)
+    chainer.add_rule(URE::ModusPonensRule.new)
+
+    chainer.step_forward
+    after_one = {wet.truth_value.strength, wet.truth_value.confidence}
+    after_one[1].should be > 0.1
+    3.times { chainer.step_forward }
+    {wet.truth_value.strength, wet.truth_value.confidence}.should eq(after_one)
+  end
+end
