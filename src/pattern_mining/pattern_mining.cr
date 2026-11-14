@@ -427,6 +427,7 @@ module PatternMining
       # mining: the same ones are asked for again and again.
       @clause_rows = {} of String => Array(Hash(String, AtomSpace::Atom))
       @block_supports = {} of String => Float64
+      @type_sizes = {} of AtomSpace::AtomType => Int32
     end
 
     # Conjunctions of the given patterns, most supported first. A pattern
@@ -435,6 +436,7 @@ module PatternMining
       started = Time.monotonic
       @clause_rows.clear
       @block_supports.clear
+      @type_sizes.clear
       parts = patterns.compact_map do |pattern|
         next if pattern.variables.empty? || PatternMatching::Pattern.variable?(pattern.template)
         rows = @calculator.valuations(pattern).map do |valuation|
@@ -536,31 +538,36 @@ module PatternMining
     # it would have if its clauses fell into blocks that had nothing to do
     # with one another. A block's groundings are counted on their own; a
     # variable two blocks share is then right by chance once in as many
-    # tries as there are atoms. A conjunction is only as surprising as its
-    # best explanation leaves it, so the smallest distance over every
-    # split into two or more blocks is the score.
+    # tries as there are atoms it could have been. A conjunction is only
+    # as surprising as its best explanation leaves it, so the smallest
+    # distance over every split into two or more blocks is the score.
     private def surprisingness(clauses : Array(AtomSpace::Atom), groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
-      universe = @atomspace.size.to_f
-      return 0.0 if universe <= 0.0 || clauses.size < 2
+      return 0.0 if clauses.size < 2 || groundings.empty?
       observed = groundings.size.to_f
-      variables = variable_count(clauses)
+      domains = groundings.first.keys.to_h { |name| {name, domain(name, groundings)} }
 
       least = 1.0
       each_partition(clauses) do |blocks|
         expected = blocks.product(1.0) { |block| block_support(block) }
         # Each variable is chosen once per block that uses it; all but one
         # of those choices have to hit the same atom.
-        expected /= universe ** (blocks.sum { |block| variable_count(block) } - variables)
+        domains.each do |name, size|
+          uses = blocks.count { |block| block.any? { |clause| variable_names(clause).includes?(name) } }
+          expected /= size ** (uses - 1) if uses > 1
+        end
         least = Math.min(least, @scorer.deviation(observed, expected))
         break if least <= 0.0
       end
       least
     end
 
-    private def variable_count(clauses : Array(AtomSpace::Atom)) : Int32
-      names = [] of String
-      clauses.each { |clause| variable_names(clause, names) }
-      names.size
+    # How many atoms a variable could have stood for: those of the types
+    # it takes in the groundings. A variable that only ever names concepts
+    # is not weighed against every link and predicate in the AtomSpace.
+    private def domain(name : String, groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
+      types = groundings.compact_map { |row| row[name]?.try(&.type) }.uniq
+      size = types.sum { |type| @type_sizes[type] ||= @atomspace.get_atoms_by_type(type).size }
+      Math.max(size, 1).to_f
     end
 
     # Every way of putting the clauses into two or more blocks.
