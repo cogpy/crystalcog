@@ -251,18 +251,21 @@ Two minor test failures in distributed storage edge cases:
 | Query BIND and groups inside a block | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
 | Mined variables weighed against the atoms of their types | `ConjunctionMiner` in `src/pattern_mining/pattern_mining.cr` |
 | Paphos streams that notice a client hanging up at once | `src/integrations/platform/paphos_server.cr` |
+| Cluster leader election by majority vote in numbered terms | `src/atomspace/distributed_cluster.cr`, [DISTRIBUTED_ATOMSPACE_CLUSTERING.md](DISTRIBUTED_ATOMSPACE_CLUSTERING.md) |
+| Query MINUS, VALUES and subqueries | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
+| URE proof search that works back through modus ponens | `Rule#premises_for` in `src/ure/ure.cr` |
 
 ### Still simplified
 
 | Area | State |
 |---|---|
 | PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. A second derivation that shares part of its evidence with the conclusion is left out whole; the part that was new is not counted. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
-| URE rules | The conjunction rule still declares types alone and gets the first 500 pairs of evaluation links. The proof search is depth-first with a depth limit and a budget, not a best-first search over the inference tree, and uses only rules that declare the shape of their conclusion, which modus ponens does not. |
-| Query language | Clauses are inheritance and subject-predicate-object triples. No subqueries (a SELECT inside a block), MINUS or VALUES. A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
+| URE rules | The conjunction rule still declares types alone and gets the first 500 pairs of evaluation links. The proof search is depth-first with a depth limit and a budget, not a best-first search over the inference tree. An antecedent that is written in an implication counts as a fact, because being in the AtomSpace is all a fact is. |
+| Query language | Clauses are inheritance and subject-predicate-object triples. No property paths, no CONSTRUCT or ASK forms. A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
 | Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. A variable is weighed against every atom of the types it takes, not only those that could fill its place in a clause. |
 | Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded and 12-bit JPEGs are refused. CMYK is converted without a colour profile. |
 | Paphos events | The last 1,000 of each user are kept. A stream takes over its connection, so a client that closes only its sending side is taken to have left. |
-| Distributed cluster | Membership converges by announcement and heartbeat; there is no consensus protocol. |
+| Distributed cluster | A leader is elected by majority vote, but there is no replicated log: nothing but who leads is decided through it. Atom changes still spread by broadcast with conflict resolution at each node. |
 
 ---
 
