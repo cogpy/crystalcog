@@ -134,7 +134,8 @@ module PaphosBackend
     end
 
     # Something that happened, published by a client or by the server. The
-    # last `EVENT_LIMIT` are kept, in the data file when there is one.
+    # last `EVENT_LIMIT` of each user are kept, in a journal beside the data
+    # file when there is one.
     record Event, id : Int64, owner_id : Int64, type : String, source : String,
       data : Hash(String, String), created_at : Int64 do
       include JSON::Serializable
@@ -152,7 +153,7 @@ module PaphosBackend
     class ActionError < Exception
     end
 
-    # Events kept per server; older ones are dropped.
+    # Events kept per user; a user's older ones are dropped.
     EVENT_LIMIT = 1000
     # Longest a GET /events?wait= request is held open.
     EVENT_WAIT_LIMIT = 25.seconds
@@ -165,6 +166,11 @@ module PaphosBackend
     @stopped = false
     # Lines in the journal file, to know when to cut it back.
     @journal_lines = 0
+    # How many events each user has in the store.
+    @event_counts = Hash(Int64, Int32).new(0)
+    # The streams and waiting requests of each user. Publishing an event
+    # puts a token in each of its owner's channels.
+    @waiters = Hash(Int64, Array(Channel(Nil))).new
 
     getter port : Int32 = 0
     @actions = {} of String => Action
@@ -202,9 +208,44 @@ module PaphosBackend
         event = Event.new(@store.next_event_id, owner_id, type, source, data, Time.utc.to_unix_ms)
         @store.next_event_id += 1
         @store.events << event
-        @store.events.shift if @store.events.size > EVENT_LIMIT
+        if (@event_counts[owner_id] += 1) > EVENT_LIMIT
+          # Only this user's oldest event makes room.
+          if oldest = @store.events.index { |kept| kept.owner_id == owner_id }
+            @store.events.delete_at(oldest)
+          end
+          @event_counts[owner_id] = EVENT_LIMIT
+        end
         journal(event)
+        wake(owner_id)
         event
+      end
+    end
+
+    # A channel that gets a token whenever the user has a new event, and
+    # when the server stops. Give it back with `leave`.
+    private def wait_for(owner_id : Int64) : Channel(Nil)
+      channel = Channel(Nil).new(1)
+      @mutex.synchronize { (@waiters[owner_id] ||= [] of Channel(Nil)) << channel }
+      channel
+    end
+
+    private def leave(owner_id : Int64, channel : Channel(Nil)) : Nil
+      @mutex.synchronize do
+        if list = @waiters[owner_id]?
+          list.delete(channel)
+          @waiters.delete(owner_id) if list.empty?
+        end
+      end
+    end
+
+    # Tell a user's streams and waiting requests to look again. A channel
+    # that already holds a token needs no second one.
+    private def wake(owner_id : Int64) : Nil
+      @waiters[owner_id]?.try &.each do |channel|
+        select
+        when channel.send(nil)
+        else
+        end
       end
     end
 
@@ -231,6 +272,7 @@ module PaphosBackend
 
     def stop
       @stopped = true
+      @mutex.synchronize { @waiters.each_key { |owner_id| wake(owner_id) } }
       @server.try(&.close)
     end
 
@@ -623,11 +665,26 @@ module PaphosBackend
       limit = (query["limit"]?.try(&.to_i?) || 100).clamp(1, EVENT_LIMIT)
       wait = (query["wait"]?.try(&.to_f?) || 0.0).clamp(0.0, EVENT_WAIT_LIMIT.total_seconds).seconds
 
-      deadline = Time.monotonic + wait
       matching = events_for(user.id, after, types, limit)
-      while matching.empty? && Time.monotonic < deadline
-        sleep 20.milliseconds
-        matching = events_for(user.id, after, types, limit)
+      if matching.empty? && wait > Time::Span.zero
+        # Held until the user has a new event, not until a timer says to
+        # look again. An event of another type starts the wait again.
+        deadline = Time.monotonic + wait
+        waiter = wait_for(user.id)
+        begin
+          matching = events_for(user.id, after, types, limit)
+          while matching.empty? && !@stopped
+            remaining = deadline - Time.monotonic
+            break if remaining <= Time::Span.zero
+            select
+            when waiter.receive
+            when timeout(remaining)
+            end
+            matching = events_for(user.id, after, types, limit)
+          end
+        ensure
+          leave(user.id, waiter)
+        end
       end
       respond(ctx, {"events" => matching.map(&.to_h), "last_id" => matching.last?.try(&.id) || after})
     end
@@ -654,24 +711,28 @@ module PaphosBackend
       # Counted before the first write, so a client that has the response
       # can rely on the count.
       @active_streams += 1
+      # Registered before the first look, so an event published between a
+      # look and the wait still wakes this stream.
+      waiter = wait_for(user.id)
       last_write = Time.monotonic
-      # The id the next event gets, as of the last look: nothing is
-      # searched while it stands still.
-      looked_at = 0_i64
       begin
         response.print ": stream open\n\n"
         response.flush
         until @stopped
-          upcoming = @store.next_event_id
-          pending = upcoming == looked_at ? [] of Event : events_for(user.id, after, types, EVENT_LIMIT)
-          looked_at = upcoming
+          pending = events_for(user.id, after, types, EVENT_LIMIT)
           if pending.empty?
-            if Time.monotonic - last_write >= @stream_keepalive
+            quiet = @stream_keepalive - (Time.monotonic - last_write)
+            if quiet <= Time::Span.zero
               response.print ": keep-alive\n\n"
               response.flush
               last_write = Time.monotonic
+              next
             end
-            sleep 20.milliseconds
+            # Sleeps until this user has a new event or a keep-alive is due.
+            select
+            when waiter.receive
+            when timeout(quiet)
+            end
             next
           end
 
@@ -685,6 +746,7 @@ module PaphosBackend
       rescue IO::Error
         # The client closed the connection.
       ensure
+        leave(user.id, waiter)
         @active_streams -= 1
       end
     end
@@ -750,6 +812,7 @@ module PaphosBackend
         removed = @mutex.synchronize do
           before = @store.events.size
           @store.events.reject! { |event| event.owner_id == user }
+          @event_counts.delete(user)
           rewrite_journal
           before - @store.events.size
         end
@@ -844,19 +907,23 @@ module PaphosBackend
       end
       @store.events.sort_by!(&.id)
       @store.events.uniq!(&.id)
-      @store.events.shift(@store.events.size - EVENT_LIMIT) if @store.events.size > EVENT_LIMIT
       last = @store.events.last?.try(&.id) || 0_i64
+      # Each user keeps their newest events.
+      @event_counts.clear
+      kept = @store.events.reverse.select { |event| (@event_counts[event.owner_id] += 1) <= EVENT_LIMIT }
+      @event_counts.each_key { |owner_id| @event_counts[owner_id] = Math.min(@event_counts[owner_id], EVENT_LIMIT) }
+      @store.events = kept.reverse!
       @store.next_event_id = Math.max(@store.next_event_id, last + 1)
       # An older store file carried the events itself: move them over.
       rewrite_journal if path && @journal_lines != @store.events.size
     end
 
     # Add one event to the journal: one line, however many events exist.
-    # The file is cut back to the kept events when it has grown to twice
-    # their limit.
+    # The file is cut back to the kept events when the lines it no longer
+    # needs are as many as those events, and at least one user's limit.
     private def journal(event : Event) : Nil
       path = journal_path || return
-      if @journal_lines >= EVENT_LIMIT * 2
+      if @journal_lines - @store.events.size >= Math.max(EVENT_LIMIT, @store.events.size)
         rewrite_journal
       else
         File.open(path, "a") { |file| file.puts event.to_json }

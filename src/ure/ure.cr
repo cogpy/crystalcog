@@ -114,6 +114,21 @@ module URE
     def self.unifiable?(a : AtomSpace::Atom, b : AtomSpace::Atom) : Bool
       !unify(a, b).nil?
     end
+
+    # The atom with `suffix` added to the name of every variable, so that
+    # a rule's `$A` is not taken for the `$A` of a goal it is tried on.
+    def self.rename(atom : AtomSpace::Atom, suffix : String) : AtomSpace::Atom
+      if variable?(atom)
+        AtomSpace::Node.new(atom.type, atom.name + suffix).as(AtomSpace::Atom)
+      elsif atom.is_a?(AtomSpace::Link)
+        children = atom.outgoing
+        renamed = children.map { |child| rename(child, suffix) }
+        unchanged = renamed.each_with_index.all? { |child, i| child.same?(children[i]) }
+        unchanged ? atom : AtomSpace::Link.new(atom.type, renamed, atom.truth_value).as(AtomSpace::Atom)
+      else
+        atom
+      end
+    end
   end
 
   # Generic rule interface for URE
@@ -123,6 +138,170 @@ module URE
     abstract def conclusion : AtomSpace::AtomType
     abstract def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
     abstract def fitness(premises : Array(AtomSpace::Atom)) : Float64
+
+    # The shapes of the premises, in the order `apply` takes them, with
+    # `$variables` where any atom may stand and the same variable where
+    # the same atom must. A rule that declares them is offered only the
+    # atoms that fit together, and is chosen for a goal only when its
+    # conclusion can be that goal. nil: the rule declares types alone.
+    def premise_patterns : Array(AtomSpace::Atom)?
+      nil
+    end
+
+    # The shape of the conclusion, in the variables of the premises.
+    def conclusion_pattern : AtomSpace::Atom?
+      nil
+    end
+  end
+
+  # Finds what a rule's patterns fit.
+  module RuleMatcher
+    # The bindings under which these atoms are the rule's premises, in
+    # order; nil when they do not fit together.
+    def self.match(patterns : Array(AtomSpace::Atom), atoms : Array(AtomSpace::Atom)) : Bindings?
+      return nil unless patterns.size == atoms.size
+      bindings = Bindings.new
+      patterns.each_with_index do |pattern, i|
+        bindings = Unifier.unify(pattern, atoms[i], bindings) || return nil
+      end
+      bindings
+    end
+
+    # Every way the ground atoms of an AtomSpace satisfy the patterns
+    # together, as the atoms in pattern order, up to `limit`. The block
+    # says whether a found application is wanted; ones it turns down do
+    # not count toward the limit. An atom is used for one premise only.
+    def self.applications(patterns : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace, limit : Int32,
+                          & : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))
+      found = [] of Array(AtomSpace::Atom)
+      return found if patterns.empty?
+      # Explicit stack: premise index, bindings so far, atoms chosen so far.
+      pending = [{0, Bindings.new, [] of AtomSpace::Atom}]
+      while state = pending.pop?
+        index, bindings, chosen = state
+        if index == patterns.size
+          found << chosen if yield chosen
+          return found if found.size >= limit
+          next
+        end
+
+        goal = Unifier.resolve(patterns[index], bindings)
+        # Pushed in reverse so that applications come out in AtomSpace order.
+        candidates(goal, atomspace).reverse_each do |atom|
+          next if chosen.any?(&.same?(atom))
+          next unless Unifier.ground?(atom)
+          extended = Unifier.unify(goal, atom, bindings) || next
+          pending << {index + 1, extended, chosen + [atom]}
+        end
+      end
+      found
+    end
+
+    # The atoms a pattern could be: those of its type, or when one of its
+    # parts is already an atom of the AtomSpace, only the links that part
+    # is in. The part in the fewest links narrows the most.
+    def self.candidates(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
+      if goal.is_a?(AtomSpace::Link)
+        narrowest = nil
+        goal.outgoing.each do |child|
+          next unless Unifier.ground?(child)
+          known = canonical(child, atomspace) || return [] of AtomSpace::Atom
+          incoming = known.incoming
+          narrowest = incoming if narrowest.nil? || incoming.size < narrowest.size
+        end
+        return narrowest.select { |atom| atom.type == goal.type } if narrowest
+      end
+      atomspace.get_atoms_by_type(goal.type)
+    end
+
+    # The AtomSpace's own atom for a ground atom, if it has one.
+    def self.canonical(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
+      if atom.is_a?(AtomSpace::Link)
+        children = [] of AtomSpace::Atom
+        atom.outgoing.each { |child| children << (canonical(child, atomspace) || return nil) }
+        atomspace.find_link(atom.type, children)
+      else
+        atomspace.get_nodes_by_name(atom.name, atom.type).first?
+      end
+    end
+
+    # Put a ground atom into the AtomSpace with a truth value. Its parts
+    # are looked up first, so that what is there keeps its truth value.
+    def self.intern(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, tv : AtomSpace::TruthValue) : AtomSpace::Atom
+      if atom.is_a?(AtomSpace::Link)
+        atomspace.add_link(atom.type, atom.outgoing.map { |child| intern_part(child, atomspace) }, tv)
+      else
+        atomspace.add_node(atom.type, atom.name, tv)
+      end
+    end
+
+    private def self.intern_part(atom : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
+      if atom.is_a?(AtomSpace::Link)
+        children = atom.outgoing.map { |child| intern_part(child, atomspace) }
+        atomspace.find_link(atom.type, children) || atomspace.add_link(atom.type, children)
+      else
+        atomspace.get_nodes_by_name(atom.name, atom.type).first? || atomspace.add_node(atom.type, atom.name)
+      end
+    end
+  end
+
+  # A rule given by the shapes of its premises and of its conclusion:
+  #
+  #   PatternRule.new("grandparent",
+  #     [parent($X, $Y), parent($Y, $Z)],     # premises
+  #     grandparent($X, $Z))                  # conclusion
+  #
+  # The chainers apply it wherever atoms fit the premises together, and
+  # choose it for a goal the conclusion unifies with. The block computes
+  # the conclusion's truth value from those of the premises; without one
+  # strengths and confidences are multiplied, and confidence loses a tenth.
+  class PatternRule < Rule
+    getter name : String
+    getter premise_patterns : Array(AtomSpace::Atom)
+    getter conclusion_pattern : AtomSpace::Atom
+
+    def initialize(@name : String, @premise_patterns : Array(AtomSpace::Atom), @conclusion_pattern : AtomSpace::Atom,
+                   &@formula : Array(AtomSpace::TruthValue) -> AtomSpace::TruthValue)
+      raise ArgumentError.new("#{@name}: a rule needs a premise") if @premise_patterns.empty?
+      if @premise_patterns.any? { |pattern| Unifier.variable?(pattern) }
+        raise ArgumentError.new("#{@name}: a premise cannot be a bare variable")
+      end
+      known = @premise_patterns.flat_map { |pattern| Unifier.variables(pattern) }
+      loose = Unifier.variables(@conclusion_pattern) - known
+      unless loose.empty?
+        raise ArgumentError.new("#{@name}: #{loose.join(", ")} in the conclusion is in no premise")
+      end
+    end
+
+    def self.new(name : String, premise_patterns : Array(AtomSpace::Atom), conclusion_pattern : AtomSpace::Atom) : PatternRule
+      new(name, premise_patterns, conclusion_pattern) do |values|
+        strength = values.product(1.0, &.strength)
+        confidence = values.product(1.0, &.confidence) * 0.9
+        AtomSpace::SimpleTruthValue.new(strength, confidence).as(AtomSpace::TruthValue)
+      end
+    end
+
+    def premises : Array(AtomSpace::AtomType)
+      @premise_patterns.map(&.type)
+    end
+
+    def conclusion : AtomSpace::AtomType
+      @conclusion_pattern.type
+    end
+
+    def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
+      bindings = RuleMatcher.match(@premise_patterns, premises) || return nil
+      concluded = Unifier.resolve(@conclusion_pattern, bindings)
+      return nil unless Unifier.ground?(concluded)
+      # A conclusion that is one of its own premises says nothing new.
+      return nil if premises.any? { |premise| premise.type == concluded.type && premise.to_s == concluded.to_s }
+      RuleMatcher.intern(concluded, atomspace, @formula.call(premises.map(&.truth_value)))
+    end
+
+    def fitness(premises : Array(AtomSpace::Atom)) : Float64
+      return 0.0 if premises.empty?
+      premises.sum(&.truth_value.confidence) / premises.size
+    end
   end
 
   # Rule to handle simple logical conjunction
@@ -185,6 +364,23 @@ module URE
 
     def conclusion : AtomSpace::AtomType
       AtomSpace::AtomType::INHERITANCE_LINK
+    end
+
+    # A->B and B->C give A->C.
+    PATTERNS = begin
+      a, b, c = {"$A", "$B", "$C"}.map { |name| AtomSpace::VariableNode.new(name).as(AtomSpace::Atom) }
+      inherits = ->(child : AtomSpace::Atom, parent : AtomSpace::Atom) {
+        AtomSpace::Link.new(AtomSpace::AtomType::INHERITANCE_LINK, [child, parent]).as(AtomSpace::Atom)
+      }
+      {[inherits.call(a, b), inherits.call(b, c)], inherits.call(a, c)}
+    end
+
+    def premise_patterns : Array(AtomSpace::Atom)?
+      PATTERNS[0]
+    end
+
+    def conclusion_pattern : AtomSpace::Atom?
+      PATTERNS[1]
     end
 
     def apply(premises : Array(AtomSpace::Atom), atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom?
@@ -410,11 +606,15 @@ module URE
     # Handles of conclusions already produced. Results come back canonical from
     # the AtomSpace, so the handle identifies the conclusion without rendering it.
     @seen_results : Set(AtomSpace::Handle)
+    # Applications of pattern rules already made, as the rule and its
+    # premises. Each is made once, so a later step moves on to others.
+    @tried : Set({Int32, Array(AtomSpace::Handle)})
     MAX_APPLICATIONS_PER_RULE = 500
 
     def initialize(@atomspace : AtomSpace::AtomSpace, @max_iterations = 100)
       @rules = [] of Rule
       @seen_results = Set(AtomSpace::Handle).new
+      @tried = Set({Int32, Array(AtomSpace::Handle)}).new
     end
 
     def add_rule(rule : Rule)
@@ -423,6 +623,7 @@ module URE
 
     def clear_seen_results
       @seen_results.clear
+      @tried.clear
     end
 
     def add_default_rules
@@ -434,6 +635,7 @@ module URE
 
     def run(max_iterations : Int32 = @max_iterations) : Array(AtomSpace::Atom)
       @seen_results.clear
+      @tried.clear
       new_atoms = [] of AtomSpace::Atom
       iterations = 0
 
@@ -481,6 +683,15 @@ module URE
     end
 
     private def find_rule_applications(rule : Rule) : Array(Array(AtomSpace::Atom))
+      # A rule that says what its premises look like gets the atoms that
+      # fit, found by unification, and each such application once.
+      if patterns = rule.premise_patterns
+        index = @rules.index(rule) || 0
+        return RuleMatcher.applications(patterns, @atomspace, MAX_APPLICATIONS_PER_RULE) do |premises|
+          @tried.add?({index, premises.map(&.handle)})
+        end
+      end
+
       applications = [] of Array(AtomSpace::Atom)
       premise_types = rule.premises
 
@@ -577,8 +788,100 @@ module URE
       add_rule(InheritanceTransitivityRule.new)
     end
 
+    # Rule expansions one proof search may make.
+    PROOF_BUDGET = 20_000
+
+    # Prove a goal from the AtomSpace with the rules that declare
+    # patterns, working back from the goal: a rule is tried when its
+    # conclusion unifies with the goal, and its premises become goals in
+    # turn. The goal may contain variables. Every conclusion reached on
+    # the way is added to the AtomSpace by the rule that draws it.
+    #
+    # Returns one entry per proof found: the atom proved and the values
+    # of the goal's variables. A goal that is in the AtomSpace already is
+    # its own proof.
+    def prove(goal : AtomSpace::Atom) : Array({AtomSpace::Atom, Bindings})
+      @expansions = 0
+      names = Unifier.variables(goal)
+      solve(goal, Bindings.new, 0, [] of String).map do |(atom, bindings)|
+        {atom, names.to_h { |name| {name, Unifier.resolve(bindings[name], bindings)} }}
+      end
+    end
+
+    @expansions = 0
+    @renamings = 0
+
+    # Proofs of `goal` under `bindings`: the atom and the bindings extended.
+    private def solve(goal : AtomSpace::Atom, bindings : Bindings, depth : Int32,
+                      path : Array(String)) : Array({AtomSpace::Atom, Bindings})
+      goal = Unifier.resolve(goal, bindings)
+      proofs = [] of {AtomSpace::Atom, Bindings}
+      proved = Set(AtomSpace::Handle).new
+
+      RuleMatcher.candidates(goal, @atomspace).each do |atom|
+        next unless Unifier.ground?(atom)
+        extended = Unifier.unify(goal, atom, bindings) || next
+        proofs << {atom, extended} if proved.add?(atom.handle)
+      end
+      return proofs if depth >= @max_depth
+
+      # A goal of the same shape further up is already being worked on;
+      # going into it again would never end. What is known still counts.
+      shape = shape_of(goal)
+      return proofs if path.includes?(shape)
+      path << shape
+
+      @rules.each do |rule|
+        patterns = rule.premise_patterns || next
+        concluded = rule.conclusion_pattern || next
+        next unless concluded.type == goal.type
+        break if @expansions >= PROOF_BUDGET
+        @expansions += 1
+
+        # The rule's variables are its own.
+        suffix = "~#{@renamings += 1}"
+        start = Unifier.unify(Unifier.rename(concluded, suffix), goal, bindings) || next
+        premises = patterns.map { |pattern| Unifier.rename(pattern, suffix) }
+
+        solve_all(premises, 0, start, [] of AtomSpace::Atom, depth + 1, path) do |atoms|
+          next if atoms.uniq(&.handle).size < atoms.size
+          conclusion = rule.apply(atoms, @atomspace) || next
+          extended = Unifier.unify(goal, conclusion, bindings) || next
+          proofs << {conclusion, extended} if proved.add?(conclusion.handle)
+        end
+      end
+
+      path.pop
+      proofs
+    end
+
+    # Each way of proving the premises from `index` on, one after another.
+    private def solve_all(premises : Array(AtomSpace::Atom), index : Int32, bindings : Bindings,
+                          atoms : Array(AtomSpace::Atom), depth : Int32, path : Array(String),
+                          &block : Array(AtomSpace::Atom) ->) : Nil
+      if index == premises.size
+        block.call(atoms)
+        return
+      end
+      solve(premises[index], bindings, depth, path).each do |(atom, extended)|
+        solve_all(premises, index + 1, extended, atoms + [atom], depth, path, &block)
+      end
+    end
+
+    # A goal with its variables numbered by first appearance, so that two
+    # goals that differ only in the names of their variables look alike.
+    private def shape_of(goal : AtomSpace::Atom) : String
+      names = {} of String => String
+      Unifier.variables(goal).each { |name| names[name] = "$#{names.size}" }
+      names.empty? ? goal.to_s : Unifier.resolve(goal, names.transform_values { |name| AtomSpace::VariableNode.new(name).as(AtomSpace::Atom) }).to_s
+    end
+
     # Advanced backward chaining with BIT construction
     def do_chain(target : AtomSpace::Atom) : Array(AtomSpace::Atom)
+      # Rules that declare patterns can prove the target outright; what
+      # they conclude is then in the AtomSpace for the search below.
+      prove(target) if @rules.any?(&.premise_patterns)
+
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]
       @current_iteration = 0
@@ -598,13 +901,17 @@ module URE
       !results.empty?
     end
 
-    # Variable fulfillment query - find groundings for variables
-    def variable_fulfillment_query(pattern : AtomSpace::Atom) : Array(Hash(String, AtomSpace::Atom))
+    # Variable fulfillment query - find groundings for variables. With
+    # `derive`, what the pattern rules can conclude about the pattern is
+    # worked out first and counts too; that adds those conclusions to the
+    # AtomSpace.
+    def variable_fulfillment_query(pattern : AtomSpace::Atom, derive : Bool = false) : Array(Hash(String, AtomSpace::Atom))
       groundings = [] of Hash(String, AtomSpace::Atom)
 
       # Extract variables from pattern
       variables = Unifier.variables(pattern)
       return groundings if variables.empty?
+      prove(pattern) if derive
 
       # Each ground atom the pattern unifies with gives one grounding.
       # Atoms with variables of their own, the pattern included when it is
@@ -700,9 +1007,14 @@ module URE
     end
 
     private def find_applicable_rules(target : AtomSpace::Atom) : Array(Rule)
-      # A rule declares the type of atom it concludes, and nothing more
-      # specific, so the type is all there is to match a target against.
-      @rules.select { |rule| rule.conclusion == target.type }
+      # A rule that declares the shape of its conclusion applies when that
+      # shape can be the target. One that declares only a type is matched
+      # on the type.
+      @rules.select do |rule|
+        next false unless rule.conclusion == target.type
+        pattern = rule.conclusion_pattern
+        pattern.nil? || Unifier.unifiable?(Unifier.rename(pattern, "~rule"), target)
+      end
     end
 
     private def create_premise_nodes(rule : Rule, target : AtomSpace::Atom, depth : Int32) : Array(BITNode)

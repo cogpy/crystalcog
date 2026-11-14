@@ -3,9 +3,16 @@
 #
 # Grammar (keywords in any case; `#` starts a comment):
 #
-#   query     := SELECT [DISTINCT] ( "*" | variable { [","] variable } )
+#   query     := SELECT [DISTINCT] ( "*" | item { [","] item } )
 #                WHERE block { UNION block }
-#                [ ORDER BY key { "," key } ] [ LIMIT integer ]
+#                [ GROUP BY "$" name { [","] "$" name } ]
+#                [ HAVING "(" condition ")" ]
+#                [ ORDER BY key { "," key } ]
+#                [ LIMIT integer ] [ OFFSET integer ]     (in either order)
+#   item      := variable | aggregate [ AS "$" name ]
+#              | "(" aggregate AS "$" name ")"
+#   aggregate := COUNT "(" ( "*" | [DISTINCT] value ) ")"
+#              | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 #   variable  := "$" name [ ":" type ]
 #   block     := "{" clause { ( "." | newline ) clause } "}"
 #   clause    := term ( ISA | inherits_from | "->" ) term
@@ -17,9 +24,14 @@
 #              | NOT condition | "(" condition ")"
 #              | value ( "=" | "!=" | "<" | "<=" | ">" | ">=" ) value
 #              | CONTAINS "(" value "," value ")" | BOUND "(" "$" name ")"
-#   value     := "$" name | name | "quoted text" | number
+#   value     := value ( "+" | "-" | "*" | "/" ) value | "-" value
+#              | "(" value ")"
+#              | "$" name | name | "quoted text" | number
 #              | ( NAME | TYPE | STRENGTH | CONFIDENCE ) "(" "$" name ")"
 #   key       := value [ ASC | DESC ]
+#
+# "*" and "/" bind tighter than "+" and "-". A minus needs a blank on one
+# side at least, since `a-b` is one name.
 #
 # A type is CONCEPT, PREDICATE, NODE, LINK or any AtomType name. Only
 # SELECT, DISTINCT, WHERE, ISA, OPTIONAL and LIMIT are reserved; the other
@@ -183,6 +195,11 @@ module OpenCog
         end
       end
 
+      # The variable this is, when it is nothing more.
+      def variable? : String?
+        kind == :variable ? text : nil
+      end
+
       def to_s(io : IO)
         case kind
         when :variable then io << '$' << text
@@ -193,13 +210,77 @@ module OpenCog
       end
     end
 
+    # Two values joined by + - * or /. The sides are read as numbers; a side
+    # that is not one, or a division by zero, leaves the result without a
+    # value, as an unbound variable would.
+    class QueryArithmetic
+      getter left : QueryOperand
+      getter operator : Char
+      getter right : QueryOperand
+
+      def initialize(@left : QueryOperand, @operator : Char, @right : QueryOperand)
+      end
+
+      def evaluate(bindings : Hash(String, AtomSpace::Atom)) : String | Float64 | Nil
+        left = QueryLanguage.number(@left.evaluate(bindings)) || return nil
+        right = QueryLanguage.number(@right.evaluate(bindings)) || return nil
+        result = case @operator
+                 when '+' then left + right
+                 when '-' then left - right
+                 when '*' then left * right
+                 else
+                   return nil if right == 0.0
+                   left / right
+                 end
+        result.finite? ? result : nil
+      end
+
+      # The variable this is, when it is nothing more.
+      def variable? : String?
+        nil
+      end
+
+      def to_s(io : IO)
+        io << '(' << @left << ' ' << @operator << ' ' << @right << ')'
+      end
+    end
+
+    alias QueryOperand = QueryValue | QueryArithmetic
+
+    # A value as a number: a number itself, or text that reads as one.
+    def self.number(value : String | Float64 | Nil) : Float64?
+      value.is_a?(String) ? value.to_f? : value
+    end
+
+    # A number as an atom, so that a result can carry one. It stands beside
+    # the AtomSpace, as query patterns do.
+    def self.number_atom(value : Float64) : AtomSpace::Atom
+      whole = value == value.round && value.abs < 1e15
+      AtomSpace::Node.new(AtomSpace::AtomType::NUMBER_NODE, whole ? value.to_i64.to_s : value.to_s)
+    end
+
+    # COUNT, SUM, AVG, MIN or MAX over the results of a group, named by
+    # `name` in the result. `argument` is nil for COUNT(*).
+    record QueryAggregate, function : Symbol, argument : QueryOperand?, distinct : Bool, name : String do
+      def to_s(io : IO)
+        io << function.to_s.upcase << '('
+        io << "DISTINCT " if distinct
+        if value = argument
+          io << value
+        else
+          io << '*'
+        end
+        io << ") AS $" << name
+      end
+    end
+
     # A FILTER condition, checked against each candidate result.
     abstract class QueryCondition
       abstract def holds?(bindings : Hash(String, AtomSpace::Atom)) : Bool
     end
 
     class ComparisonCondition < QueryCondition
-      def initialize(@left : QueryValue, @operator : String, @right : QueryValue)
+      def initialize(@left : QueryOperand, @operator : String, @right : QueryOperand)
       end
 
       # Two numbers, or a number and text that reads as one, compare as
@@ -238,7 +319,7 @@ module OpenCog
     end
 
     class ContainsCondition < QueryCondition
-      def initialize(@text : QueryValue, @part : QueryValue)
+      def initialize(@text : QueryOperand, @part : QueryOperand)
       end
 
       def holds?(bindings : Hash(String, AtomSpace::Atom)) : Bool
@@ -301,7 +382,7 @@ module OpenCog
     end
 
     # One ORDER BY key.
-    record QueryOrder, value : QueryValue, descending : Bool
+    record QueryOrder, value : QueryOperand, descending : Bool
 
     # Represents a complete parsed query
     class ParsedQuery
@@ -313,10 +394,31 @@ module OpenCog
       # Return at most this many results.
       getter limit : Int32?
       getter order : Array(QueryOrder)
+      # Leave out this many results from the front.
+      getter offset : Int32
+      # The aggregates in the SELECT list.
+      getter aggregates : Array(QueryAggregate)
+      # The variables whose values make a group.
+      getter group_by : Array(String)
+      # Conditions on the groups, which may read the aggregates.
+      getter having : Array(QueryCondition)
+      # The names a result carries, in the order SELECT lists them.
+      getter columns : Array(String)
 
       def initialize(@variables : Array(QueryVariable), @blocks : Array(QueryBlock),
                      @distinct : Bool = false, @limit : Int32? = nil,
-                     @order : Array(QueryOrder) = [] of QueryOrder)
+                     @order : Array(QueryOrder) = [] of QueryOrder,
+                     @offset : Int32 = 0,
+                     @aggregates : Array(QueryAggregate) = [] of QueryAggregate,
+                     @group_by : Array(String) = [] of String,
+                     @having : Array(QueryCondition) = [] of QueryCondition,
+                     columns : Array(String)? = nil)
+        @columns = columns || @variables.map(&.name)
+      end
+
+      # True when results are groups of matches, not the matches themselves.
+      def grouped? : Bool
+        !@aggregates.empty? || !@group_by.empty?
       end
 
       # A query of plain clauses, as built by code rather than parsed.
@@ -433,7 +535,7 @@ module OpenCog
         when '\n'
           advance
           Token.new(:newline, "\n", line, column)
-        when '{', '}', ',', ':', '*', '(', ')', '='
+        when '{', '}', ',', ':', '*', '(', ')', '=', '+', '/'
           advance
           Token.new(:punctuation, char.to_s, line, column)
         when '.'
@@ -457,7 +559,8 @@ module OpenCog
             advance
             Token.new(:number, "-#{read_number}", line, column)
           else
-            error("expected '->'")
+            advance
+            Token.new(:punctuation, "-", line, column)
           end
         when '$'
           advance
@@ -589,11 +692,13 @@ module OpenCog
 
         select_all = false
         variables = [] of QueryVariable
+        aggregates = [] of QueryAggregate
+        columns = [] of String
         if punctuation?("*")
           select_all = true
           advance
         else
-          variables = parse_variables
+          parse_select_list(variables, aggregates, columns)
         end
         skip_newlines
 
@@ -614,6 +719,33 @@ module OpenCog
         end
 
         skip_newlines
+        group_by = [] of String
+        if word?("GROUP") && word?("BY", 1)
+          advance
+          advance
+          loop do
+            skip_newlines
+            fail("GROUP BY takes variables, found #{current.describe}") unless current.kind == :variable
+            name = advance.text
+            fail("$#{name} does not appear in WHERE", @tokens[@position - 1]) unless used.includes?(name)
+            group_by << name unless group_by.includes?(name)
+            advance if punctuation?(",")
+            break unless current.kind == :variable
+          end
+          skip_newlines
+        end
+
+        having = [] of QueryCondition
+        while word?("HAVING") && next_is?("(")
+          advance
+          advance
+          having << parse_condition(used)
+          skip_newlines
+          fail("expected ')' to close HAVING, found #{current.describe}") unless punctuation?(")")
+          advance
+          skip_newlines
+        end
+
         order = [] of QueryOrder
         if word?("ORDER")
           advance
@@ -635,10 +767,19 @@ module OpenCog
         end
 
         limit = nil
-        if keyword?("LIMIT")
-          advance
-          fail("expected a number after LIMIT, found #{current.describe}") unless current.kind == :integer
-          limit = current.text.to_i? || fail("LIMIT #{current.text} is too large")
+        offset = nil
+        loop do
+          if keyword?("LIMIT") && limit.nil?
+            advance
+            fail("expected a number after LIMIT, found #{current.describe}") unless current.kind == :integer
+            limit = current.text.to_i? || fail("LIMIT #{current.text} is too large")
+          elsif word?("OFFSET") && offset.nil?
+            advance
+            fail("expected a number after OFFSET, found #{current.describe}") unless current.kind == :integer
+            offset = current.text.to_i? || fail("OFFSET #{current.text} is too large")
+          else
+            break
+          end
           advance
           skip_newlines
         end
@@ -646,6 +787,7 @@ module OpenCog
 
         if select_all
           variables = used.map { |name| QueryVariable.new(name) }
+          columns = used.dup
         else
           variables.each do |variable|
             next if used.includes?(variable.name)
@@ -653,7 +795,100 @@ module OpenCog
           end
         end
 
-        ParsedQuery.new(variables, blocks, distinct, limit, order)
+        grouped = !aggregates.empty? || !group_by.empty?
+        if grouped
+          raise QueryParseException.new("SELECT * cannot be used with GROUP BY") if select_all
+          variables.each do |variable|
+            next if group_by.includes?(variable.name)
+            raise QueryParseException.new("$#{variable.name} is selected beside an aggregate but is not in GROUP BY")
+          end
+        elsif !having.empty?
+          raise QueryParseException.new("HAVING needs GROUP BY or an aggregate")
+        end
+
+        ParsedQuery.new(variables, blocks, distinct, limit, order, offset || 0, aggregates, group_by, having, columns)
+      end
+
+      AGGREGATES = {"COUNT" => :count, "SUM" => :sum, "AVG" => :avg, "MIN" => :min, "MAX" => :max}
+
+      # The SELECT list: variables and aggregates, in any order.
+      private def parse_select_list(variables : Array(QueryVariable), aggregates : Array(QueryAggregate),
+                                    columns : Array(String)) : Nil
+        loop do
+          skip_newlines
+          start = current
+          wrapped = punctuation?("(")
+          if wrapped || (current.kind == :name && AGGREGATES.has_key?(current.text.upcase) && next_is?("("))
+            advance if wrapped
+            aggregate = parse_aggregate(wrapped)
+            if wrapped
+              fail("expected ')' after the aggregate, found #{current.describe}") unless punctuation?(")")
+              advance
+            end
+            fail("$#{aggregate.name} is selected twice", start) if columns.includes?(aggregate.name)
+            aggregates << aggregate
+            columns << aggregate.name
+          else
+            unless current.kind == :variable
+              if current.kind == :name
+                raise QueryParseException.new("Variables must start with $ : #{current.text} at #{where(current)}")
+              end
+              fail("expected a variable such as $x, found #{current.describe}")
+            end
+            name = advance.text
+            type = nil
+            if punctuation?(":")
+              advance
+              fail("expected a type after ':', found #{current.describe}") unless current.kind == :name
+              type = parse_type(advance)
+            end
+            fail("$#{name} is selected twice", @tokens[@position - 1]) if columns.includes?(name)
+            variables << QueryVariable.new(name, type)
+            columns << name
+          end
+
+          advance if punctuation?(",")
+          skip_newlines
+          more = current.kind == :variable || punctuation?("(") ||
+                 (current.kind == :name && AGGREGATES.has_key?(current.text.upcase) && next_is?("("))
+          break unless more
+        end
+      end
+
+      # COUNT(*), COUNT($x), SUM(DISTINCT $n) and the like, with AS $name.
+      # Without AS the result is named after the function, as in $count.
+      private def parse_aggregate(needs_name : Bool) : QueryAggregate
+        token = current
+        function = (token.kind == :name ? AGGREGATES[token.text.upcase]? : nil) ||
+                   fail("expected COUNT, SUM, AVG, MIN or MAX, found #{token.describe}")
+        advance
+        fail("expected '(' after #{token.text.upcase}, found #{current.describe}") unless punctuation?("(")
+        advance
+
+        distinct = false
+        argument = nil
+        if punctuation?("*")
+          fail("only COUNT takes *", current) unless function == :count
+          advance
+        else
+          if keyword?("DISTINCT")
+            distinct = true
+            advance
+          end
+          argument = parse_value([] of String, declare: false)
+        end
+        fail("expected ')', found #{current.describe}") unless punctuation?(")")
+        advance
+
+        name = token.text.downcase
+        if word?("AS")
+          advance
+          fail("expected a variable after AS, found #{current.describe}") unless current.kind == :variable
+          name = advance.text
+        elsif needs_name
+          fail("expected AS and a variable, found #{current.describe}")
+        end
+        QueryAggregate.new(function, argument, distinct, name)
       end
 
       private def current : Token
@@ -697,33 +932,6 @@ module OpenCog
         while current.kind == :newline
           advance
         end
-      end
-
-      private def parse_variables : Array(QueryVariable)
-        variables = [] of QueryVariable
-        loop do
-          skip_newlines
-          unless current.kind == :variable
-            if current.kind == :name
-              raise QueryParseException.new("Variables must start with $ : #{current.text} at #{where(current)}")
-            end
-            fail("expected a variable such as $x, found #{current.describe}")
-          end
-          name = advance.text
-          type = nil
-          if punctuation?(":")
-            advance
-            fail("expected a type after ':', found #{current.describe}") unless current.kind == :name
-            type = parse_type(advance)
-          end
-          fail("$#{name} is selected twice", @tokens[@position - 1]) if variables.any? { |variable| variable.name == name }
-          variables << QueryVariable.new(name, type)
-
-          advance if punctuation?(",")
-          skip_newlines
-          break unless current.kind == :variable
-        end
-        variables
       end
 
       private def parse_type(token : Token) : AtomSpace::AtomType
@@ -811,11 +1019,25 @@ module OpenCog
         end
 
         if punctuation?("(")
-          advance
-          inner = parse_condition(used)
-          fail("expected ')', found #{current.describe}") unless punctuation?(")")
-          advance
-          return inner
+          # A bracket opens a condition, as in ($a = b OR $a = c), or a
+          # value, as in ($a + 1) * 2 > $b. Read it as a condition first.
+          start = @position
+          begin
+            advance
+            inner = parse_condition(used)
+            fail("expected ')', found #{current.describe}") unless punctuation?(")")
+            advance
+            return inner
+          rescue as_condition : QueryParseException
+            reached = @position
+            @position = start
+            begin
+              return parse_comparison(used)
+            rescue as_value : QueryParseException
+              # Report whichever reading got further into the query.
+              raise @position >= reached ? as_value : as_condition
+            end
+          end
         end
 
         if word?("BOUND") && next_is?("(")
@@ -840,6 +1062,10 @@ module OpenCog
           return ContainsCondition.new(text, part)
         end
 
+        parse_comparison(used)
+      end
+
+      private def parse_comparison(used : Array(String)) : QueryCondition
         left = parse_value(used, declare: false)
         operator = current
         unless operator.kind == :punctuation && {"=", "!=", "<", "<=", ">", ">="}.includes?(operator.text)
@@ -853,9 +1079,48 @@ module OpenCog
 
       # A value in a FILTER or ORDER BY. These read variables but do not
       # introduce them: a variable must appear in a clause to have a value.
-      private def parse_value(used : Array(String), declare : Bool) : QueryValue
+      private def parse_value(used : Array(String), declare : Bool) : QueryOperand
+        skip_newlines
+        left = parse_product(used)
+        loop do
+          if punctuation?("+") || punctuation?("-")
+            operator = advance.text[0]
+            left = QueryArithmetic.new(left, operator, parse_product(used))
+          elsif current.kind == :number && current.text.starts_with?('-')
+            # `$n -1` is a subtraction: the lexer took the minus for a sign.
+            token = current
+            @tokens[@position] = Token.new(:number, token.text.lchop('-'), token.line, token.column + 1)
+            left = QueryArithmetic.new(left, '-', parse_product(used))
+          else
+            break
+          end
+        end
+        left
+      end
+
+      private def parse_product(used : Array(String)) : QueryOperand
+        left = parse_operand(used)
+        while punctuation?("*") || punctuation?("/")
+          operator = advance.text[0]
+          left = QueryArithmetic.new(left, operator, parse_operand(used))
+        end
+        left
+      end
+
+      private def parse_operand(used : Array(String)) : QueryOperand
         skip_newlines
         token = current
+        if punctuation?("(")
+          advance
+          inner = parse_value(used, declare: false)
+          fail("expected ')', found #{current.describe}") unless punctuation?(")")
+          advance
+          return inner
+        end
+        if punctuation?("-")
+          advance
+          return QueryArithmetic.new(QueryValue.new(:number, "0", 0.0), '-', parse_operand(used))
+        end
         case token.kind
         when :variable
           advance
@@ -925,23 +1190,28 @@ module OpenCog
 
       # Execute a parsed query and return results
       def execute(query : ParsedQuery) : Array(Query::QueryResult)
-        selected = query.variables.map(&.name)
-        # Each result with the values ORDER BY sorts on, taken before the
-        # result is cut down to the selected variables.
-        rows = [] of {Query::QueryResult, Array(String | Float64 | Nil)}
-
+        rows = [] of {Hash(String, AtomSpace::Atom), Float64}
         query.blocks.each do |block|
           solve_block(block, query.variables).each do |(bindings, matched)|
-            keys = query.order.map(&.value.evaluate(bindings))
-            rows << {Query::QueryResult.new(bindings.select(selected), calculate_confidence(matched)), keys}
+            rows << {bindings, calculate_confidence(matched)}
+          end
+        end
+
+        if query.grouped?
+          rows = aggregate(query, rows)
+          query.having.each do |condition|
+            rows.select! { |(bindings, _)| condition.holds?(bindings) }
           end
         end
 
         if query.order.empty?
           # Sort by confidence descending
-          rows.sort! { |a, b| b[0].confidence <=> a[0].confidence }
+          rows.sort! { |a, b| b[1] <=> a[1] }
         else
-          rows.sort! do |a, b|
+          # The values ORDER BY sorts on are taken before a result is cut
+          # down to what SELECT lists.
+          keyed = rows.map { |row| {row, query.order.map(&.value.evaluate(row[0]))} }
+          keyed.sort! do |a, b|
             order = 0
             query.order.each_with_index do |key, i|
               order = compare_keys(a[1][i], b[1][i])
@@ -950,16 +1220,108 @@ module OpenCog
             end
             order
           end
+          rows = keyed.map(&.[0])
         end
-        results = rows.map(&.[0])
+
+        selected = query.columns
+        results = rows.map do |(bindings, confidence)|
+          Query::QueryResult.new(query.grouped? ? in_order(bindings, selected) : bindings.select(selected), confidence)
+        end
 
         if query.distinct?
-          seen = Set(Array(AtomSpace::Handle?)).new
-          results.select! { |result| seen.add?(selected.map { |name| result.bindings[name]?.try(&.handle) }) }
+          seen = Set(Array(String | AtomSpace::Handle | Nil)).new
+          results.select! { |result| seen.add?(selected.map { |name| identity(result.bindings[name]?) }) }
         end
+        results = results.skip(query.offset) if query.offset > 0
         query.limit.try { |limit| results = results.first(limit) }
 
         results
+      end
+
+      private def in_order(bindings : Hash(String, AtomSpace::Atom), names : Array(String)) : Hash(String, AtomSpace::Atom)
+        ordered = Hash(String, AtomSpace::Atom).new
+        names.each { |name| bindings[name]?.try { |atom| ordered[name] = atom } }
+        ordered
+      end
+
+      # What makes two bound values the same: the atom, or for a number an
+      # aggregate made, its text.
+      private def identity(atom : AtomSpace::Atom?) : String | AtomSpace::Handle | Nil
+        return nil if atom.nil?
+        atom.type == AtomSpace::AtomType::NUMBER_NODE && atom.is_a?(AtomSpace::Node) ? atom.name : atom.handle
+      end
+
+      # One row per group: the GROUP BY variables and each aggregate under
+      # its name. Without GROUP BY all rows are one group, which exists even
+      # when nothing matched, so that COUNT can say 0.
+      private def aggregate(query : ParsedQuery, rows : Array({Hash(String, AtomSpace::Atom), Float64})) : Array({Hash(String, AtomSpace::Atom), Float64})
+        groups = {} of Array(String | AtomSpace::Handle | Nil) => Array({Hash(String, AtomSpace::Atom), Float64})
+        rows.each do |row|
+          key = query.group_by.map { |name| identity(row[0][name]?) }
+          (groups[key] ||= [] of {Hash(String, AtomSpace::Atom), Float64}) << row
+        end
+        if groups.empty? && query.group_by.empty?
+          groups[[] of String | AtomSpace::Handle | Nil] = [] of {Hash(String, AtomSpace::Atom), Float64}
+        end
+
+        groups.values.map do |members|
+          bindings = Hash(String, AtomSpace::Atom).new
+          if first = members.first?
+            query.group_by.each { |name| first[0][name]?.try { |atom| bindings[name] = atom } }
+          end
+          query.aggregates.each do |aggregate|
+            aggregate_value(aggregate, members.map(&.[0])).try { |atom| bindings[aggregate.name] = atom }
+          end
+          confidence = members.empty? ? 0.0 : members.sum(&.[1]) / members.size
+          {bindings, confidence}
+        end
+      end
+
+      # The value of one aggregate over the rows of a group, as an atom, or
+      # nil when it has none (the smallest of nothing, say).
+      private def aggregate_value(aggregate : QueryAggregate, rows : Array(Hash(String, AtomSpace::Atom))) : AtomSpace::Atom?
+        argument = aggregate.argument
+        return QueryLanguage.number_atom(rows.size.to_f) if argument.nil?
+
+        # MIN and MAX of a plain variable give the atom itself.
+        variable = argument.variable?
+        valued = rows.compact_map do |bindings|
+          value = argument.evaluate(bindings)
+          value.nil? ? nil : {value, variable ? bindings[variable]? : nil}
+        end
+        if aggregate.distinct
+          seen = Set(String | Float64 | AtomSpace::Handle).new
+          valued.select! { |(value, atom)| seen.add?(atom ? atom.handle : value) }
+        end
+
+        case aggregate.function
+        when :count
+          QueryLanguage.number_atom(valued.size.to_f)
+        when :sum, :avg
+          numbers = valued.compact_map { |(value, _)| QueryLanguage.number(value) }
+          if aggregate.function == :sum
+            QueryLanguage.number_atom(numbers.sum(0.0))
+          elsif numbers.empty?
+            nil
+          else
+            QueryLanguage.number_atom(numbers.sum / numbers.size)
+          end
+        else
+          # Names that read as numbers compare as numbers here.
+          ranked = valued.map { |(value, atom)| {QueryLanguage.number(value) || value, atom} }
+          chosen = nil
+          ranked.each do |candidate|
+            if chosen.nil?
+              chosen = candidate
+            else
+              order = compare_keys(candidate[0], chosen[0])
+              chosen = candidate if aggregate.function == :min ? order < 0 : order > 0
+            end
+          end
+          return nil unless chosen
+          value, atom = chosen
+          atom || (value.is_a?(Float64) ? QueryLanguage.number_atom(value) : AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, value.to_s))
+        end
       end
 
       # Numbers before text, unbound values last; `sort!` is stable in what

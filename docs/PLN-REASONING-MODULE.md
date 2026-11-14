@@ -142,14 +142,17 @@ Enhanced meta-cognitive reflection using PLN reasoning.
 
 ### Evidence is counted once
 
-A conclusion can often be derived in more than one way. The engine combines each derivation with what is already known exactly once, however many iterations run:
+A conclusion can often be derived in more than one way. The engine combines a derivation with what is already known only when the two rest on different evidence, and then exactly once, however many iterations run:
 
 - The first derivation creates the conclusion with the formula's strength and confidence.
-- A different pair of premises reaching the same conclusion is revised into it with `PLN.revise_truth_values`, which weighs each strength by its confidence and raises the confidence.
-- The same pair of premises is never revised in a second time, so running more iterations does not inflate confidence.
-- A derivation that rests on the conclusion itself adds nothing. `A→B` inverted to `B→A` and inverted back is not new evidence for `A→B`.
+- Every link rests on a set of asserted links: an asserted link on itself, a derived link on everything its premises rest on.
+- A derivation of a conclusion that exists already is revised into it with `PLN.revise_truth_values`, which weighs each strength by its confidence and raises the confidence, when its premises rest on none of the asserted links the conclusion rests on. The conclusion then rests on those as well.
+- A derivation that shares any asserted link with the conclusion adds nothing. That covers the same premises met again, a second chain that reuses part of the first, and a conclusion coming back to itself: `A→B` inverted to `B→A` and inverted back is not new evidence for `A→B`, and nor is the longer way round, where `A→B` and `B→C` give `A→C`, then `C→A`, then `C→B`, whose inverse is `B→C` again.
+- The same pair of premises is never tried a second time, so running more iterations does not inflate confidence.
 
-`PLN::Provenance` keeps the record: which rule has used which premises, and the two direct parents of each derived link. The stock deduction, inversion and abduction rules share one record per engine. Only direct parents are checked, so a circle of evidence longer than one step is not recognised.
+`PLN::Provenance` keeps the record: which rule has used which premises, and for each link the asserted links it rests on, as a sorted list of numbers. `independent?(known, *premises)` compares those lists, so the check costs no more than their length. The stock deduction, inversion and abduction rules share one record per engine.
+
+A chain that overlaps an earlier one only in part is left out whole, so the part of it that was new is not counted.
 
 ### Available PLN Rules
 - **Modus Ponens**: If A implies B and A is true, then B is true

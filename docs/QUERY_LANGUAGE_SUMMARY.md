@@ -66,14 +66,31 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 
 # Sorting
 "SELECT $x WHERE { $x ISA $kind } ORDER BY $kind, $x DESC LIMIT 5"
+
+# A page of results
+"SELECT $x WHERE { $x ISA Animal } ORDER BY $x LIMIT 10 OFFSET 20"
+
+# Computed values
+"SELECT $x WHERE { $x price $p . FILTER(($p + 1) * 2 > 8) } ORDER BY 10 - $p"
+
+# Counting and grouping
+"SELECT COUNT(*) AS $n WHERE { $x ISA Fruit }"
+"SELECT $kind COUNT($x) AS $n, AVG($p) AS $mean WHERE { $x ISA $kind . $x price $p } GROUP BY $kind HAVING($n > 2) ORDER BY $n DESC"
 ```
 
 ### Grammar
 
 ```
-query     := SELECT [DISTINCT] ( "*" | variable { [","] variable } )
+query     := SELECT [DISTINCT] ( "*" | item { [","] item } )
              WHERE block { UNION block }
-             [ ORDER BY key { "," key } ] [ LIMIT integer ]
+             [ GROUP BY "$" name { [","] "$" name } ]
+             [ HAVING "(" condition ")" ]
+             [ ORDER BY key { "," key } ]
+             [ LIMIT integer ] [ OFFSET integer ]     (in either order)
+item      := variable | aggregate [ AS "$" name ]
+           | "(" aggregate AS "$" name ")"
+aggregate := COUNT "(" ( "*" | [DISTINCT] value ) ")"
+           | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 variable  := "$" name [ ":" type ]
 block     := "{" clause { ( "." | newline ) clause } "}"
 clause    := term ( ISA | inherits_from | "->" ) term
@@ -85,7 +102,9 @@ condition := condition OR condition | condition AND condition
            | NOT condition | "(" condition ")"
            | value ( "=" | "!=" | "<" | "<=" | ">" | ">=" ) value
            | CONTAINS "(" value "," value ")" | BOUND "(" "$" name ")"
-value     := "$" name | name | "quoted text" | number
+value     := value ( "+" | "-" | "*" | "/" ) value | "-" value
+           | "(" value ")"
+           | "$" name | name | "quoted text" | number
            | ( NAME | TYPE | STRENGTH | CONFIDENCE ) "(" "$" name ")"
 key       := value [ ASC | DESC ]
 ```
@@ -108,6 +127,24 @@ key       := value [ ASC | DESC ]
 - **UNION** adds the results of another block. A block need not bind every selected variable; a result leaves the others out. Add DISTINCT to drop repeats.
 - **ORDER BY** sorts by one or more keys, each ascending unless followed by DESC. Numbers sort before text and unbound values last. Without ORDER BY results come by falling confidence, as before. A key may be a variable that is not selected.
 
+### Arithmetic and OFFSET
+
+- `+`, `-`, `*`, `/` and brackets compute with numbers and with names that read as numbers, in FILTER, ORDER BY, HAVING and inside aggregates. `*` and `/` bind tighter than `+` and `-`.
+- A value that is not a number, or a division by zero, leaves the result without a value: a comparison with it is false, as with an unbound variable.
+- A minus needs a blank on at least one side, because `a-b` is one name. `$p -1` is read as `$p - 1`.
+- `OFFSET n` leaves out the first n results, after sorting and DISTINCT and before LIMIT counts. LIMIT and OFFSET can come in either order.
+
+### Aggregates
+
+- `COUNT(*)` counts the matches. `COUNT($x)` counts those where `$x` has a value. `SUM`, `AVG`, `MIN` and `MAX` take any value, such as `$p`, `$p * 2` or `STRENGTH($x)`. `DISTINCT` inside the brackets takes each value once.
+- `GROUP BY $a, $b` makes one result per combination of values. Without it all matches are one group, which exists even when nothing matched, so `COUNT(*)` answers 0.
+- A selected variable beside an aggregate has to be in GROUP BY.
+- `AS $name` names the result. Without it the result is named after the function, as in `$count`. SPARQL's bracketed form `(COUNT($x) AS $n)` is read too.
+- An aggregate's value is bound as a NumberNode that stands beside the AtomSpace, so a result still binds atoms and nothing is added. `MIN` and `MAX` of a plain variable give the atom itself.
+- `SUM` of nothing is 0. `AVG`, `MIN` and `MAX` of nothing have no value and the result leaves them out.
+- `HAVING(condition)` keeps the groups its condition holds for and can read the aggregates by name. ORDER BY can too.
+- None of these words is reserved: `count`, `group` or `offset` can still name an atom.
+
 ### Variable Types
 - `$var` - Generic variable
 - `$var:CONCEPT` - Concept node variable
@@ -124,6 +161,9 @@ key       := value [ ASC | DESC ]
 - **Filters**: `FILTER(condition)` on names, types and truth values
 - **Alternatives**: `{ ... } UNION { ... }`
 - **Sorting**: `ORDER BY key [DESC]`
+- **Paging**: `LIMIT n OFFSET m`
+- **Aggregates**: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` with `GROUP BY` and `HAVING`
+- **Arithmetic**: `+ - * /` in any value
 
 ## Integration Points
 

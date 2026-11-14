@@ -266,10 +266,35 @@ describe "PLN evidence from several derivations" do
     {ab.truth_value.strength, ab.truth_value.confidence}.should eq({0.8, 0.9})
     {bc.truth_value.strength, bc.truth_value.confidence}.should eq({0.7, 0.9})
   end
+
+  it "does not let a conclusion come back as evidence for its own premises, however far round" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c).map { |name| space.add_concept_node(name, AtomSpace::SimpleTruthValue.new(0.5, 0.9)) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1], AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    bc = space.add_inheritance_link(nodes[1], nodes[2], AtomSpace::SimpleTruthValue.new(0.7, 0.9))
+    # Everything the engine can conclude here rests on these two links:
+    # a->c, then c->a, then c->b from c->a and a->b, whose inverse is b->c
+    # again. That circle is three derivations long.
+    PLN.create_engine(space).reason(12)
+    space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [nodes[2], nodes[1]]).should_not be_nil
+    {ab.truth_value.strength, ab.truth_value.confidence}.should eq({0.8, 0.9})
+    {bc.truth_value.strength, bc.truth_value.confidence}.should eq({0.7, 0.9})
+  end
+
+  it "settles: more iterations change nothing once every derivation is counted" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c d).map { |name| space.add_concept_node(name, AtomSpace::SimpleTruthValue.new(0.5, 0.9)) }
+    3.times { |i| space.add_inheritance_link(nodes[i], nodes[i + 1], AtomSpace::SimpleTruthValue.new(0.8, 0.9)) }
+    engine = PLN.create_engine(space)
+    engine.reason(40)
+    settled = space.get_all_atoms.map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort
+    engine.reason(10)
+    space.get_all_atoms.map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort.should eq(settled)
+  end
 end
 
 describe PLN::Provenance do
-  it "counts each derivation once and remembers direct parents only" do
+  it "counts each derivation once and remembers what each link was drawn from" do
     space = AtomSpace::AtomSpace.new
     nodes = %w(a b c d).map { |name| space.add_concept_node(name) }
     ab = space.add_inheritance_link(nodes[0], nodes[1])
@@ -296,5 +321,66 @@ describe PLN::Provenance do
     provenance.independent?(ab, ac, cd).should be_false
     provenance.independent?(ab, cd).should be_true
     provenance.independent?(ab, ab).should be_false
+
+    # ad came from ac, which came from ab: ad rests on ab two steps back.
+    provenance.shares_evidence?(ad, ab).should be_true
+    provenance.shares_evidence?(ad, bc).should be_true
+    provenance.shares_evidence?(ac, cd).should be_false
+    provenance.independent?(ab, ad).should be_false
+    provenance.independent?(cd, ad).should be_false
+    provenance.independent?(cd, ac).should be_true
+    # Asserted links rest on themselves: numbered as they are first met.
+    provenance.evidence(ab).size.should eq(1)
+    provenance.evidence(ad).should eq((provenance.evidence(ab) + provenance.evidence(bc) + provenance.evidence(cd)).sort)
+  end
+
+  it "combines only evidence that shares no asserted link" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c d e).map { |name| space.add_concept_node(name) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1])
+    bc = space.add_inheritance_link(nodes[1], nodes[2])
+    ac = space.add_inheritance_link(nodes[0], nodes[2])
+    ad = space.add_inheritance_link(nodes[0], nodes[3])
+    dc = space.add_inheritance_link(nodes[3], nodes[2])
+    ce = space.add_inheritance_link(nodes[2], nodes[4])
+    ae = space.add_inheritance_link(nodes[0], nodes[4])
+    provenance = PLN::Provenance.new
+    provenance.record(ac, ab, bc)
+    provenance.record(ae, ac, ce)
+
+    # A second chain to a->c through d shares nothing with the first.
+    provenance.independent?(ac, ad, dc).should be_true
+    provenance.revised(ac, ad, dc)
+    provenance.shares_evidence?(ac, ad).should be_true
+    # It is in a->c now and is not counted into it again.
+    provenance.independent?(ac, ad, dc).should be_false
+    # a->e was drawn before the revision and still rests on the first chain only.
+    provenance.shares_evidence?(ae, dc).should be_false
+    # Evidence that overlaps in part is not combined either: a->e rests on a->b.
+    provenance.independent?(ac, ae).should be_false
+    provenance.independent?(ad, ae).should be_true
+
+    # An asserted link that was revised rests on what revised it as well.
+    provenance.revised(ce, ab)
+    provenance.shares_evidence?(ce, ab).should be_true
+    provenance.shares_evidence?(ce, bc).should be_false
+  end
+
+  it "stays quick when links rest on many others" do
+    space = AtomSpace::AtomSpace.new
+    origin = space.add_concept_node("origin")
+    links = Array(AtomSpace::Atom).new(2001) { |i| space.add_inheritance_link(origin, space.add_concept_node("n#{i}")) }
+    provenance = PLN::Provenance.new
+    # Each link drawn from the one before and a fresh asserted one.
+    derived = links[0]
+    (1..1000).each do |i|
+      provenance.record(links[1000 + i], derived, links[i])
+      derived = links[1000 + i]
+    end
+    provenance.evidence(derived).size.should eq(1001)
+    started = Time.monotonic
+    20_000.times { provenance.independent?(links[0], derived).should be_false }
+    20_000.times { provenance.independent?(links[2000], links[1500]).should be_false }
+    (Time.monotonic - started).should be < 5.seconds
   end
 end

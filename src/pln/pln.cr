@@ -163,10 +163,12 @@ module PLN
   #
   # - Which derivations were used. Each is one piece of evidence for its
   #   conclusion and must count once, however often the rule meets it.
-  # - Which links each derived link was drawn from. A conclusion must not
-  #   come back as evidence for its own premises: A->B gives B->A by
-  #   inversion, and inverting that again says nothing new about A->B.
-  #   Only direct parents are recorded, so longer circles are not caught.
+  # - Which asserted links each link rests on. Two pieces of evidence are
+  #   combined only when they share none: what is in a conclusion already
+  #   is not counted again. That also stops a conclusion from coming back
+  #   as evidence for its own premises: A->B gives B->A by inversion, and
+  #   inverting that again says nothing new about A->B, nor does any
+  #   longer way round.
   class Provenance
     DEDUCTION = 0_u64
     ABDUCTION = 1_u64
@@ -177,14 +179,32 @@ module PLN
     # two derivations may share a key and the later one is skipped.
     @used = Set(UInt64).new
     @parents = Hash(AtomSpace::Handle, {AtomSpace::Handle, AtomSpace::Handle}).new
+    # What each link's truth value rests on: the asserted links behind it,
+    # as their numbers in ascending order. An asserted link rests on itself
+    # and gets its number the first time it is asked about.
+    @evidence = Hash(AtomSpace::Handle, Array(Int32)).new
+    @asserted = 0
 
     # True the first time this rule meets this pair of premises.
     def first_use?(rule : UInt64, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Bool
       @used.add?((rule << 62) ^ (premise.handle << 31) ^ other.handle)
     end
 
+    # `conclusion` was drawn from these premises and rests on what they do.
     def record(conclusion : AtomSpace::Atom, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Nil
       @parents[conclusion.handle] = {premise.handle, other.handle}
+      @evidence[conclusion.handle] = union(evidence(premise), evidence(other))
+    end
+
+    # `known` has taken the evidence of these premises as well.
+    def revised(known : AtomSpace::Atom, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Nil
+      gained = other.same?(premise) ? evidence(premise) : union(evidence(premise), evidence(other))
+      @evidence[known.handle] = union(evidence(known), gained)
+    end
+
+    # The asserted links this link rests on, by number.
+    def evidence(atom : AtomSpace::Atom) : Array(Int32)
+      @evidence[atom.handle] ||= [@asserted += 1]
     end
 
     # Was `candidate` one of the links `derived` was drawn from?
@@ -193,9 +213,66 @@ module PLN
       parents[0] == candidate.handle || parents[1] == candidate.handle
     end
 
+    # Does `derived` rest on any of what `other` rests on?
+    def shares_evidence?(derived : AtomSpace::Atom, other : AtomSpace::Atom) : Bool
+      overlap?(evidence(derived), evidence(other))
+    end
+
     # May `evidence` (the premises of a new derivation) revise `known`?
+    # Only when they rest on none of the asserted links `known` rests on.
+    # Evidence that is already in a conclusion is not counted again, which
+    # also keeps a conclusion from coming back, however far round, as
+    # support for itself or for its own premises.
     def independent?(known : AtomSpace::Atom, *evidence : AtomSpace::Atom) : Bool
-      evidence.none? { |premise| premise.same?(known) || parent?(known, premise) }
+      mine = evidence(known)
+      evidence.none? { |premise| overlap?(mine, evidence(premise)) }
+    end
+
+    # Two ascending lists have a number in common.
+    private def overlap?(a : Array(Int32), b : Array(Int32)) : Bool
+      i = j = 0
+      while i < a.size && j < b.size
+        x = a.unsafe_fetch(i)
+        y = b.unsafe_fetch(j)
+        return true if x == y
+        if x < y
+          i += 1
+        else
+          j += 1
+        end
+      end
+      false
+    end
+
+    # Two ascending lists as one, each number once.
+    private def union(a : Array(Int32), b : Array(Int32)) : Array(Int32)
+      return a if a.same?(b)
+      merged = Array(Int32).new(a.size + b.size)
+      i = j = 0
+      while i < a.size && j < b.size
+        x = a.unsafe_fetch(i)
+        y = b.unsafe_fetch(j)
+        if x < y
+          merged << x
+          i += 1
+        elsif y < x
+          merged << y
+          j += 1
+        else
+          merged << x
+          i += 1
+          j += 1
+        end
+      end
+      while i < a.size
+        merged << a.unsafe_fetch(i)
+        i += 1
+      end
+      while j < b.size
+        merged << b.unsafe_fetch(j)
+        j += 1
+      end
+      merged
     end
 
     def derivations : Int32
@@ -270,6 +347,7 @@ module PLN
           # A conclusion is not evidence for itself or for its own premises.
           if @provenance.first_use?(Provenance::DEDUCTION, premise, link) && @provenance.independent?(known, premise, link)
             known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+            @provenance.revised(known, premise, link)
           end
           next
         end
@@ -335,6 +413,7 @@ module PLN
       if known = atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, b, a)
         if @provenance.first_use?(Provenance::INVERSION, premise) && @provenance.independent?(known, premise)
           known.truth_value = PLN.revise_truth_values(known.truth_value, inverted_tv)
+          @provenance.revised(known, premise)
         end
         return known
       end
@@ -487,6 +566,7 @@ module PLN
           first_conclusion ||= known
           if @provenance.first_use?(Provenance::ABDUCTION, premise, link) && @provenance.independent?(known, premise, link)
             known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+            @provenance.revised(known, premise, link)
           end
           next
         end

@@ -21,6 +21,7 @@ The URE (Unified Rule Engine) now includes sophisticated reasoning capabilities 
 
 #### Advanced Features
 - **Unification** (`URE::Unifier`): first-order unification with variables on either side, one value per variable and the occurs check; `resolve` applies bindings
+- **Pattern rules** (`URE::PatternRule`, `URE::RuleMatcher`): rules chosen and applied by unifying the shapes they declare
 - **Virtual Premise Creation**: Creates intermediate goals for backward search
 - **Proof Tree Generation**: Maintains inference paths and validation
 - **Meta-Rule Support**: Framework for rule expansion and composition
@@ -99,6 +100,37 @@ end
 ```
 
 Each grounding comes from one ground atom the pattern unifies with. Atoms that contain variables, the stored pattern included, are not groundings. A variable used twice must stand for the same atom both times.
+
+### Rules given by their shapes
+
+A rule can say what its premises and conclusion look like, with `$variables` where any atom may stand and the same variable where the same atom must:
+
+```crystal
+# (Evaluation name (List a b)), built beside the AtomSpace
+relation = ->(name : String, a : AtomSpace::Atom, b : AtomSpace::Atom) {
+  AtomSpace::Link.new(AtomSpace::AtomType::EVALUATION_LINK, [
+    AtomSpace::Node.new(AtomSpace::AtomType::PREDICATE_NODE, name).as(AtomSpace::Atom),
+    AtomSpace::Link.new(AtomSpace::AtomType::LIST_LINK, [a, b]).as(AtomSpace::Atom),
+  ]).as(AtomSpace::Atom)
+}
+x, y, z = %w($X $Y $Z).map { |name| AtomSpace::VariableNode.new(name).as(AtomSpace::Atom) }
+
+rule = URE::PatternRule.new("grandparent",
+  [relation.call("parent", x, y), relation.call("parent", y, z)],
+  relation.call("grandparent", x, z))
+
+chainer = URE::BackwardChainer.new(atomspace)
+chainer.add_rule(rule)
+chainer.prove(relation.call("grandparent", x, z)).each do |(atom, bindings)|
+  puts "#{bindings["$X"].name} is a grandparent of #{bindings["$Z"].name}"
+end
+```
+
+- **Truth value**: without a block the strengths and confidences of the premises are multiplied and the confidence loses a tenth. A block takes the premises' truth values and returns the conclusion's.
+- **Forward**: `ForwardChainer` offers such a rule only the atoms that fit its premises together. They are found by unification, starting from the links a part already bound is in, and each application is made once, so running more steps does not pile up confidence.
+- **Backward**: `BackwardChainer#prove(goal)` works back from a goal that may contain variables. A rule is tried when its conclusion unifies with the goal, and its premises become goals in turn. It returns each atom proved with the values of the goal's variables, and adds what it concludes on the way to the AtomSpace. A goal of the same shape further up the proof is answered from what is known, which keeps a recursive rule such as transitivity from going round for ever. Depth is limited by `max_depth`.
+- `do_chain` proves its target this way first. `variable_fulfillment_query(pattern, derive: true)` does the same for a pattern before listing its groundings.
+- A rule written as a class can declare shapes too, by defining `premise_patterns` and `conclusion_pattern`; `InheritanceTransitivityRule` does. A rule that declares types only is offered pairs of atoms of those types, as before.
 
 ### Mixed Inference Strategies
 ```crystal
