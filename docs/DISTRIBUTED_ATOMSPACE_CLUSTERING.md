@@ -140,6 +140,36 @@ cluster.add_event_observer(->(event : AtomSpace::ClusterEvent, node_id : String)
 })
 ```
 
+### Electing a Leader
+
+The members of a cluster can choose one of themselves as leader, by majority vote.
+
+```crystal
+node.start_election   # => true when this node now leads
+node.leader?          # => true
+node.term             # => 1
+other.leader_id       # => node.node_id, once the announcement has arrived
+other.leader          # => the leader's ClusterNodeInfo
+```
+
+- Votes are held in numbered terms. A node that stands opens a new term and asks every member it knows for its vote.
+- A node votes once per term, for whoever asks first. A candidate of an older term is refused and told the newer one.
+- More than half of the known members, the candidate included, make a leader. It then tells the others, who follow it.
+- Whoever sees a higher term than its own gives way: a leader that hears of one becomes a follower. Two leaders can never hold the same term.
+- A member that left with `stop` is no longer counted. One that died without saying so is counted until the heartbeat drops it, so the rest can still elect while they are more than half.
+- `ClusterEvent::LEADER_ELECTED` and `LEADER_LOST` reach the event observers with the leader's id. `cluster_stats` has `term`, `role` and `leader_id`.
+
+To keep a leader in place without asking, set a timeout before `start`:
+
+```crystal
+node.election_timeout = 2.seconds
+node.start
+```
+
+A leader then shows it is there three times per timeout. A node that hears from no leader for between one and two timeouts stands for election itself; the wait is drawn at random each time so that two nodes seldom stand at once. A leader that leaves or dies is replaced this way.
+
+This is the election half of Raft. There is no replicated log: the leader is agreed on, and nothing else is decided through it yet.
+
 ## Configuration Options
 
 ### Cluster Configuration

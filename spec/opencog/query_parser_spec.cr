@@ -588,3 +588,103 @@ describe "OpenCog query groups" do
     parse_error("SELECT $x WHERE { $x ISA y . { $x ISA z }").should eq(%[expected '}' to close the block, found the end of the query at line 1, column 42])
   end
 end
+
+describe "OpenCog query MINUS" do
+  it "leaves out results that agree with one of the MINUS block" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . MINUS { $x price 5 } }"), "x").should eq(["apple"])
+    names(ask(space, "SELECT $x WHERE { $x ISA $kind . MINUS { $x price $p . FILTER($p > 2) } }"), "x").should eq(["kale", "leek"])
+    names(ask(space, "SELECT $x WHERE { $x ISA $kind . MINUS { $x ISA Fruit } . MINUS { $x price 2 } }"), "x").should eq(["kale"])
+  end
+
+  it "leaves everything in when the MINUS block shares no variable or matches nothing" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . MINUS { $y price 5 } }"), "x").should eq(["apple", "pear", "plum"])
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . MINUS { $x ISA Mineral } }"), "x").should eq(["apple", "pear", "plum"])
+  end
+
+  it "does not offer what the MINUS block matches for selection" do
+    parse_error("SELECT $x $p WHERE { $x ISA Fruit . MINUS { $x price $p } }").should eq("$p is selected but does not appear in WHERE")
+    parse_error("SELECT $x WHERE { $x ISA Fruit . MINUS { } }").should eq("WHERE needs at least one clause at line 1, column 42")
+    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { $x ISA z . MINUS { $x ISA w } } }").should eq(
+      "MINUS belongs to the block around the OPTIONAL at line 1, column 52")
+  end
+end
+
+describe "OpenCog query VALUES" do
+  it "binds a variable to the values listed" do
+    space = shop
+    table(ask(space, "SELECT $x $p WHERE { VALUES $x { apple leek nothing } . $x price $p } ORDER BY $x"), "x", "p").should eq(
+      [["apple", "3"], ["leek", "2"]])
+    # After the clauses works the same.
+    names(ask(space, "SELECT $x WHERE { $x ISA Fruit . VALUES $x { pear kale } }"), "x").should eq(["pear"])
+  end
+
+  it "can stand alone, and adds nothing to the AtomSpace" do
+    space = shop
+    before = space.size
+    results = ask(space, %[SELECT $x WHERE { VALUES $x { apple "a new thing" 7 } }])
+    results.map { |result| result.bindings["x"].name }.should eq(["apple", "a new thing", "7"])
+    results.first.bindings["x"].should be(space.get_nodes_by_name("apple").first)
+    space.size.should eq(before)
+    space.get_nodes_by_name("a new thing").should be_empty
+  end
+
+  it "takes rows for several variables, with UNDEF for none" do
+    space = shop
+    rows = ask(space, "SELECT $x $most WHERE { VALUES ($x $most) { (apple 4) (pear 4) (leek UNDEF) } . $x price $p . " \
+                      "FILTER(NOT BOUND($most) OR $p < $most) } ORDER BY $x")
+    table(rows, "x", "most").should eq([["apple", "4"], ["leek", nil]])
+    parsed = parse("SELECT * WHERE { VALUES ($a $b) {\n (x y)\n (z UNDEF)\n } }")
+    parsed.blocks.first.values.first.rows.should eq([["x", "y"], ["z", nil]])
+    parsed.variables.map(&.name).should eq(["a", "b"])
+  end
+
+  it "keeps the word usable as a name" do
+    space = AtomSpace::AtomSpace.new
+    space.add_inheritance_link(space.add_concept_node("values"), space.add_concept_node("minus"))
+    names(ask(space, "SELECT $x WHERE { values ISA $x }"), "x").should eq(["minus"])
+    names(ask(space, "SELECT $x WHERE { $x ISA minus }"), "x").should eq(["values"])
+  end
+
+  it "reports VALUES it cannot read" do
+    parse_error("SELECT $x WHERE { VALUES ($x $y) { (a) } }").should eq("a row of VALUES needs 2 values, found 1 at line 1, column 36")
+    parse_error("SELECT $x WHERE { VALUES ($x $y) { a } }").should eq(%[expected '(' to start a row of VALUES, found "a" at line 1, column 36])
+    parse_error("SELECT $x WHERE { VALUES () { } }").should eq("VALUES needs at least one variable at line 1, column 27")
+    parse_error("SELECT $x WHERE { VALUES $x { $y } }").should eq("expected a value, found $y at line 1, column 31")
+  end
+end
+
+describe "OpenCog query subqueries" do
+  it "joins what a query inside a block selects with the rest of the block" do
+    space = shop
+    rows = ask(space, "SELECT $x $n WHERE { $x ISA $kind . { SELECT $kind (COUNT($y) AS $n) WHERE { $y ISA $kind } GROUP BY $kind } } ORDER BY $x")
+    table(rows, "x", "n").should eq([["apple", "3"], ["kale", "2"], ["leek", "2"], ["pear", "3"], ["plum", "3"]])
+  end
+
+  it "applies the inner ORDER BY and LIMIT before joining" do
+    space = shop
+    names(ask(space, "SELECT $x WHERE { $x ISA $kind . { SELECT $x WHERE { $x price $p } ORDER BY $p DESC, $x LIMIT 2 } }"), "x").should eq(["pear", "plum"])
+    # The dearest of each kind: the inner query finds the price, the outer who has it.
+    rows = ask(space, "SELECT $x $top WHERE { $x ISA $kind . $x price $top . " \
+                      "{ SELECT $kind (MAX($p) AS $top) WHERE { $y ISA $kind . $y price $p } GROUP BY $kind } } ORDER BY $x")
+    table(rows, "x", "top").should eq([["leek", "2"], ["pear", "5"], ["plum", "5"]])
+  end
+
+  it "shows outside only what the subquery selects" do
+    space = shop
+    parse_error("SELECT $x $p WHERE { { SELECT $x WHERE { $x price $p } } }").should eq("$p is selected but does not appear in WHERE")
+    names(ask(space, "SELECT $x WHERE {\n  {\n    SELECT $x WHERE { $x price $p . FILTER($p > 2) }\n  }\n}"), "x").should eq(["apple", "pear", "plum"])
+    before = space.size
+    ask(space, "SELECT $n WHERE { { SELECT (COUNT(*) AS $n) WHERE { $x ISA Fruit } } }").first.bindings["n"].name.should eq("3")
+    space.size.should eq(before)
+  end
+
+  it "reports a subquery it cannot read" do
+    parse_error("SELECT $x WHERE { { SELECT $x WHERE { $x ISA y } LIMIT } }").should eq(%[expected a number after LIMIT, found "}" at line 1, column 56])
+    parse_error("SELECT $x WHERE { { SELECT $x WHERE { $x ISA y } nonsense } }").should eq(
+      %[expected '}' to close the subquery, found "nonsense" at line 1, column 50])
+    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { { SELECT $x WHERE { $x ISA z } } } }").should eq(
+      "a subquery cannot be inside OPTIONAL at line 1, column 41")
+  end
+end
