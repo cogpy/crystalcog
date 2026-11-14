@@ -122,10 +122,13 @@ The Paphos backend also has an event stream and named service functions, which u
 |---|---|
 | `POST /events` | Publish `{"event": {"type", "source"?, "data"?}}`. `data` is an object of strings. |
 | `GET /events?after=&types=&limit=&wait=` | The caller's events with an id above `after`, oldest first. `wait` (seconds, at most 25) holds the request until one arrives. |
+| `GET /events/stream?after=&types=` | The same events as server-sent events: those above `after` first, then each new one as it is published. |
 | `GET /actions` | The service functions: name and description. |
 | `POST /actions/:name` | Run one with `{"action": {"args": {...}}}`. A refusal is a 422, an unknown name a 404. |
 
 - Events belong to the user who published them. The server keeps the last 1,000; with a data file they survive a restart and ids go on counting, so a client's `after` stays valid.
+- Events are stored in a journal beside the data file, `<data file>.events`, one JSON line each. Publishing adds a line and leaves the data file alone. The journal is cut back to the kept events when it reaches 2,000 lines. A data file from before the journal is read and its events moved over.
+- A stream sends `id:`, `event:` (the type) and `data:` (the event as JSON) for each event, and a comment line every 15 seconds when nothing happens. A client that reconnects with a `Last-Event-ID` header continues after that id. The stream ends when the client closes it or the server stops.
 - Built-in functions are `echo`, `stats`, `snapshot.copy` and `events.clear`. A host program adds its own with `server.register_action(name, description) { |args, user_id| ... }` and refuses a call by raising `PaphosBackend::Server::ActionError`.
 - Every call records an `action_executed` event.
 
@@ -134,6 +137,7 @@ The Paphos backend also has an event stream and named service functions, which u
 - `send_command(name, params)` runs the function of that name. The reply has `status` (`success`, `error`, or `local` when there is no backend), the result as JSON in `result`, and each result field as `result.<field>`.
 - `execute_service_function(name, args)` returns the result as JSON and raises on a refusal.
 - `event_stream.publish_event` sends to the backend and `receive_events(wait)` returns what arrived since the last call, from any client of the account. Events published while the backend is unreachable stay queued and go out on the next `connect` or publish.
+- `event_stream.follow_events { |event| ... }` opens the stream and calls the block with each event of the subscribed types as it is published, starting after the last one consumed. `stop_following` or `disconnect` closes it. `PaphosBackend::Client#follow_events(after, types) { |event| ... }` is the same without the connector and returns a follow to `close`.
 
 ## Verification
 

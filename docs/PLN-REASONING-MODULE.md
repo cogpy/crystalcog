@@ -140,6 +140,17 @@ Enhanced meta-cognitive reflection using PLN reasoning.
 - `Formulas.consistent?(s_a, s_b, s_ab)` tells whether a conditional probability is possible for the given term probabilities.
 - Induction is available as a formula; the stock engine has no induction rule.
 
+### Evidence is counted once
+
+A conclusion can often be derived in more than one way. The engine combines each derivation with what is already known exactly once, however many iterations run:
+
+- The first derivation creates the conclusion with the formula's strength and confidence.
+- A different pair of premises reaching the same conclusion is revised into it with `PLN.revise_truth_values`, which weighs each strength by its confidence and raises the confidence.
+- The same pair of premises is never revised in a second time, so running more iterations does not inflate confidence.
+- A derivation that rests on the conclusion itself adds nothing. `A→B` inverted to `B→A` and inverted back is not new evidence for `A→B`.
+
+`PLN::Provenance` keeps the record: which rule has used which premises, and the two direct parents of each derived link. The stock deduction, inversion and abduction rules share one record per engine. Only direct parents are checked, so a circle of evidence longer than one step is not recognised.
+
 ### Available PLN Rules
 - **Modus Ponens**: If A implies B and A is true, then B is true
 - **Deduction**: If A implies B and B implies C, then A implies C

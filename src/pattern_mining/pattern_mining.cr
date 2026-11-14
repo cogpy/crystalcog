@@ -335,6 +335,15 @@ module PatternMining
       MiningResult.new(@discovered_patterns, patterns_explored, mining_time)
     end
 
+    # Conjunctions of the frequent patterns: clauses that share variables
+    # and hold together at least `min_support` times. Mines the single
+    # patterns first unless a result is passed in.
+    def mine_conjunctions(result : MiningResult = mine_patterns, max_clauses : Int32 = 2,
+                          max_conjunctions : Int32 = 200) : Array(ConjunctionSupport)
+      miner = ConjunctionMiner.new(@atomspace, @min_support, max_conjunctions, max_clauses, @timeout_seconds)
+      miner.mine(result.patterns.map(&.pattern))
+    end
+
     # Initialize mining with the most abstract pattern (Top)
     private def initialize_with_top_pattern
       # Create the Top pattern: Lambda(Variable("$X"), Present(Variable("$X")))
@@ -367,6 +376,235 @@ module PatternMining
         end
       end
       false
+    end
+  end
+
+  # A pattern of several clauses that share variables, such as
+  #
+  #   (INHERITANCELINK $v1 animal) and (EVALUATIONLINK likes (LISTLINK $v1 $v2))
+  #
+  # with the number of distinct ways the data satisfies all clauses at once.
+  struct ConjunctionSupport
+    getter clauses : Array(AtomSpace::Atom)
+    # Variable names, in order of first appearance.
+    getter variables : Array(String)
+    getter support : Int32
+    # How far the clauses' overlap is from what independent clauses would
+    # give, from 0 (as expected) to 1.
+    getter surprisingness : Float64
+    # Every joint grounding: variable name => atom.
+    getter groundings : Array(Hash(String, AtomSpace::Atom))
+
+    def initialize(@clauses, @variables, @support, @surprisingness, @groundings)
+    end
+
+    def meets_minimum_support?(min_support : Int32) : Bool
+      @support >= min_support
+    end
+
+    def to_s(io)
+      io << "(AND " << @clauses.join(" ") << ")"
+    end
+  end
+
+  # Builds conjunctions out of frequent single patterns: two patterns are
+  # joined by making one variable of each the same, and the result is kept
+  # when enough groundings satisfy both. Conjunctions grow one clause at a
+  # time up to `max_clauses`.
+  class ConjunctionMiner
+    # A clause with its groundings, variable names being those it has in
+    # the conjunction under construction.
+    private record Part, template : AtomSpace::Atom, rows : Array(Hash(String, AtomSpace::Atom))
+
+    def initialize(@atomspace : AtomSpace::AtomSpace, @min_support : Int32 = 2,
+                   @max_conjunctions : Int32 = 200, @max_clauses : Int32 = 2,
+                   @timeout_seconds : Int32? = nil)
+      raise MiningException.new("a conjunction needs at least two clauses") if @max_clauses < 2
+      @calculator = SupportCalculator.new(@atomspace)
+      @scorer = SurprisingnessScorer.new(@atomspace)
+    end
+
+    # Conjunctions of the given patterns, most supported first. A pattern
+    # that is a bare variable matches everything and is not used.
+    def mine(patterns : Array(PatternMatching::Pattern)) : Array(ConjunctionSupport)
+      started = Time.monotonic
+      parts = patterns.compact_map do |pattern|
+        next if pattern.variables.empty? || PatternMatching::Pattern.variable?(pattern.template)
+        rows = @calculator.valuations(pattern).map do |valuation|
+          valuation.grounding.bindings.to_h { |variable, atom| {variable.name, atom} }
+        end
+        rows.size >= @min_support ? Part.new(pattern.template, rows) : nil
+      end
+
+      found = {} of String => ConjunctionSupport
+      # Conjunctions of the size reached so far, as lists of clause templates
+      # with their joint groundings.
+      frontier = parts.map { |part| {[part.template], part.rows} }
+
+      (2..@max_clauses).each do
+        grown = [] of {Array(AtomSpace::Atom), Array(Hash(String, AtomSpace::Atom))}
+        frontier.each do |(clauses, rows)|
+          parts.each do |part|
+            return ranked(found) if found.size >= @max_conjunctions || timed_out?(started)
+            extend_with(clauses, rows, part) do |new_clauses, new_rows|
+              conjunction = build(new_clauses, new_rows)
+              key = conjunction.to_s
+              next if found.has_key?(key)
+              found[key] = conjunction
+              grown << {conjunction.clauses, conjunction.groundings}
+            end
+          end
+        end
+        break if grown.empty?
+        frontier = grown
+      end
+
+      ranked(found)
+    end
+
+    private def ranked(found : Hash(String, ConjunctionSupport)) : Array(ConjunctionSupport)
+      found.values.sort_by { |conjunction| {-conjunction.support, -conjunction.surprisingness, conjunction.to_s} }
+    end
+
+    private def timed_out?(started : Time::Span) : Bool
+      (limit = @timeout_seconds) ? (Time.monotonic - started).total_seconds > limit : false
+    end
+
+    # Every way of adding `part` to a conjunction by identifying one of its
+    # variables with one of the conjunction's, that keeps enough groundings
+    # and says something the conjunction did not.
+    private def extend_with(clauses : Array(AtomSpace::Atom), rows : Array(Hash(String, AtomSpace::Atom)),
+                            part : Part, & : Array(AtomSpace::Atom), Array(Hash(String, AtomSpace::Atom)) ->) : Nil
+      return if rows.empty?
+      existing = rows.first.keys
+      # The new clause's variables are renamed apart before any is joined.
+      renaming = variable_names(part.template).to_h { |name| {name, "#{name}'#{clauses.size}"} }
+
+      renaming.each do |original, renamed|
+        existing.each do |shared|
+          template = rename(part.template, renaming.merge({original => shared}))
+          next if clauses.any? { |clause| clause.to_s == template.to_s }
+          # A clause that an existing clause already implies adds nothing,
+          # and one that implies an existing clause makes that one useless.
+          # A link inside a clause counts: (EVALUATIONLINK p (LISTLINK $x
+          # y)) says all that (LISTLINK $x $z) could.
+          next if clauses.any? { |clause| implied_by?(template, clause) || implied_by?(clause, template) }
+
+          index = Hash(AtomSpace::Handle, Array(Hash(String, AtomSpace::Atom))).new
+          part.rows.each do |row|
+            (index[row[original].handle] ||= [] of Hash(String, AtomSpace::Atom)) << row
+          end
+
+          joined = [] of Hash(String, AtomSpace::Atom)
+          seen = Set(Array(AtomSpace::Handle)).new
+          rows.each do |row|
+            index[row[shared].handle]?.try &.each do |other|
+              merged = row.dup
+              other.each { |name, atom| merged[renaming[name]] = atom unless name == original }
+              joined << merged if seen.add?(merged.values.map(&.handle))
+            end
+          end
+          next if joined.size < @min_support
+
+          yield clauses + [template], joined
+        end
+      end
+    end
+
+    # Clauses in a fixed order with variables named $v1, $v2, ... by first
+    # appearance, so the same conjunction reached two ways is recognised.
+    private def build(clauses : Array(AtomSpace::Atom), rows : Array(Hash(String, AtomSpace::Atom))) : ConjunctionSupport
+      ordered = clauses.sort_by { |clause| anonymous(clause) }
+      names = {} of String => String
+      ordered.each do |clause|
+        variable_names(clause).each { |name| names[name] ||= "$v#{names.size + 1}" }
+      end
+      canonical = ordered.map { |clause| rename(clause, names) }
+      groundings = rows.map { |row| row.to_h { |name, atom| {names[name], atom} } }
+
+      ConjunctionSupport.new(canonical, names.values, groundings.size, surprisingness(canonical, groundings), groundings)
+    end
+
+    # Compares, for a variable shared by all clauses, how many atoms satisfy
+    # every clause with how many would if the clauses were independent.
+    private def surprisingness(clauses : Array(AtomSpace::Atom), groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
+      universe = @atomspace.size.to_f
+      return 0.0 if universe <= 0.0
+      shared = variable_names(clauses.first).find do |name|
+        clauses.all? { |clause| variable_names(clause).includes?(name) }
+      end
+      return 0.0 unless shared
+
+      together = groundings.map { |row| row[shared].handle }.uniq.size / universe
+      separately = clauses.map do |clause|
+        pattern = PatternMatching::Pattern.new(clause)
+        variable = pattern.variables.find! { |candidate| candidate.name == shared }
+        @calculator.valuations(pattern).map { |valuation| valuation.grounding.bindings[variable].handle }.uniq.size / universe
+      end
+      @scorer.i_surprisingness(together, separately)
+    end
+
+    private def variable_names(atom : AtomSpace::Atom, names = [] of String) : Array(String)
+      if PatternMatching::Pattern.variable?(atom)
+        names << atom.name unless names.includes?(atom.name)
+      elsif atom.link?
+        atom.outgoing.each { |child| variable_names(child, names) }
+      end
+      names
+    end
+
+    private def rename(atom : AtomSpace::Atom, names : Hash(String, String)) : AtomSpace::Atom
+      if PatternMatching::Pattern.variable?(atom)
+        (renamed = names[atom.name]?) ? AtomSpace::VariableNode.new(renamed).as(AtomSpace::Atom) : atom
+      elsif atom.link?
+        AtomSpace::Link.new(atom.type, atom.outgoing.map { |child| rename(child, names) }).as(AtomSpace::Atom)
+      else
+        atom
+      end
+    end
+
+    # The clause with every variable written the same, for ordering.
+    private def anonymous(atom : AtomSpace::Atom) : String
+      rename(atom, variable_names(atom).to_h { |name| {name, "$_"} }).to_s
+    end
+
+    # Does every grounding of `specific` also ground `general`, with shared
+    # variables standing for the same atoms? True when `general` becomes
+    # `specific` by giving values to variables only `general` has.
+    private def subsumes?(general : AtomSpace::Atom, specific : AtomSpace::Atom) : Bool
+      fixed = variable_names(specific)
+      match_onto(general, specific, fixed, {} of String => AtomSpace::Atom)
+    end
+
+    # Is `general` true whenever `specific` is: does it subsume `specific`
+    # or a link somewhere inside it?
+    private def implied_by?(general : AtomSpace::Atom, specific : AtomSpace::Atom) : Bool
+      return true if subsumes?(general, specific)
+      return false unless specific.link?
+      specific.outgoing.any? { |child| child.link? && implied_by?(general, child) }
+    end
+
+    private def match_onto(general : AtomSpace::Atom, specific : AtomSpace::Atom, fixed : Array(String),
+                           bound : Hash(String, AtomSpace::Atom)) : Bool
+      if PatternMatching::Pattern.variable?(general)
+        # A variable both clauses use must stay itself.
+        return general == specific if fixed.includes?(general.name)
+        if previous = bound[general.name]?
+          return previous == specific
+        end
+        bound[general.name] = specific
+        return true
+      end
+      return false if PatternMatching::Pattern.variable?(specific)
+
+      if general.link? && specific.link?
+        return false unless general.type == specific.type
+        left = general.outgoing
+        right = specific.outgoing
+        return false unless left.size == right.size
+        return left.each_with_index.all? { |child, i| match_onto(child, right[i], fixed, bound) }
+      end
+      general == specific
     end
   end
 

@@ -360,6 +360,14 @@ module AtomSpace
       end
     end
 
+    # The stored link of this type from `first` to `second`. Reasoning asks
+    # this for every pair of premises, so it builds only the lookup key.
+    def find_link(type : AtomType, first : Atom, second : Atom) : Atom?
+      @mutex.synchronize do
+        @atoms_by_outgoing[[first.handle, second.handle]]?.try(&.find { |atom| atom.type == type })
+      end
+    end
+
     # Specific atom creation methods
     def add_concept_node(name : String, tv : TruthValue = TruthValue::DEFAULT_TV) : Atom
       node = ConceptNode.new(name, tv)

@@ -102,6 +102,42 @@ describe Vision::JPEG do
     largest_difference(plain, progressive).should be <= 3
   end
 
+  it "converts a CMYK file to RGB" do
+    bytes = fixture("cmyk.jpg")
+    frame = (0...bytes.size - 1).find! { |i| bytes[i] == 0xFF && bytes[i + 1] == 0xC0 }
+    bytes[frame + 9].should eq(4) # four components
+    image = Vision::Image.from_jpeg(bytes)
+    image.channels.should eq(3)
+    largest_difference(image, Vision::Image.from_ppm(fixture("cmyk.ppm"))).should be <= 2
+    # And it is the picture that was saved, within what JPEG loses.
+    original = Vision::Image.from_png(fixture("scene.png"))
+    differences = original.data.zip(image.data).map { |x, y| (x.to_i - y.to_i).abs }
+    (differences.sum / differences.size).should be < 4.0
+  end
+
+  it "converts a YCCK file with subsampled components" do
+    bytes = fixture("ycck_subsampled.jpg")
+    # Adobe's marker with transform 2: the first three components are YCbCr.
+    adobe = (0...bytes.size - 1).find! { |i| bytes[i] == 0xFF && bytes[i + 1] == 0xEE }
+    String.new(bytes[adobe + 4, 5]).should eq("Adobe")
+    bytes[adobe + 15].should eq(2)
+    image = Vision::Image.from_jpeg(bytes)
+    largest_difference(image, Vision::Image.from_ppm(fixture("ycck_subsampled.ppm"))).should be <= 3
+  end
+
+  it "reads ink the other way round without Adobe's marker" do
+    bytes = fixture("cmyk.jpg")
+    with_marker = Vision::Image.from_jpeg(bytes)
+    # Rename the Adobe segment to a comment: the same samples now mean
+    # ink, not light, so the pale background comes out dark.
+    plain = bytes.dup
+    adobe = (0...plain.size - 1).find! { |i| plain[i] == 0xFF && plain[i + 1] == 0xEE }
+    plain[adobe + 1] = 0xFE_u8
+    without_marker = Vision::Image.from_jpeg(plain)
+    with_marker.rgb(0, 0).each { |value| value.should be > 200 }
+    without_marker.rgb(0, 0).each { |value| value.should be < 10 }
+  end
+
   it "decodes a grayscale file to one channel" do
     image = Vision::Image.from_jpeg(fixture("scene_gray.jpg"))
     image.gray?.should be_true
@@ -158,10 +194,14 @@ describe Vision::JPEG do
     # No scan at all: start and end markers only.
     expect_raises(Vision::ImageError, "JPEG has no image data") { Vision::Image.from_jpeg(Bytes[0xFF, 0xD8, 0xFF, 0xD9]) }
 
-    # A frame of four components (CMYK).
-    cmyk = jpeg.dup
-    frame = (0...cmyk.size - 1).find! { |i| cmyk[i] == 0xFF && cmyk[i + 1] == 0xC0 }
-    cmyk[frame + 9] = 4_u8
-    expect_raises(Vision::ImageError, "4 components is not supported") { Vision::Image.from_jpeg(cmyk) }
+    # A frame that claims five components.
+    five = jpeg.dup
+    frame = (0...five.size - 1).find! { |i| five[i] == 0xFF && five[i + 1] == 0xC0 }
+    five[frame + 9] = 5_u8
+    expect_raises(Vision::ImageError, "5 components is not supported") { Vision::Image.from_jpeg(five) }
+    # Four, with a header that only describes three.
+    four = jpeg.dup
+    four[frame + 9] = 4_u8
+    expect_raises(Vision::ImageError, "truncated JPEG frame header") { Vision::Image.from_jpeg(four) }
   end
 end

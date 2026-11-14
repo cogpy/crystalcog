@@ -196,3 +196,105 @@ describe "PLN rules with several second premises" do
     link.truth_value.confidence.should eq(0.9)
   end
 end
+
+describe "PLN evidence from several derivations" do
+  it "revises a conclusion once for each chain that leads to it" do
+    space = AtomSpace::AtomSpace.new
+    a = space.add_concept_node("a")
+    c = space.add_concept_node("c")
+    first = space.add_concept_node("b1")
+    second = space.add_concept_node("b2")
+    ab1 = space.add_inheritance_link(a, first, AtomSpace::SimpleTruthValue.new(0.9, 0.8))
+    space.add_inheritance_link(first, c, AtomSpace::SimpleTruthValue.new(0.9, 0.8))
+    ab2 = space.add_inheritance_link(a, second, AtomSpace::SimpleTruthValue.new(0.5, 0.6))
+    space.add_inheritance_link(second, c, AtomSpace::SimpleTruthValue.new(0.6, 0.5))
+    rule = PLN::DeductionRule.new
+
+    conclusion = rule.apply(ab1, space).not_nil!
+    conclusion.truth_value.strength.should be_close(0.81, 1e-12)
+    conclusion.truth_value.confidence.should be_close(0.576, 1e-12)
+
+    # The second chain says 0.3 with confidence 0.27; the two are revised.
+    rule.apply(ab2, space).should be(conclusion)
+    c1, c2 = 0.576, 0.27
+    conclusion.truth_value.confidence.should be_close(c1 + c2 - c1 * c2, 1e-12)
+    conclusion.truth_value.strength.should be_close((0.81 * c1 + 0.3 * c2) / (c1 + c2), 1e-12)
+
+    # Seeing the same chains again adds nothing.
+    settled = {conclusion.truth_value.strength, conclusion.truth_value.confidence}
+    3.times { rule.apply(ab1, space); rule.apply(ab2, space) }
+    {conclusion.truth_value.strength, conclusion.truth_value.confidence}.should eq(settled)
+  end
+
+  it "counts a derivation as evidence for a conclusion that was asserted" do
+    space = AtomSpace::AtomSpace.new
+    a = space.add_concept_node("a")
+    b = space.add_concept_node("b")
+    c = space.add_concept_node("c")
+    premise = space.add_inheritance_link(a, b, AtomSpace::SimpleTruthValue.new(1.0, 0.9))
+    space.add_inheritance_link(b, c, AtomSpace::SimpleTruthValue.new(1.0, 0.9))
+    asserted = space.add_inheritance_link(a, c, AtomSpace::SimpleTruthValue.new(0.6, 0.5))
+    rule = PLN::DeductionRule.new
+
+    rule.apply(premise, space).should be(asserted)
+    derived = 0.9 * 0.9 * 0.9
+    asserted.truth_value.confidence.should be_close(0.5 + derived - 0.5 * derived, 1e-12)
+    asserted.truth_value.strength.should be_close((0.6 * 0.5 + 1.0 * derived) / (0.5 + derived), 1e-12)
+    rule.apply(premise, space)
+    asserted.truth_value.confidence.should be_close(0.5 + derived - 0.5 * derived, 1e-12)
+  end
+
+  it "does not let a link's own inverse raise its confidence" do
+    space = AtomSpace::AtomSpace.new
+    a = space.add_concept_node("a")
+    b = space.add_concept_node("b")
+    link = space.add_inheritance_link(a, b, AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+
+    PLN.create_engine(space).reason(5)
+    inverse = space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [b, a]).not_nil!
+    inverse.truth_value.confidence.should be_close(0.72, 1e-12)
+    {link.truth_value.strength, link.truth_value.confidence}.should eq({0.8, 0.9})
+  end
+
+  it "keeps asserted premises of a chain as they were" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c).map { |name| space.add_concept_node(name) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1], AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    bc = space.add_inheritance_link(nodes[1], nodes[2], AtomSpace::SimpleTruthValue.new(0.7, 0.9))
+    PLN.create_engine(space).reason(1)
+    # One round of conclusions drawn from them leaves the two premises alone.
+    {ab.truth_value.strength, ab.truth_value.confidence}.should eq({0.8, 0.9})
+    {bc.truth_value.strength, bc.truth_value.confidence}.should eq({0.7, 0.9})
+  end
+end
+
+describe PLN::Provenance do
+  it "counts each derivation once and remembers direct parents only" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c d).map { |name| space.add_concept_node(name) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1])
+    bc = space.add_inheritance_link(nodes[1], nodes[2])
+    ac = space.add_inheritance_link(nodes[0], nodes[2])
+    cd = space.add_inheritance_link(nodes[2], nodes[3])
+    ad = space.add_inheritance_link(nodes[0], nodes[3])
+    provenance = PLN::Provenance.new
+    provenance.record(ac, ab, bc)
+    provenance.record(ad, ac, cd)
+
+    provenance.first_use?(PLN::Provenance::DEDUCTION, ab, bc).should be_true
+    provenance.first_use?(PLN::Provenance::DEDUCTION, ab, bc).should be_false
+    # The other order and another rule are different derivations.
+    provenance.first_use?(PLN::Provenance::DEDUCTION, bc, ab).should be_true
+    provenance.first_use?(PLN::Provenance::ABDUCTION, ab, bc).should be_true
+    provenance.first_use?(PLN::Provenance::INVERSION, ab).should be_true
+    provenance.derivations.should eq(4)
+
+    provenance.parent?(ab, ac).should be_true
+    provenance.parent?(ac, ab).should be_false
+    provenance.parent?(ab, ad).should be_false # a grandparent
+    # ac may not revise ab, which it came from; cd is unrelated to ab.
+    provenance.independent?(ab, ac, cd).should be_false
+    provenance.independent?(ab, cd).should be_true
+    provenance.independent?(ab, ab).should be_false
+  end
+end

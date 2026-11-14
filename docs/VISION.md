@@ -62,7 +62,7 @@ Positions are the object's centre as fractions of the image width and height; ar
 ## Image formats
 
 - **PNG:** grayscale, RGB, palette, gray+alpha and RGBA, at 1 to 16 bits per sample, plain or Adam7 interlaced. Alpha is composited over white. 16-bit samples keep their high byte.
-- **JPEG** (read only, `src/vision/jpeg.cr`): 8-bit sequential and progressive files, grayscale or three components, any chroma subsampling, with or without restart markers. Chroma is upsampled by repetition. Lossless, arithmetic-coded, 12-bit and four-component (CMYK) files raise `Vision::ImageError` naming the reason.
+- **JPEG** (read only, `src/vision/jpeg.cr`): 8-bit sequential and progressive files, with one, three or four components, any subsampling, with or without restart markers. Chroma is upsampled by repetition. CMYK and YCCK files are converted to RGB without a colour profile, reading ink as inverted when Adobe's marker is present. Lossless, arithmetic-coded and 12-bit files raise `Vision::ImageError` naming the reason.
 - **PPM/PGM:** binary (P5, P6) and ASCII (P2, P3).
 - **Raw frames:** `Vision::Image.from_raw` takes the ROS encodings `rgb8`, `bgr8`, `rgba8`, `bgra8` and `mono8`.
 

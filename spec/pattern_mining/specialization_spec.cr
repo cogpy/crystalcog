@@ -105,3 +105,96 @@ describe PatternMining::PatternMiner do
     result.total_patterns_explored.should eq(5)
   end
 end
+
+private def diets : AtomSpace::AtomSpace
+  space = AtomSpace::AtomSpace.new
+  animal = space.add_concept_node("animal")
+  plant = space.add_concept_node("plant")
+  eats = space.add_predicate_node("eats")
+  likes = space.add_predicate_node("likes")
+  meat = space.add_concept_node("meat")
+  water = space.add_concept_node("water")
+  %w(dog cat wolf fox).each do |name|
+    creature = space.add_concept_node(name)
+    space.add_inheritance_link(creature, animal)
+    space.add_evaluation_link(eats, space.add_list_link([creature, meat] of AtomSpace::Atom))
+  end
+  %w(cow sheep).each { |name| space.add_inheritance_link(space.add_concept_node(name), animal) }
+  %w(fern moss rose).each do |name|
+    growth = space.add_concept_node(name)
+    space.add_inheritance_link(growth, plant)
+    space.add_evaluation_link(likes, space.add_list_link([growth, water] of AtomSpace::Atom))
+  end
+  space
+end
+
+describe PatternMining::ConjunctionMiner do
+  it "joins frequent patterns on a shared variable" do
+    miner = PatternMining::PatternMiner.new(diets, min_support: 3, max_patterns: 300, timeout_seconds: 20)
+    conjunctions = miner.mine_conjunctions
+    found = conjunctions.to_h { |conjunction| {conjunction.to_s, conjunction} }
+
+    meat_eaters = found[%((AND (EVALUATIONLINK (PREDICATENODE "eats") (LISTLINK (VARIABLENODE "$v1") (CONCEPTNODE "meat"))) (INHERITANCELINK (VARIABLENODE "$v1") (CONCEPTNODE "animal"))))]
+    meat_eaters.support.should eq(4)
+    meat_eaters.variables.should eq(["$v1"])
+    meat_eaters.groundings.map { |row| row["$v1"].name }.sort.should eq(["cat", "dog", "fox", "wolf"])
+    meat_eaters.meets_minimum_support?(4).should be_true
+    meat_eaters.meets_minimum_support?(5).should be_false
+
+    drinkers = found[%((AND (EVALUATIONLINK (PREDICATENODE "likes") (LISTLINK (VARIABLENODE "$v1") (CONCEPTNODE "water"))) (INHERITANCELINK (VARIABLENODE "$v1") (CONCEPTNODE "plant"))))]
+    drinkers.support.should eq(3)
+    # Three of fourteen atoms are plants and all of them like water: far
+    # more overlap than independent clauses would have.
+    drinkers.surprisingness.should be > 0.5
+
+    # Nothing eats meat and is a plant.
+    found.keys.none? { |key| key.includes?("meat") && key.includes?("plant") }.should be_true
+    conjunctions.all? { |conjunction| conjunction.support >= 3 && conjunction.clauses.size == 2 }.should be_true
+    # Most supported first.
+    conjunctions.map(&.support).should eq(conjunctions.map(&.support).sort.reverse)
+  end
+
+  it "leaves out clauses that another clause already implies" do
+    conjunctions = PatternMining::PatternMiner.new(diets, min_support: 3, max_patterns: 300).mine_conjunctions
+    texts = conjunctions.map(&.to_s)
+    # A list inside an evaluation clause is not a second fact.
+    texts.none? { |text| text.includes?(%[(LISTLINK (VARIABLENODE "$v1") (CONCEPTNODE "meat"))) (LISTLINK]) }.should be_true
+    conjunctions.each do |conjunction|
+      first, second = conjunction.clauses.map(&.to_s)
+      first.should_not eq(second)
+      first.includes?(second).should be_false
+      second.includes?(first).should be_false
+    end
+    # "inherits from something" adds nothing to "inherits from animal".
+    texts.none? { |text| text.includes?(%[(INHERITANCELINK (VARIABLENODE "$v1") (CONCEPTNODE "animal")) (INHERITANCELINK (VARIABLENODE "$v1") (VARIABLENODE]) }.should be_true
+  end
+
+  it "names variables the same way whichever pattern comes first" do
+    space = diets
+    patterns = PatternMining::PatternMiner.new(space, min_support: 3, max_patterns: 300).mine_patterns.patterns.map(&.pattern)
+    forwards = PatternMining::ConjunctionMiner.new(space, min_support: 3).mine(patterns).map(&.to_s).sort
+    backwards = PatternMining::ConjunctionMiner.new(space, min_support: 3).mine(patterns.reverse).map(&.to_s).sort
+    forwards.should eq(backwards)
+    forwards.uniq.size.should eq(forwards.size)
+  end
+
+  it "grows to three clauses when asked and respects its limits" do
+    space = diets
+    carnivore = space.add_concept_node("carnivore")
+    %w(dog cat wolf fox).each { |name| space.add_inheritance_link(space.get_nodes_by_name(name).first, carnivore) }
+    miner = PatternMining::PatternMiner.new(space, min_support: 4, max_patterns: 300, timeout_seconds: 20)
+
+    triples = miner.mine_conjunctions(max_clauses: 3).select { |conjunction| conjunction.clauses.size == 3 }
+    triples.should_not be_empty
+    wanted = triples.find do |conjunction|
+      text = conjunction.to_s
+      text.includes?(%("animal")) && text.includes?(%("carnivore")) && text.includes?(%("eats")) && text.includes?(%("meat"))
+    end.not_nil!
+    wanted.support.should eq(4)
+
+    miner.mine_conjunctions(max_conjunctions: 3).size.should eq(3)
+    expect_raises(PatternMining::MiningException) { PatternMining::ConjunctionMiner.new(space, max_clauses: 1) }
+    # Nothing frequent enough: nothing to join.
+    PatternMining::PatternMiner.new(space, min_support: 50).mine_conjunctions.should be_empty
+  end
+end
