@@ -38,10 +38,13 @@ module URE
       end
     end
 
+    # Asked of every candidate in every search, so the parts are read in
+    # place: `outgoing` would copy them each time.
     def self.ground?(atom : AtomSpace::Atom) : Bool
       return false if variable?(atom)
       return true unless atom.is_a?(AtomSpace::Link)
-      atom.outgoing.all? { |child| ground?(child) }
+      atom.arity.times { |i| return false unless ground?(atom[i]) }
+      true
     end
 
     # The most general set of bindings that makes `a` and `b` the same
@@ -216,20 +219,48 @@ module URE
     end
 
     # The atoms a pattern could be: those of its type, or when one of its
-    # parts is already an atom of the AtomSpace, only the links that part
-    # is in. The part in the fewest links narrows the most.
+    # parts narrows the search, only the links that part is in. The part
+    # in the fewest links narrows the most.
     def self.candidates(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
       if goal.is_a?(AtomSpace::Link)
         narrowest = nil
         goal.outgoing.each do |child|
-          next unless Unifier.ground?(child)
-          known = canonical(child, atomspace) || return [] of AtomSpace::Atom
-          incoming = known.incoming
-          narrowest = incoming if narrowest.nil? || incoming.size < narrowest.size
+          holders = holders_of(child, atomspace) || next
+          narrowest = holders if narrowest.nil? || holders.size < narrowest.size
         end
         return narrowest.select { |atom| atom.type == goal.type } if narrowest
       end
       atomspace.get_atoms_by_type(goal.type)
+    end
+
+    # The stored links a part could be a part of, or nil when the part
+    # does not narrow the search. A part without variables is in the links
+    # of its incoming set, and in none when the AtomSpace does not have
+    # it. A part with variables in it, as (List john $who), is reached
+    # through what it holds: the lists john is in, and then the links
+    # those are in.
+    private def self.holders_of(part : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)?
+      if Unifier.ground?(part)
+        known = canonical(part, atomspace) || return [] of AtomSpace::Atom
+        return known.incoming
+      end
+      return nil unless part.is_a?(AtomSpace::Link)
+
+      inner = nil
+      part.outgoing.each do |child|
+        found = holders_of(child, atomspace) || next
+        inner = found if inner.nil? || found.size < inner.size
+      end
+      return nil unless inner
+
+      holders = [] of AtomSpace::Atom
+      inner.each do |link|
+        holders.concat(link.incoming) if link.type == part.type
+      end
+      # One link may hold two of them; and keep the order the atoms were made in.
+      holders.uniq!(&.handle)
+      holders.sort_by!(&.handle)
+      holders
     end
 
     # The AtomSpace's own atom for a ground atom, if it has one.
@@ -379,16 +410,93 @@ module URE
       premises.map(&.truth_value.confidence).sum / premises.size
     end
 
-    private def contains_variable?(atom : AtomSpace::Atom) : Bool
-      visited = Set(UInt64).new
-      stack = [atom]
-      while node = stack.pop?
-        next unless visited.add?(node.handle)
-        return true if node.type == AtomSpace::AtomType::VARIABLE_NODE
-        next unless node.is_a?(AtomSpace::Link)
-        node.outgoing.each { |child| stack << child }
+    # Going forward, a conjunction is drawn between two facts that speak
+    # of a common atom: evaluations with an argument in common. Each such
+    # pair is found once, the fact made earlier first, through the
+    # argument's incoming set and not by pairing every fact with every
+    # other.
+    def find_applications(atomspace : AtomSpace::AtomSpace, limit : Int32,
+                          accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
+      found = [] of Array(AtomSpace::Atom)
+      # Asked once of each fact, not of each pair: looking into a link
+      # copies its parts.
+      facts = atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).reject { |fact| contains_variable?(fact) }
+      ground = facts.map(&.handle).to_set
+      facts.each do |fact|
+        # Two facts with two atoms in common are still one pair.
+        paired = Set(AtomSpace::Handle).new
+        about(fact).each do |thing|
+          each_fact_about(thing, atomspace) do |other|
+            next unless other.handle > fact.handle
+            next unless ground.includes?(other.handle) && paired.add?(other.handle)
+            premises = [fact, other]
+            found << premises if accept.call(premises)
+            return found if found.size >= limit
+          end
+        end
       end
-      false
+      found
+    end
+
+    # Working back from a goal: a conjunction is proved by proving its
+    # parts, in order, each with what the parts before it settled. So
+    # (And (likes $x Mary) (tall $x)) asks who likes Mary and then whether
+    # each of them is tall.
+    def premises_for(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace,
+                     prove : AtomSpace::Atom -> Array(AtomSpace::Atom)) : Array(Array(AtomSpace::Atom))?
+      return nil unless goal.type == AtomSpace::AtomType::AND_LINK && goal.is_a?(AtomSpace::Link)
+      found = [] of Array(AtomSpace::Atom)
+      parts = goal.outgoing
+      prove_parts(parts, 0, Bindings.new, [] of AtomSpace::Atom, prove, found) if parts.size >= 2
+      found
+    end
+
+    PROVED_AT_MOST = 500
+
+    private def prove_parts(parts : Array(AtomSpace::Atom), index : Int32, bindings : Bindings,
+                            chosen : Array(AtomSpace::Atom), prove : AtomSpace::Atom -> Array(AtomSpace::Atom),
+                            found : Array(Array(AtomSpace::Atom))) : Nil
+      return if found.size >= PROVED_AT_MOST
+      if index == parts.size
+        found << chosen
+        return
+      end
+      wanted = Unifier.resolve(parts[index], bindings)
+      prove.call(wanted).each do |fact|
+        extended = Unifier.unify(wanted, fact, bindings) || next
+        prove_parts(parts, index + 1, extended, chosen + [fact], prove, found)
+      end
+    end
+
+    # The atoms a fact speaks of: the arguments of an evaluation.
+    private def about(fact : AtomSpace::Atom) : Array(AtomSpace::Atom)
+      return [] of AtomSpace::Atom unless fact.is_a?(AtomSpace::Link) && fact.arity == 2
+      arguments = fact.outgoing[1]
+      arguments.type == AtomSpace::AtomType::LIST_LINK ? arguments.outgoing : [arguments]
+    end
+
+    # The evaluations that have an atom as an argument, or as their one
+    # argument.
+    private def each_fact_about(thing : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, & : AtomSpace::Atom ->) : Nil
+      atomspace.get_incoming(thing).each do |parent|
+        if parent.type == AtomSpace::AtomType::EVALUATION_LINK
+          yield parent if argument_of?(thing, parent)
+        elsif parent.type == AtomSpace::AtomType::LIST_LINK
+          atomspace.get_incoming(parent).each do |holder|
+            yield holder if holder.type == AtomSpace::AtomType::EVALUATION_LINK && argument_of?(parent, holder)
+          end
+        end
+      end
+    end
+
+    private def argument_of?(arguments : AtomSpace::Atom, fact : AtomSpace::Atom) : Bool
+      fact.arity == 2 && fact.outgoing[1].handle == arguments.handle
+    end
+
+    # No set of visited atoms is kept: a link cannot contain itself, and
+    # this is asked of every pair of facts at every step.
+    private def contains_variable?(atom : AtomSpace::Atom) : Bool
+      !Unifier.ground?(atom)
     end
   end
 
@@ -1070,10 +1178,10 @@ module URE
 
     # Advanced backward chaining with BIT construction
     def do_chain(target : AtomSpace::Atom) : Array(AtomSpace::Atom)
-      # Rules that declare patterns, and modus ponens, can prove the target
-      # outright; what they conclude is then in the AtomSpace for the
+      # Rules that declare patterns, modus ponens and the conjunction rule
+      # can prove the target outright; what they conclude is then in the AtomSpace for the
       # search below.
-      prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) }
+      prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) || rule.is_a?(ConjunctionRule) }
 
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]
