@@ -379,6 +379,85 @@ module URE
       premises.map(&.truth_value.confidence).sum / premises.size
     end
 
+    # Going forward, a conjunction is drawn between two facts that speak
+    # of a common atom: evaluations with an argument in common. Each such
+    # pair is found once, the fact made earlier first, through the
+    # argument's incoming set and not by pairing every fact with every
+    # other.
+    def find_applications(atomspace : AtomSpace::AtomSpace, limit : Int32,
+                          accept : Array(AtomSpace::Atom) -> Bool) : Array(Array(AtomSpace::Atom))?
+      found = [] of Array(AtomSpace::Atom)
+      atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).each do |fact|
+        next if contains_variable?(fact)
+        # Two facts with two atoms in common are still one pair.
+        paired = Set(AtomSpace::Handle).new
+        about(fact).each do |thing|
+          facts_about(thing, atomspace).each do |other|
+            next unless other.handle > fact.handle
+            next if contains_variable?(other) || !paired.add?(other.handle)
+            premises = [fact, other]
+            found << premises if accept.call(premises)
+            return found if found.size >= limit
+          end
+        end
+      end
+      found
+    end
+
+    # Working back from a goal: a conjunction is proved by proving its
+    # parts, in order, each with what the parts before it settled. So
+    # (And (likes $x Mary) (tall $x)) asks who likes Mary and then whether
+    # each of them is tall.
+    def premises_for(goal : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace,
+                     prove : AtomSpace::Atom -> Array(AtomSpace::Atom)) : Array(Array(AtomSpace::Atom))?
+      return nil unless goal.type == AtomSpace::AtomType::AND_LINK && goal.is_a?(AtomSpace::Link)
+      found = [] of Array(AtomSpace::Atom)
+      parts = goal.outgoing
+      prove_parts(parts, 0, Bindings.new, [] of AtomSpace::Atom, prove, found) if parts.size >= 2
+      found
+    end
+
+    PROVED_AT_MOST = 500
+
+    private def prove_parts(parts : Array(AtomSpace::Atom), index : Int32, bindings : Bindings,
+                            chosen : Array(AtomSpace::Atom), prove : AtomSpace::Atom -> Array(AtomSpace::Atom),
+                            found : Array(Array(AtomSpace::Atom))) : Nil
+      return if found.size >= PROVED_AT_MOST
+      if index == parts.size
+        found << chosen
+        return
+      end
+      wanted = Unifier.resolve(parts[index], bindings)
+      prove.call(wanted).each do |fact|
+        extended = Unifier.unify(wanted, fact, bindings) || next
+        prove_parts(parts, index + 1, extended, chosen + [fact], prove, found)
+      end
+    end
+
+    # The atoms a fact speaks of: the arguments of an evaluation.
+    private def about(fact : AtomSpace::Atom) : Array(AtomSpace::Atom)
+      return [] of AtomSpace::Atom unless fact.is_a?(AtomSpace::Link) && fact.outgoing.size == 2
+      arguments = fact.outgoing[1]
+      arguments.type == AtomSpace::AtomType::LIST_LINK ? arguments.outgoing : [arguments]
+    end
+
+    # The evaluations that have an atom as an argument, or as their one
+    # argument.
+    private def facts_about(thing : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
+      facts = [] of AtomSpace::Atom
+      atomspace.get_incoming(thing).each do |parent|
+        if parent.type == AtomSpace::AtomType::EVALUATION_LINK
+          facts << parent if parent.outgoing.size == 2 && parent.outgoing[1].handle == thing.handle
+        elsif parent.type == AtomSpace::AtomType::LIST_LINK
+          atomspace.get_incoming(parent).each do |holder|
+            next unless holder.type == AtomSpace::AtomType::EVALUATION_LINK
+            facts << holder if holder.outgoing.size == 2 && holder.outgoing[1].handle == parent.handle
+          end
+        end
+      end
+      facts
+    end
+
     private def contains_variable?(atom : AtomSpace::Atom) : Bool
       visited = Set(UInt64).new
       stack = [atom]
@@ -1070,10 +1149,10 @@ module URE
 
     # Advanced backward chaining with BIT construction
     def do_chain(target : AtomSpace::Atom) : Array(AtomSpace::Atom)
-      # Rules that declare patterns, and modus ponens, can prove the target
-      # outright; what they conclude is then in the AtomSpace for the
+      # Rules that declare patterns, modus ponens and the conjunction rule
+      # can prove the target outright; what they conclude is then in the AtomSpace for the
       # search below.
-      prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) }
+      prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) || rule.is_a?(ConjunctionRule) }
 
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]
