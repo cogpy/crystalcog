@@ -23,6 +23,17 @@ module AtomSpace
     CONFLICT_DETECTED
     CONFLICT_RESOLVED
     PARTITION_REBALANCED
+    # A node learned who leads the cluster; the id is the leader's.
+    LEADER_ELECTED
+    # The leader a node followed left or was replaced; the id is the old leader's.
+    LEADER_LOST
+  end
+
+  # What a node is in the election of a leader.
+  enum ClusterRole
+    Follower
+    Candidate
+    Leader
   end
 
   # Cluster node status
@@ -194,6 +205,26 @@ module AtomSpace
     # How long a departure outweighs second-hand news of that node.
     DEPARTURE_MEMORY = 2.minutes
 
+    # Leadership. The members choose one leader by majority vote. Votes are
+    # held in numbered terms: a node votes once per term, a candidate needs
+    # more than half of the members it knows, and whoever sees a higher
+    # term than its own gives way to it. Two leaders can therefore never
+    # hold the same term. (This is the election half of Raft; there is no
+    # replicated log.)
+    getter term : UInt64 = 0_u64
+    getter role : ClusterRole = ClusterRole::Follower
+    # The leader this node follows, itself when it leads, nil when it
+    # knows of none.
+    getter leader_id : String?
+    @voted_for : String?
+    @last_leader_contact : Time::Span = Time.monotonic
+    # When set, a node that hears from no leader for between one and two
+    # of these spans stands for election itself, and a leader tells the
+    # others it is there three times in each. Set before `start`.
+    property election_timeout : Time::Span? = nil
+    # How long a candidate waits for one member's vote.
+    property vote_timeout : Time::Span = 1.second
+
     def initialize(@cluster_id : String, @local_atomspace : AtomSpace,
                    host : String = "localhost", port : Int32 = 0,
                    @sync_strategy : SyncStrategy = SyncStrategy::MergeUsingTruthValues,
@@ -242,6 +273,12 @@ module AtomSpace
       # Start synchronization thread
       @sync_thread = spawn do
         sync_loop
+      end
+
+      # Keep a leader in place when asked to
+      if timeout = @election_timeout
+        @last_leader_contact = Time.monotonic
+        spawn election_loop(timeout)
       end
 
       emit_event(ClusterEvent::NODE_JOINED, @node_id)
@@ -357,6 +394,9 @@ module AtomSpace
         "local_node_status"          => JSON::Any.new(@local_node.status.to_s),
         "adaptive_heartbeat_enabled" => JSON::Any.new(@adaptive_heartbeat.enabled),
         "heartbeat_interval_seconds" => JSON::Any.new(@adaptive_heartbeat.current_interval.total_seconds),
+        "term"                       => JSON::Any.new(@term.to_i64),
+        "role"                       => JSON::Any.new(@role.to_s),
+        "leader_id"                  => JSON::Any.new(@leader_id),
       }
 
       stats
@@ -471,6 +511,10 @@ module AtomSpace
         handle_departure(message)
       when "member_joined"
         handle_member_joined(message)
+      when "vote_request"
+        handle_vote_request(message, client)
+      when "leader_announce"
+        handle_leader_announce(message)
       when "conflict_resolution"
         handle_conflict_resolution(message)
       else
@@ -903,6 +947,159 @@ module AtomSpace
       if @cluster_nodes.delete(node_id)
         emit_event(ClusterEvent::NODE_LEFT, node_id)
         CogUtil::Logger.info("Node #{node_id} left cluster")
+      end
+      if @leader_id == node_id
+        @leader_id = nil
+        emit_event(ClusterEvent::LEADER_LOST, node_id)
+      end
+    end
+
+    # ------------------------------------------------------------ leadership
+
+    def leader? : Bool
+      @role.leader?
+    end
+
+    # The member that leads, as far as this node knows.
+    def leader : ClusterNodeInfo?
+      @leader_id.try { |id| @cluster_nodes[id]? }
+    end
+
+    # Stand for leader: open a new term and ask every member for its vote.
+    # Returns true when more than half of the members, this one included,
+    # gave theirs and no higher term turned up meanwhile; this node then
+    # leads and has told the others. A node that is not running, or that
+    # loses, returns false.
+    def start_election : Bool
+      return false unless @running
+
+      @term += 1
+      term = @term
+      @role = ClusterRole::Candidate
+      @voted_for = @node_id
+      follow(nil)
+
+      members = @cluster_nodes.values
+      others = members.reject { |node| node.id == @node_id }
+      needed = members.size // 2 + 1
+      votes = 1
+      answers = Channel(Bool).new(Math.max(others.size, 1))
+      others.each { |node| spawn request_vote(node, term, answers) }
+
+      others.size.times do
+        break if votes >= needed
+        votes += 1 if answers.receive
+        # A vote request or an announcement of a higher term ends this try.
+        break unless @term == term && @role.candidate?
+      end
+
+      if @term == term && @role.candidate? && votes >= needed
+        @role = ClusterRole::Leader
+        follow(@node_id)
+        announce_leadership
+        CogUtil::Logger.info("Node #{@node_id} leads cluster #{@cluster_id} in term #{term} with #{votes} of #{members.size} votes")
+        true
+      else
+        @role = ClusterRole::Follower if @term == term && @role.candidate?
+        false
+      end
+    end
+
+    # Tell every member who leads this term. A leader repeats it to show
+    # it is still there.
+    def announce_leadership : Nil
+      return unless leader?
+      broadcast_message({"type" => "leader_announce", "term" => @term.to_i64, "leader_id" => @node_id})
+    end
+
+    private def request_vote(node : ClusterNodeInfo, term : UInt64, answers : Channel(Bool)) : Nil
+      granted = false
+      begin
+        socket = TCPSocket.new(node.host, node.port, connect_timeout: @vote_timeout)
+        begin
+          socket.read_timeout = @vote_timeout
+          socket.puts({"type" => "vote_request", "term" => term.to_i64, "candidate_id" => @node_id}.to_json)
+          if line = socket.gets
+            answer = JSON.parse(line)
+            theirs = answer["term"].as_i64.to_u64
+            give_way(theirs) if theirs > @term
+            granted = answer["granted"].as_bool && theirs == term
+          end
+        ensure
+          socket.close
+        end
+      rescue ex
+        CogUtil::Logger.debug("No vote from node #{node.id}: #{ex.message}")
+      end
+      answers.send(granted)
+    end
+
+    # One vote per term, for whoever asks first. A candidate of an older
+    # term is told the newer one.
+    private def handle_vote_request(message : JSON::Any, client : TCPSocket?)
+      term = message["term"].as_i64.to_u64
+      candidate = message["candidate_id"].as_s
+      give_way(term) if term > @term
+
+      granted = term == @term && (@voted_for.nil? || @voted_for == candidate)
+      if granted
+        @voted_for = candidate
+        # Having voted, give the candidate time to win before standing.
+        @last_leader_contact = Time.monotonic
+      end
+      client.try(&.puts({"term" => @term.to_i64, "granted" => granted}.to_json))
+    rescue ex
+      CogUtil::Logger.debug("Vote request not answered: #{ex.message}")
+    end
+
+    private def handle_leader_announce(message : JSON::Any)
+      term = message["term"].as_i64.to_u64
+      leader = message["leader_id"].as_s
+      # A leader of a term that is over has been replaced; it will hear so
+      # from the next vote request or announcement that reaches it.
+      return if term < @term
+      return if leader == @node_id
+
+      give_way(term) if term > @term
+      @role = ClusterRole::Follower
+      @last_leader_contact = Time.monotonic
+      follow(leader)
+    end
+
+    # A higher term exists: join it as a follower with a vote to give.
+    private def give_way(term : UInt64) : Nil
+      @term = term
+      @role = ClusterRole::Follower
+      @voted_for = nil
+      follow(nil) if @leader_id == @node_id
+    end
+
+    # Set the leader this node follows and tell the observers of a change.
+    private def follow(leader : String?) : Nil
+      previous = @leader_id
+      return if previous == leader
+      @leader_id = leader
+      emit_event(ClusterEvent::LEADER_LOST, previous) if previous
+      emit_event(ClusterEvent::LEADER_ELECTED, leader) if leader
+    end
+
+    # Keeps a leader in place: a leader shows it is there, and a node that
+    # has heard from none for a while stands for election. The wait is
+    # drawn afresh each time, between one and two timeouts, so that two
+    # nodes seldom stand at once, and when they do one of them soon tries
+    # again alone.
+    private def election_loop(timeout : Time::Span) : Nil
+      patience = timeout * (1.0 + rand)
+      while @running
+        sleep timeout / 3
+        break unless @running
+        if leader?
+          announce_leadership
+        elsif Time.monotonic - @last_leader_contact >= patience
+          @last_leader_contact = Time.monotonic
+          patience = timeout * (1.0 + rand)
+          start_election
+        end
       end
     end
 
