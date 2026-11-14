@@ -73,6 +73,10 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 # Computed values
 "SELECT $x WHERE { $x price $p . FILTER(($p + 1) * 2 > 8) } ORDER BY 10 - $p"
 
+# A computed variable, and alternatives inside a block
+"SELECT $x $double WHERE { $x price $p . BIND($p * 2 AS $double) . FILTER($double > 8) }"
+"SELECT $x WHERE { $x price $p . { $x ISA Fruit } UNION { $x ISA Vegetable } . FILTER($p < 5) }"
+
 # Counting and grouping
 "SELECT COUNT(*) AS $n WHERE { $x ISA Fruit }"
 "SELECT $kind COUNT($x) AS $n, AVG($p) AS $mean WHERE { $x ISA $kind . $x price $p } GROUP BY $kind HAVING($n > 2) ORDER BY $n DESC"
@@ -97,6 +101,8 @@ clause    := term ( ISA | inherits_from | "->" ) term
            | term term term
            | OPTIONAL "{" clauses "}"
            | FILTER "(" condition ")"
+           | BIND "(" value AS "$" name ")"
+           | block { UNION block }
 term      := "$" name | name | "quoted name"
 condition := condition OR condition | condition AND condition
            | NOT condition | "(" condition ")"
@@ -145,6 +151,15 @@ key       := value [ ASC | DESC ]
 - `HAVING(condition)` keeps the groups its condition holds for and can read the aggregates by name. ORDER BY can too.
 - None of these words is reserved: `count`, `group` or `offset` can still name an atom.
 
+### BIND and groups
+
+- `BIND(value AS $name)` gives a variable a computed value: a number, a name, or for a plain variable the atom itself. Where the value does not exist, as with an unbound variable, `$name` stays unbound.
+- A BIND applies to its block after the clauses and OPTIONAL parts and before the FILTERs, wherever it is written. A later BIND can use an earlier one. A variable the block's clauses match, or an earlier BIND set, cannot be bound again.
+- The bound variable can be selected, filtered, sorted and grouped on. A number made by BIND or an aggregate sorts and compares as a number.
+- A block can hold groups: `{ $x price $p . { $x ISA Fruit } UNION { $x ISA Vegetable } }`. A group is one block or several joined by UNION. Its results are joined with the rest of the block on the variables they share. UNION may stand on a later line.
+- A FILTER or BIND sees only what its own block matches. In the example above a `FILTER($p > 3)` inside `{ $x ISA Fruit }` would find `$p` without a value; write it in the outer block, or match the price inside the group.
+- `BIND` is not a reserved word.
+
 ### Variable Types
 - `$var` - Generic variable
 - `$var:CONCEPT` - Concept node variable
@@ -164,6 +179,8 @@ key       := value [ ASC | DESC ]
 - **Paging**: `LIMIT n OFFSET m`
 - **Aggregates**: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` with `GROUP BY` and `HAVING`
 - **Arithmetic**: `+ - * /` in any value
+- **Computed variables**: `BIND(value AS $name)`
+- **Groups**: `{ ... } UNION { ... }` inside a block
 
 ## Integration Points
 

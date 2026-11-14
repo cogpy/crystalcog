@@ -19,6 +19,8 @@
 #              | term term term                    (subject predicate object)
 #              | OPTIONAL "{" clauses "}"
 #              | FILTER "(" condition ")"
+#              | BIND "(" value AS "$" name ")"
+#              | block { UNION block }             (a group inside the block)
 #   term      := "$" name | name | "quoted name"
 #   condition := condition OR condition | condition AND condition
 #              | NOT condition | "(" condition ")"
@@ -190,7 +192,14 @@ module OpenCog
           when :strength   then atom.truth_value.strength
           when :confidence then atom.truth_value.confidence
           when :type       then atom.type.to_s
-          else                  atom.is_a?(AtomSpace::Node) ? atom.name : atom.to_s
+          else
+            # A number an aggregate or BIND made is that number, so that
+            # it sorts and compares as one.
+            if atom.is_a?(AtomSpace::Node)
+              (atom.type == AtomSpace::AtomType::NUMBER_NODE ? atom.name.to_f? : nil) || atom.name
+            else
+              atom.to_s
+            end
           end
         end
       end
@@ -375,10 +384,17 @@ module OpenCog
 
     # One "{ ... }" of a query: what must match, what may, and what the
     # results must satisfy.
+    # BIND(value AS $name): a variable given a computed value.
+    record QueryBind, value : QueryOperand, name : String
+
     class QueryBlock
       getter clauses = [] of QueryClause
       getter optional_clauses = [] of QueryClause
       getter filters = [] of QueryCondition
+      getter binds = [] of QueryBind
+      # Groups inside the block. Each is one block or several joined by
+      # UNION, and its results are joined with the rest of this block.
+      getter groups = [] of Array(QueryBlock)
     end
 
     # One ORDER BY key.
@@ -947,6 +963,7 @@ module OpenCog
         fail("expected '{', found #{current.describe}") unless punctuation?("{")
         opening = advance
         clauses_before = nested ? block.optional_clauses.size : block.clauses.size
+        bound_here = [] of Token
 
         loop do
           while current.kind == :newline || punctuation?(".")
@@ -967,6 +984,35 @@ module OpenCog
             block.filters << parse_condition(used)
             fail("expected ')' to close FILTER, found #{current.describe}") unless punctuation?(")")
             advance
+          elsif word?("BIND") && next_is?("(")
+            fail("BIND belongs to the block around the OPTIONAL") if nested
+            advance
+            advance
+            value = parse_value(used, declare: false)
+            fail("expected AS in BIND, found #{current.describe}") unless word?("AS")
+            advance
+            fail("expected a variable after AS, found #{current.describe}") unless current.kind == :variable
+            target = advance
+            fail("expected ')' to close BIND, found #{current.describe}") unless punctuation?(")")
+            advance
+            bound_here << target
+            block.binds << QueryBind.new(value, target.text)
+          elsif punctuation?("{")
+            fail("a group cannot be inside OPTIONAL") if nested
+            alternatives = [parse_block(used)]
+            loop do
+              # UNION may follow on a later line.
+              resume = @position
+              skip_newlines
+              unless word?("UNION")
+                @position = resume
+                break
+              end
+              advance
+              skip_newlines
+              alternatives << parse_block(used)
+            end
+            block.groups << alternatives
           else
             (nested ? block.optional_clauses : block.clauses) << parse_clause(used)
           end
@@ -981,10 +1027,28 @@ module OpenCog
 
         if nested
           fail("OPTIONAL needs at least one clause", closing) if block.optional_clauses.size == clauses_before
-        elsif block.clauses.empty?
+        elsif block.clauses.empty? && block.groups.empty?
           fail("WHERE needs at least one clause", closing)
         end
+
+        # A BIND gives a variable its only value: one the block's clauses
+        # match, or an earlier BIND set, cannot be bound again.
+        matched = (block.clauses + block.optional_clauses).flat_map { |clause| clause_variables(clause) }
+        bound_here.each_with_index do |target, i|
+          taken = matched.includes?(target.text) || bound_here.first(i).any? { |earlier| earlier.text == target.text }
+          fail("$#{target.text} already has a value in this block", target) if taken
+          used << target.text unless used.includes?(target.text)
+        end
         block
+      end
+
+      private def clause_variables(clause : QueryClause) : Array(String)
+        terms = case clause
+                when TripleClause      then [clause.subject, clause.predicate, clause.object]
+                when InheritanceClause then [clause.child, clause.parent]
+                else                        [] of String | AtomSpace::Atom
+                end
+        terms.compact_map { |term| term.is_a?(String) && term.starts_with?('$') ? term.lchop('$') : nil }
       end
 
       # condition := and { OR and }
@@ -1244,11 +1308,13 @@ module OpenCog
         ordered
       end
 
-      # What makes two bound values the same: the atom, or for a number an
-      # aggregate made, its text.
+      # What makes two bound values the same. A node is its type and name:
+      # the AtomSpace has one of each, and a value an aggregate or BIND
+      # computed is a node beside it that has to compare equal to another
+      # of the same value. A link is the atom itself.
       private def identity(atom : AtomSpace::Atom?) : String | AtomSpace::Handle | Nil
         return nil if atom.nil?
-        atom.type == AtomSpace::AtomType::NUMBER_NODE && atom.is_a?(AtomSpace::Node) ? atom.name : atom.handle
+        atom.is_a?(AtomSpace::Node) ? "#{atom.type}:#{atom.name}" : atom.handle
       end
 
       # One row per group: the GROUP BY variables and each aggregate under
@@ -1345,7 +1411,7 @@ module OpenCog
         var_map = Hash(String, AtomSpace::Atom).new
         pattern_atoms = block.clauses.flat_map(&.to_atoms(@atomspace, var_map))
         empty = [] of {Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)}
-        return empty if pattern_atoms.empty?
+        return empty if pattern_atoms.empty? && block.groups.empty?
 
         # Typed query variables become constraints on every clause pattern.
         type_constraints = variables.compact_map do |var|
@@ -1358,14 +1424,14 @@ module OpenCog
         # shared variable names (a conjunctive query).
         solutions = [{Hash(String, AtomSpace::Atom).new, Array(AtomSpace::Atom).new}]
         pattern_atoms.each do |template|
-          clause_solutions = solve(template, type_constraints)
+          solutions = join(solutions, solve(template, type_constraints))
+          return empty if solutions.empty?
+        end
 
-          solutions = solutions.flat_map do |(bound, matched)|
-            clause_solutions.compact_map do |(clause_bound, clause_matched)|
-              next unless clause_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing == atom }
-              {bound.merge(clause_bound), matched + clause_matched}
-            end
-          end
+        # A group inside the block: the results of its alternatives, taken
+        # together, joined with what the block has so far.
+        block.groups.each do |alternatives|
+          solutions = join(solutions, alternatives.flat_map { |alternative| solve_block(alternative, variables) })
           return empty if solutions.empty?
         end
 
@@ -1384,10 +1450,43 @@ module OpenCog
           end
         end
 
+        # BIND gives a variable a computed value, where the value exists.
+        block.binds.each do |bind|
+          solutions = solutions.map do |(bound, matched)|
+            atom = value_atom(bind.value, bound)
+            atom ? {bound.merge({bind.name => atom}), matched} : {bound, matched}
+          end
+        end
+
         block.filters.each do |condition|
           solutions.select! { |(bound, _)| condition.holds?(bound) }
         end
         solutions
+      end
+
+      # Every pairing of a solution from each side that agrees on the
+      # variables both have (a natural join).
+      private def join(left : Array({Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)}),
+                       right : Array({Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)})) : Array({Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)})
+        left.flat_map do |(bound, matched)|
+          right.compact_map do |(other_bound, other_matched)|
+            next unless other_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing.same?(atom) || identity(existing) == identity(atom) }
+            {bound.merge(other_bound), matched + other_matched}
+          end
+        end
+      end
+
+      # A computed value as an atom a result can carry: the atom itself
+      # for a plain variable, else a number or a name beside the AtomSpace.
+      private def value_atom(value : QueryOperand, bindings : Hash(String, AtomSpace::Atom)) : AtomSpace::Atom?
+        if variable = value.variable?
+          return bindings[variable]?
+        end
+        case result = value.evaluate(bindings)
+        when Float64 then QueryLanguage.number_atom(result)
+        when String  then AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, result).as(AtomSpace::Atom)
+        else              nil
+        end
       end
 
       # Every way one clause pattern matches: variable bindings by name and
