@@ -126,9 +126,9 @@ The Paphos backend also has an event stream and named service functions, which u
 | `GET /actions` | The service functions: name and description. |
 | `POST /actions/:name` | Run one with `{"action": {"args": {...}}}`. A refusal is a 422, an unknown name a 404. |
 
-- Events belong to the user who published them. The server keeps the last 1,000; with a data file they survive a restart and ids go on counting, so a client's `after` stays valid.
-- Events are stored in a journal beside the data file, `<data file>.events`, one JSON line each. Publishing adds a line and leaves the data file alone. The journal is cut back to the kept events when it reaches 2,000 lines. A data file from before the journal is read and its events moved over.
-- A stream sends `id:`, `event:` (the type) and `data:` (the event as JSON) for each event, and a comment line every 15 seconds when nothing happens. A client that reconnects with a `Last-Event-ID` header continues after that id. The stream ends when the client closes it or the server stops.
+- Events belong to the user who published them. The server keeps the last 1,000 of each user, so one busy account does not push out another's; with a data file they survive a restart and ids go on counting, so a client's `after` stays valid.
+- Events are stored in a journal beside the data file, `<data file>.events`, one JSON line each. Publishing adds a line and leaves the data file alone. The journal is cut back to the kept events when the lines it no longer needs are as many as those events, and at least 1,000. A data file from before the journal is read and its events moved over.
+- A stream sends `id:`, `event:` (the type) and `data:` (the event as JSON) for each event, and a comment line every 15 seconds when nothing happens. Between events it sleeps: publishing an event wakes the streams and waiting `GET /events` requests of that event's user and no others. A client that reconnects with a `Last-Event-ID` header continues after that id. The stream ends when the client closes it or the server stops.
 - Built-in functions are `echo`, `stats`, `snapshot.copy` and `events.clear`. A host program adds its own with `server.register_action(name, description) { |args, user_id| ... }` and refuses a call by raising `PaphosBackend::Server::ActionError`.
 - Every call records an `action_executed` event.
 

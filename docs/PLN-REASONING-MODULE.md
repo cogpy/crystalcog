@@ -147,9 +147,11 @@ A conclusion can often be derived in more than one way. The engine combines each
 - The first derivation creates the conclusion with the formula's strength and confidence.
 - A different pair of premises reaching the same conclusion is revised into it with `PLN.revise_truth_values`, which weighs each strength by its confidence and raises the confidence.
 - The same pair of premises is never revised in a second time, so running more iterations does not inflate confidence.
-- A derivation that rests on the conclusion itself adds nothing. `A→B` inverted to `B→A` and inverted back is not new evidence for `A→B`.
+- A derivation that rests on the conclusion itself adds nothing, however many steps back. `A→B` inverted to `B→A` and inverted back is not new evidence for `A→B`. Nor is the longer way round: from `A→B` and `B→C` the engine concludes `A→C`, then `C→A`, then `C→B`, and the inverse of that is `B→C` again.
 
-`PLN::Provenance` keeps the record: which rule has used which premises, and the two direct parents of each derived link. The stock deduction, inversion and abduction rules share one record per engine. Only direct parents are checked, so a circle of evidence longer than one step is not recognised.
+`PLN::Provenance` keeps the record: which rule has used which premises, the two premises each derived link was first drawn from, and the premises later revised into it. `rests_on?(derived, candidate)` follows that record back through any number of derivations and revisions. The stock deduction, inversion and abduction rules share one record per engine.
+
+Two derivations that share a premise further back are still counted as two pieces of evidence; only a conclusion's own return is ruled out.
 
 ### Available PLN Rules
 - **Modus Ponens**: If A implies B and A is true, then B is true
