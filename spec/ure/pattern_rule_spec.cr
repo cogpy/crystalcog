@@ -428,3 +428,84 @@ describe URE::ModusPonensRule do
     {wet.truth_value.strength, wet.truth_value.confidence}.should eq(after_one)
   end
 end
+
+describe "URE proof search on a dense graph" do
+  # Twelve concepts, each inheriting from every other: 132 links, with a
+  # circle through any set of them.
+  dense = -> {
+    space = AtomSpace::AtomSpace.new
+    nodes = Array.new(12) { |i| space.add_concept_node("n#{i}") }
+    nodes.each do |a|
+      nodes.each { |b| space.add_inheritance_link(a, b, AtomSpace::SimpleTruthValue.new(0.9, 0.9)) unless a.same?(b) }
+    end
+    space
+  }
+
+  it "answers a goal that is known without searching" do
+    space = dense.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::InheritanceTransitivityRule.new)
+    before = space.size
+    started = Time.monotonic
+    chainer.prove(inherits(concept("n0"), concept("n7"))).size.should eq(1)
+    chainer.do_chain(inherits(concept("n3"), concept("n4"))).should_not be_empty
+    (Time.monotonic - started).should be < 2.seconds
+    space.size.should eq(before)
+  end
+
+  it "gives up on a goal that cannot be proved, without going round the circles" do
+    space = dense.call
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::InheritanceTransitivityRule.new)
+    started = Time.monotonic
+    chainer.prove(inherits(concept("n0"), concept("elsewhere"))).should be_empty
+    chainer.prove(inherits(concept("elsewhere"), var("$x"))).should be_empty
+    (Time.monotonic - started).should be < 5.seconds
+  end
+
+  it "finds everything a goal with a variable has" do
+    space = dense.call
+    outside = space.add_concept_node("outside")
+    space.add_inheritance_link(space.get_nodes_by_name("n11").first, outside, AtomSpace::SimpleTruthValue.new(0.9, 0.9))
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::InheritanceTransitivityRule.new)
+    started = Time.monotonic
+    # Every node reaches "outside" through n11.
+    into = chainer.prove(inherits(var("$who"), concept("outside"))).map { |(_, bindings)| bindings["$who"].name }.sort
+    into.should eq((0..11).map { |i| "n#{i}" }.sort)
+    (Time.monotonic - started).should be < 5.seconds
+  end
+
+  it "counts a rule's conclusion once however often it is proved" do
+    space = family
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(grandparent_rule)
+    goal = relation("grandparent", var("$old"), var("$young"))
+    chainer.prove(goal).size.should eq(2)
+    settled = pairs(space, "grandparent").size
+    conclusion = space.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).find! { |atom| atom.outgoing[0].name == "grandparent" }
+    values = {conclusion.truth_value.strength, conclusion.truth_value.confidence}
+    3.times { chainer.prove(goal).size.should eq(2) }
+    chainer.variable_fulfillment_query(goal, derive: true).size.should eq(2)
+    pairs(space, "grandparent").size.should eq(settled)
+    {conclusion.truth_value.strength, conclusion.truth_value.confidence}.should eq(values)
+  end
+
+  it "proves through several rules that need each other's conclusions" do
+    space = AtomSpace::AtomSpace.new
+    # a chain of eight parents: the last is an ancestor of the first six ways down.
+    people = Array.new(8) { |i| space.add_concept_node("p#{i}") }
+    7.times { |i| fact(space, "parent", "p#{i}", "p#{i + 1}") }
+    chainer = URE::BackwardChainer.new(space)
+    chainer.add_rule(URE::PatternRule.new("ancestor: parent",
+      [relation("parent", var("$A"), var("$B"))], relation("ancestor", var("$A"), var("$B"))))
+    chainer.add_rule(URE::PatternRule.new("ancestor: further",
+      [relation("ancestor", var("$A"), var("$B")), relation("parent", var("$B"), var("$C"))],
+      relation("ancestor", var("$A"), var("$C"))))
+
+    chainer.prove(relation("ancestor", concept("p0"), concept("p7"))).size.should eq(1)
+    all = chainer.prove(relation("ancestor", var("$old"), var("$young")))
+    all.size.should eq(28) # 8 * 7 / 2 pairs down the chain
+    chainer.prove(relation("ancestor", concept("p7"), concept("p0"))).should be_empty
+  end
+end

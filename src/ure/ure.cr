@@ -853,7 +853,7 @@ module URE
     end
 
     # Rule expansions one proof search may make.
-    PROOF_BUDGET = 20_000
+    PROOF_BUDGET = 5_000
 
     # Prove a goal from the AtomSpace with the rules that declare
     # patterns, working back from the goal: a rule is tried when its
@@ -866,14 +866,34 @@ module URE
     # its own proof.
     def prove(goal : AtomSpace::Atom) : Array({AtomSpace::Atom, Bindings})
       @expansions = 0
+      @worked_on.clear
       names = Unifier.variables(goal)
-      solve(goal, Bindings.new, 0, [] of String).map do |(atom, bindings)|
+
+      # A goal that waited on one being worked on further up was answered
+      # from what was known then. So the search is run again for as long
+      # as it concludes something new; a goal nothing new has been
+      # concluded since is not gone into again, which keeps a pass short.
+      proofs = [] of {AtomSpace::Atom, Bindings}
+      loop do
+        size_before = @atomspace.size
+        proofs = solve(goal, Bindings.new, 0, [] of String)
+        break if @atomspace.size == size_before || @expansions >= PROOF_BUDGET
+      end
+      proofs.map do |(atom, bindings)|
         {atom, names.to_h { |name| {name, Unifier.resolve(bindings[name], bindings)} }}
       end
     end
 
     @expansions = 0
     @renamings = 0
+    # Goals this search has worked on, by shape: how large the AtomSpace
+    # was before the last pass over them, and how deep they were. While
+    # nothing has been concluded since, in that pass or after it, working
+    # on one again no nearer the top would find what is known already.
+    @worked_on = {} of String => {UInt64, Int32}
+    # What each rule concluded from which premises, so that proving the
+    # same thing twice does not count its evidence twice.
+    @concluded = {} of {Int32, Array(AtomSpace::Handle)} => AtomSpace::Atom
 
     # Proofs of `goal` under `bindings`: the atom and the bindings extended.
     private def solve(goal : AtomSpace::Atom, bindings : Bindings, depth : Int32,
@@ -881,42 +901,74 @@ module URE
       goal = Unifier.resolve(goal, bindings)
       proofs = [] of {AtomSpace::Atom, Bindings}
       proved = Set(AtomSpace::Handle).new
+      known(goal, bindings, proofs, proved)
 
+      # A goal without variables is one atom: once that is known, there is
+      # nothing further to find.
+      ground = Unifier.ground?(goal)
+      return proofs if ground && !proofs.empty?
+      return proofs if depth >= @max_depth
+
+      # A goal of the same shape further up is already being worked on;
+      # going into it again would never end. What is known so far counts.
+      shape = shape_of(goal)
+      return proofs if path.includes?(shape)
+      if before = @worked_on[shape]?
+        return proofs if before[0] == @atomspace.size.to_u64 && before[1] <= depth
+      end
+
+      path << shape
+      # A rule whose premise is this goal's own shape, as a recursive rule
+      # has, is answered there from what is known so far. So the rules are
+      # gone through again for as long as a pass concludes something new.
+      size_before = @atomspace.size
+      loop do
+        size_before = @atomspace.size
+        @rules.each_with_index do |rule, index|
+          patterns = rule.premise_patterns || next
+          concluded = rule.conclusion_pattern || next
+          next unless concluded.type == goal.type
+          break if @expansions >= PROOF_BUDGET
+          @expansions += 1
+
+          # The rule's variables are its own.
+          suffix = "~#{@renamings += 1}"
+          start = Unifier.unify(Unifier.rename(concluded, suffix), goal, bindings) || next
+          premises = patterns.map { |pattern| Unifier.rename(pattern, suffix) }
+
+          solve_all(premises, 0, start, [] of AtomSpace::Atom, depth + 1, path) do |atoms|
+            next if atoms.uniq(&.handle).size < atoms.size
+            key = {index, atoms.map(&.handle)}
+            conclusion = @concluded[key]? || begin
+              drawn = rule.apply(atoms, @atomspace) || next
+              @concluded[key] = drawn
+            end
+            extended = Unifier.unify(goal, conclusion, bindings) || next
+            proofs << {conclusion, extended} if proved.add?(conclusion.handle)
+          end
+          break if ground && !proofs.empty?
+        end
+        break if ground && !proofs.empty?
+        break if @atomspace.size == size_before || @expansions >= PROOF_BUDGET
+      end
+      path.pop
+      # The size before the last pass: one that concluded nothing.
+      @worked_on[shape] = {size_before.to_u64, depth}
+
+      # What was concluded on the way for other goals may answer this one too.
+      known(goal, bindings, proofs, proved)
+      proofs
+    end
+
+    # The atoms of the AtomSpace that are the goal, added to `proofs`.
+    private def known(goal : AtomSpace::Atom, bindings : Bindings, proofs : Array({AtomSpace::Atom, Bindings}),
+                      proved : Set(AtomSpace::Handle)) : Nil
       RuleMatcher.candidates(goal, @atomspace).each do |atom|
+        next if proved.includes?(atom.handle)
         next unless Unifier.ground?(atom)
         extended = Unifier.unify(goal, atom, bindings) || next
         proofs << {atom, extended} if proved.add?(atom.handle)
       end
-      return proofs if depth >= @max_depth
-
-      # A goal of the same shape further up is already being worked on;
-      # going into it again would never end. What is known still counts.
-      shape = shape_of(goal)
-      return proofs if path.includes?(shape)
-      path << shape
-
-      @rules.each do |rule|
-        patterns = rule.premise_patterns || next
-        concluded = rule.conclusion_pattern || next
-        next unless concluded.type == goal.type
-        break if @expansions >= PROOF_BUDGET
-        @expansions += 1
-
-        # The rule's variables are its own.
-        suffix = "~#{@renamings += 1}"
-        start = Unifier.unify(Unifier.rename(concluded, suffix), goal, bindings) || next
-        premises = patterns.map { |pattern| Unifier.rename(pattern, suffix) }
-
-        solve_all(premises, 0, start, [] of AtomSpace::Atom, depth + 1, path) do |atoms|
-          next if atoms.uniq(&.handle).size < atoms.size
-          conclusion = rule.apply(atoms, @atomspace) || next
-          extended = Unifier.unify(goal, conclusion, bindings) || next
-          proofs << {conclusion, extended} if proved.add?(conclusion.handle)
-        end
-      end
-
-      path.pop
-      proofs
     end
 
     # Each way of proving the premises from `index` on, one after another.
