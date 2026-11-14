@@ -128,6 +128,8 @@ Sophisticated pattern matching and query system:
 - `pattern_mining.cr` - Frequent pattern discovery
 - `pattern_mining_main.cr` - Mining algorithms
 
+`PatternMiner#mine_conjunctions` joins frequent single patterns into patterns of several clauses that share variables, such as `(AND (INHERITANCELINK $v1 animal) (EVALUATIONLINK likes (LISTLINK $v1 $v2)))`. Each result has its clauses, its variables, its support (the distinct groundings that satisfy every clause at once) and a surprisingness score. A conjunction that only repeats what one of its clauses already says is left out.
+
 ### 6. CogServer - Network Server ✅
 **Location:** `src/cogserver/`
 

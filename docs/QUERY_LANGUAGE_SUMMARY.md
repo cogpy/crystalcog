@@ -55,19 +55,39 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 
 # Optional part: results without a match keep $food unbound
 "SELECT $pet $food WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food } }"
+
+# Conditions on what was matched
+"SELECT $x WHERE { $x ISA Animal . FILTER($x != Dog AND CONTAINS($x, \"a\")) }"
+"SELECT $x WHERE { $x legs $n . FILTER($n >= 4) }"
+"SELECT $x WHERE { $x ISA $kind . FILTER(STRENGTH($x) > 0.5 OR NOT BOUND($kind)) }"
+
+# Alternatives
+"SELECT DISTINCT $x WHERE { $x ISA Animal } UNION { $x ISA Plant }"
+
+# Sorting
+"SELECT $x WHERE { $x ISA $kind } ORDER BY $kind, $x DESC LIMIT 5"
 ```
 
 ### Grammar
 
 ```
-query    := SELECT [DISTINCT] ( "*" | variable { [","] variable } )
-            WHERE "{" clauses "}" [ LIMIT integer ]
-variable := "$" name [ ":" type ]
-clauses  := clause { ( "." | newline ) clause }
-clause   := term ( ISA | inherits_from | "->" ) term
-          | term term term
-          | OPTIONAL "{" clauses "}"
-term     := "$" name | name | "quoted name"
+query     := SELECT [DISTINCT] ( "*" | variable { [","] variable } )
+             WHERE block { UNION block }
+             [ ORDER BY key { "," key } ] [ LIMIT integer ]
+variable  := "$" name [ ":" type ]
+block     := "{" clause { ( "." | newline ) clause } "}"
+clause    := term ( ISA | inherits_from | "->" ) term
+           | term term term
+           | OPTIONAL "{" clauses "}"
+           | FILTER "(" condition ")"
+term      := "$" name | name | "quoted name"
+condition := condition OR condition | condition AND condition
+           | NOT condition | "(" condition ")"
+           | value ( "=" | "!=" | "<" | "<=" | ">" | ">=" ) value
+           | CONTAINS "(" value "," value ")" | BOUND "(" "$" name ")"
+value     := "$" name | name | "quoted text" | number
+           | ( NAME | TYPE | STRENGTH | CONFIDENCE ) "(" "$" name ")"
+key       := value [ ASC | DESC ]
 ```
 
 - Keywords are case-insensitive. `#` starts a comment.
@@ -76,6 +96,17 @@ term     := "$" name | name | "quoted name"
 - A selected variable must appear in WHERE.
 - Results carry the selected variables only.
 - A triple's predicate resolves to the PredicateNode of that name when there is one.
+- Running a query does not change the AtomSpace. Its patterns are built beside it, so a name the AtomSpace does not know simply matches nothing.
+- Only SELECT, DISTINCT, WHERE, ISA, OPTIONAL and LIMIT are reserved. FILTER, UNION, ORDER and the rest are keywords only where the grammar expects them, so they can still name atoms.
+
+### FILTER, UNION and ORDER BY
+
+- **FILTER** keeps the results its condition holds for. It applies to its whole block wherever it stands, after the OPTIONAL parts. Several FILTERs all have to hold.
+- A variable compares by the name of its atom. Against a number the name is read as a number, so `$n >= 4` holds for a node named `10`; a name that is not a number is only unequal to it. Two names compare as text.
+- `NAME($x)`, `TYPE($x)`, `STRENGTH($x)` and `CONFIDENCE($x)` read the atom a variable stands for. `CONTAINS(a, b)` tells whether text `a` has `b` in it. `BOUND($x)` tells whether an OPTIONAL part gave `$x` a value.
+- A comparison with an unbound variable is false, and so is its opposite: `$n = 4` and `$n != 4` both drop a result without `$n`. Use `NOT BOUND($n)` to keep those.
+- **UNION** adds the results of another block. A block need not bind every selected variable; a result leaves the others out. Add DISTINCT to drop repeats.
+- **ORDER BY** sorts by one or more keys, each ascending unless followed by DESC. Numbers sort before text and unbound values last. Without ORDER BY results come by falling confidence, as before. A key may be a variable that is not selected.
 
 ### Variable Types
 - `$var` - Generic variable
@@ -90,6 +121,9 @@ term     := "$" name | name | "quoted name"
 - **Inheritance patterns**: `child ISA parent` or `child -> parent`
 - **Multiple clauses**: Separated by periods (.) or line breaks
 - **Optional clauses**: `OPTIONAL { ... }`, a left join
+- **Filters**: `FILTER(condition)` on names, types and truth values
+- **Alternatives**: `{ ... } UNION { ... }`
+- **Sorting**: `ORDER BY key [DESC]`
 
 ## Integration Points
 

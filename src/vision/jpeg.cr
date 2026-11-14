@@ -3,8 +3,9 @@
 # Handles 8-bit Huffman-coded DCT files, sequential (SOF0, SOF1) and
 # progressive (SOF2): grayscale or three components with any sampling
 # factors, interleaved or one component per scan, with or without restart
-# markers. Lossless, arithmetic-coded, 12-bit and four-component (CMYK)
-# files are refused with an `ImageError`.
+# markers, and four components (CMYK or YCCK, as print workflows write
+# them), which are converted to RGB without a colour profile. Lossless,
+# arithmetic-coded and 12-bit files are refused with an `ImageError`.
 #
 # A progressive file sends each block's coefficients over several scans:
 # first by frequency band (spectral selection), and within a band first
@@ -166,6 +167,7 @@ module Vision
       width = height = 0
       restart_interval = 0
       adobe_transform : Int32? = nil
+      adobe = false
       scans = 0
       progressive = false
 
@@ -206,8 +208,8 @@ module Vision
           count = segment[5].to_i
           raise ImageError.new("JPEG size #{width}x#{height} is not valid") unless width > 0 && height > 0
           raise ImageError.new("JPEG is too large") if width.to_i64 * height > MAX_PIXELS
-          unless count == 1 || count == 3
-            raise ImageError.new("JPEG with #{count} components is not supported (grayscale and three-component only)")
+          unless count == 1 || count == 3 || count == 4
+            raise ImageError.new("JPEG with #{count} components is not supported (one, three or four only)")
           end
           raise ImageError.new("truncated JPEG frame header") if segment.size < 6 + count * 3
           count.times do |i|
@@ -226,6 +228,7 @@ module Vision
         when 0xEE
           # Adobe: the last byte says whether three components are YCbCr.
           if segment.size >= 12 && String.new(segment[0, 5]) == "Adobe"
+            adobe = true
             adobe_transform = segment[11].to_i
           end
         when 0xDA
@@ -251,7 +254,7 @@ module Vision
 
       raise ImageError.new("JPEG has no image data") if scans == 0
       reconstruct(components, quantization) if progressive
-      assemble(components, width, height, adobe_transform)
+      assemble(components, width, height, adobe_transform, adobe)
     end
 
     private def self.read_quantization(segment : Bytes, tables : Hash(Int32, Array(Int32))) : Nil
@@ -630,7 +633,7 @@ module Vision
 
     # Bring every component to full resolution and convert to gray or RGB.
     private def self.assemble(components : Array(Component), width : Int32, height : Int32,
-                              adobe_transform : Int32?) : Image
+                              adobe_transform : Int32?, adobe : Bool) : Image
       if components.size == 1
         component = components.first
         image = Image.new(width, height, 1)
@@ -645,8 +648,13 @@ module Vision
       # Three components are YCbCr unless Adobe's marker or the component
       # names say they are stored as RGB.
       stored_rgb = adobe_transform == 0 || components.map(&.id) == [82, 71, 66]
+      # Four components are cyan, magenta, yellow and black. Adobe's
+      # transform 2 stores the first three as YCbCr (YCCK), and files with
+      # Adobe's marker store ink inverted: 255 is no ink.
+      four = components.size == 4
+      ycck = four && adobe_transform == 2
       image = Image.new(width, height, 3)
-      sample = StaticArray(Int32, 3).new(0)
+      sample = StaticArray(Int32, 4).new(0)
       height.times do |y|
         width.times do |x|
           components.each_with_index do |component, i|
@@ -655,7 +663,24 @@ module Vision
             sample[i] = component.plane[source_y * component.plane_width + source_x].to_i
           end
           target = (y * width + x) * 3
-          if stored_rgb
+          if four
+            if ycck
+              luma = sample[0].to_f
+              blue = sample[1] - 128.0
+              red = sample[2] - 128.0
+              # The three decode as for a colour picture, and the ink value
+              # is that turned over.
+              sample[0] = 255 - (luma + 1.402 * red).round.clamp(0.0, 255.0).to_i
+              sample[1] = 255 - (luma - 0.344136 * blue - 0.714136 * red).round.clamp(0.0, 255.0).to_i
+              sample[2] = 255 - (luma + 1.772 * blue).round.clamp(0.0, 255.0).to_i
+            end
+            # As light let through: each ink's share times black's.
+            black = adobe ? sample[3] : 255 - sample[3]
+            3.times do |i|
+              light = adobe ? sample[i] : 255 - sample[i]
+              image.data[target + i] = ((light * black + 127) // 255).to_u8
+            end
+          elsif stored_rgb
             3.times { |i| image.data[target + i] = sample[i].to_u8 }
           else
             luma = sample[0].to_f

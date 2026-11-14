@@ -158,6 +158,51 @@ module PLN
     end
   end
 
+  # What the rules of one engine have derived, kept small because a dense
+  # graph has far more derivations than links.
+  #
+  # - Which derivations were used. Each is one piece of evidence for its
+  #   conclusion and must count once, however often the rule meets it.
+  # - Which links each derived link was drawn from. A conclusion must not
+  #   come back as evidence for its own premises: A->B gives B->A by
+  #   inversion, and inverting that again says nothing new about A->B.
+  #   Only direct parents are recorded, so longer circles are not caught.
+  class Provenance
+    DEDUCTION = 0_u64
+    ABDUCTION = 1_u64
+    INVERSION = 2_u64
+
+    # One 64-bit key per derivation: the rule in the top two bits, then the
+    # two premise handles. Exact while handles stay below 2^30; beyond that
+    # two derivations may share a key and the later one is skipped.
+    @used = Set(UInt64).new
+    @parents = Hash(AtomSpace::Handle, {AtomSpace::Handle, AtomSpace::Handle}).new
+
+    # True the first time this rule meets this pair of premises.
+    def first_use?(rule : UInt64, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Bool
+      @used.add?((rule << 62) ^ (premise.handle << 31) ^ other.handle)
+    end
+
+    def record(conclusion : AtomSpace::Atom, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Nil
+      @parents[conclusion.handle] = {premise.handle, other.handle}
+    end
+
+    # Was `candidate` one of the links `derived` was drawn from?
+    def parent?(candidate : AtomSpace::Atom, derived : AtomSpace::Atom) : Bool
+      parents = @parents[derived.handle]? || return false
+      parents[0] == candidate.handle || parents[1] == candidate.handle
+    end
+
+    # May `evidence` (the premises of a new derivation) revise `known`?
+    def independent?(known : AtomSpace::Atom, *evidence : AtomSpace::Atom) : Bool
+      evidence.none? { |premise| premise.same?(known) || parent?(known, premise) }
+    end
+
+    def derivations : Int32
+      @used.size
+    end
+  end
+
   # PLN Rule interface
   abstract class PLNRule
     abstract def name : String
@@ -173,6 +218,10 @@ module PLN
 
   # Deduction Rule: If A->B and B->C then A->C
   class DeductionRule < PLNRule
+    # Shared by the rules of one engine, so each sees what the others derived.
+    def initialize(@provenance : Provenance = Provenance.new)
+    end
+
     def name : String
       "DeductionRule"
     end
@@ -199,49 +248,61 @@ module PLN
     end
 
     # Draws the first conclusion not yet in the AtomSpace, so every chain
-    # through B gets its turn over successive calls. When all of them are
-    # known already, the first chain's conclusion is returned, with its
-    # truth value merged in as `add_link` does.
+    # through B gets its turn over successive calls. A chain that leads to
+    # a conclusion already known revises that conclusion's truth value,
+    # once. When nothing new is left, the first chain's conclusion is
+    # returned as it stands.
     private def apply_from_candidates(premise : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, inheritance_links : Array(AtomSpace::Atom)) : AtomSpace::Atom?
       return nil unless premise.is_a?(AtomSpace::Link)
       return nil unless premise.arity == 2
 
       # Look for another inheritance link with matching middle term.
       a, b = premise[0], premise[1]
-      first_match : AtomSpace::Atom? = nil
+      first_conclusion : AtomSpace::Atom? = nil
 
       inheritance_links.each do |link|
         next unless link.is_a?(AtomSpace::Link)
         next unless link.arity == 2
         next unless b == link[0] # Found matching chain A->B, B->C
 
-        first_match ||= link
-        next if atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, link[1]])
-        return conclude(premise, link, atomspace)
+        if known = atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, a, link[1])
+          first_conclusion ||= known
+          # A conclusion is not evidence for itself or for its own premises.
+          if @provenance.first_use?(Provenance::DEDUCTION, premise, link) && @provenance.independent?(known, premise, link)
+            known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+          end
+          next
+        end
+
+        @provenance.first_use?(Provenance::DEDUCTION, premise, link)
+        strength, confidence = conclusion_values(premise, link)
+        conclusion = atomspace.add_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, link[1]],
+          AtomSpace::SimpleTruthValue.new(strength, confidence))
+        @provenance.record(conclusion, premise, link)
+        return conclusion
       end
 
-      first_match.try { |link| conclude(premise, link, atomspace) }
+      first_conclusion
     end
 
-    private def conclude(premise : AtomSpace::Atom, link : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
-      a, b, c = premise.outgoing[0], premise.outgoing[1], link.outgoing[1]
+    # Strength and confidence of A->C from A->B and B->C.
+    private def conclusion_values(premise : AtomSpace::Link, link : AtomSpace::Link) : {Float64, Float64}
       tv_ab = premise.truth_value
       tv_bc = link.truth_value
 
       new_strength = Formulas.deduction(tv_ab.strength, tv_bc.strength,
-        Formulas.term_probability(b), Formulas.term_probability(c))
+        Formulas.term_probability(premise[1]), Formulas.term_probability(link[1]))
       new_confidence = tv_ab.confidence * tv_bc.confidence * 0.9 # Discount factor
-
-      atomspace.add_link(
-        AtomSpace::AtomType::INHERITANCE_LINK,
-        [a, c],
-        AtomSpace::SimpleTruthValue.new(new_strength, new_confidence)
-      )
+      {new_strength, new_confidence}
     end
   end
 
   # Inversion Rule: If A->B then B->A (with inverted strength)
   class InversionRule < PLNRule
+    # Shared by the rules of one engine, so each sees what the others derived.
+    def initialize(@provenance : Provenance = Provenance.new)
+    end
+
     def name : String
       "InversionRule"
     end
@@ -269,12 +330,23 @@ module PLN
         inverted_confidence.clamp(0.0, 1.0)
       )
 
-      # Create B->A link
-      atomspace.add_link(
+      # B->A may be known already, asserted or derived another way. This
+      # link is then one more piece of evidence for it, counted once.
+      if known = atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, b, a)
+        if @provenance.first_use?(Provenance::INVERSION, premise) && @provenance.independent?(known, premise)
+          known.truth_value = PLN.revise_truth_values(known.truth_value, inverted_tv)
+        end
+        return known
+      end
+
+      @provenance.first_use?(Provenance::INVERSION, premise)
+      inverse = atomspace.add_link(
         AtomSpace::AtomType::INHERITANCE_LINK,
         [b, a],
         inverted_tv
       )
+      @provenance.record(inverse, premise)
+      inverse
     end
   end
 
@@ -363,6 +435,10 @@ module PLN
 
   # Abduction Rule: If A->B and C->B then A->C
   class AbductionRule < PLNRule
+    # Shared by the rules of one engine, so each sees what the others derived.
+    def initialize(@provenance : Provenance = Provenance.new)
+    end
+
     def name : String
       "AbductionRule"
     end
@@ -388,15 +464,15 @@ module PLN
       apply_from_candidates(premise, atomspace, context.links_to(premise[1]))
     end
 
-    # As for deduction: the first conclusion that is new, or failing that
-    # the first pair's conclusion with its evidence merged in.
+    # As for deduction: the first conclusion that is new; a pair of
+    # premises that leads to a known conclusion revises it once.
     private def apply_from_candidates(premise : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace, inheritance_links : Array(AtomSpace::Atom)) : AtomSpace::Atom?
       return nil unless premise.is_a?(AtomSpace::Link)
       return nil unless premise.arity == 2
 
       # premise is A->B
       a, b = premise[0], premise[1]
-      first_match : AtomSpace::Atom? = nil
+      first_conclusion : AtomSpace::Atom? = nil
 
       inheritance_links.each do |link|
         next unless link.is_a?(AtomSpace::Link)
@@ -407,28 +483,34 @@ module PLN
         # Found C->B where B matches and C is different from A
         next unless b == link[1] && a != c
 
-        first_match ||= link
-        next if atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, c])
-        return conclude(premise, link, atomspace)
+        if known = atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, a, c)
+          first_conclusion ||= known
+          if @provenance.first_use?(Provenance::ABDUCTION, premise, link) && @provenance.independent?(known, premise, link)
+            known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+          end
+          next
+        end
+
+        @provenance.first_use?(Provenance::ABDUCTION, premise, link)
+        strength, confidence = conclusion_values(premise, link)
+        conclusion = atomspace.add_link(AtomSpace::AtomType::INHERITANCE_LINK, [a, c],
+          AtomSpace::SimpleTruthValue.new(strength, confidence))
+        @provenance.record(conclusion, premise, link)
+        return conclusion
       end
 
-      first_match.try { |link| conclude(premise, link, atomspace) }
+      first_conclusion
     end
 
-    private def conclude(premise : AtomSpace::Atom, link : AtomSpace::Atom, atomspace : AtomSpace::AtomSpace) : AtomSpace::Atom
-      a, b, c = premise.outgoing[0], premise.outgoing[1], link.outgoing[0]
+    # Strength and confidence of A->C from A->B and C->B.
+    private def conclusion_values(premise : AtomSpace::Link, link : AtomSpace::Link) : {Float64, Float64}
       tv_ab = premise.truth_value
       tv_cb = link.truth_value
 
       new_strength = Formulas.abduction(tv_ab.strength, tv_cb.strength,
-        Formulas.term_probability(a), Formulas.term_probability(b), Formulas.term_probability(c))
-      new_confidence = [tv_ab.confidence, tv_cb.confidence].min * 0.6 # Lower confidence for abduction
-
-      atomspace.add_link(
-        AtomSpace::AtomType::INHERITANCE_LINK,
-        [a, c],
-        AtomSpace::SimpleTruthValue.new(new_strength.clamp(0.0, 1.0), new_confidence.clamp(0.0, 1.0))
-      )
+        Formulas.term_probability(premise[0]), Formulas.term_probability(premise[1]), Formulas.term_probability(link[0]))
+      new_confidence = Math.min(tv_ab.confidence, tv_cb.confidence) * 0.6 # Lower confidence for abduction
+      {new_strength.clamp(0.0, 1.0), new_confidence.clamp(0.0, 1.0)}
     end
   end
 
@@ -653,15 +735,21 @@ module PLN
 
   # PLN truth value revision formula (OpenCog-style)
   def self.revise_truth_values(tv1 : AtomSpace::TruthValue, tv2 : AtomSpace::TruthValue) : AtomSpace::SimpleTruthValue
+    revise_truth_values(tv1, tv2.strength, tv2.confidence)
+  end
+
+  # The same, with the second truth value given as two numbers so that a
+  # rule revising many conclusions need not build an object for each.
+  def self.revise_truth_values(tv1 : AtomSpace::TruthValue, strength2 : Float64, confidence2 : Float64) : AtomSpace::SimpleTruthValue
     c1 = tv1.confidence
-    c2 = tv2.confidence
+    c2 = confidence2
     total_c = c1 + c2 - c1 * c2
     return AtomSpace::SimpleTruthValue.new(tv1.strength, c1) if total_c <= 0.0
 
     # Confidence-weighted strength
     w1 = c1 / (c1 + c2)
     w2 = c2 / (c1 + c2)
-    strength = w1 * tv1.strength + w2 * tv2.strength
+    strength = w1 * tv1.strength + w2 * strength2
     AtomSpace::SimpleTruthValue.new(strength.clamp(0.0, 1.0), total_c.clamp(0.0, 1.0))
   end
 
@@ -671,11 +759,12 @@ module PLN
     @has_custom_rules : Bool
 
     def initialize(@atomspace : AtomSpace::AtomSpace)
+      provenance = Provenance.new
       @rules = [
-        DeductionRule.new,
-        InversionRule.new,
+        DeductionRule.new(provenance),
+        InversionRule.new(provenance),
         ModusPonensRule.new,
-        AbductionRule.new,
+        AbductionRule.new(provenance),
       ] of PLNRule
       @has_custom_rules = false
     end

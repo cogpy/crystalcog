@@ -455,6 +455,7 @@ module PaphosBackend
 
     # Disconnect from event stream
     def disconnect
+      stop_following
       @connected = false
       CogUtil::Logger.info("Disconnected from Paphos event stream")
     end
@@ -515,25 +516,62 @@ module PaphosBackend
       end
 
       fetched = client.events(after: @last_event_id, wait: wait)
-      fetched.map do |event|
-        @last_event_id = Math.max(@last_event_id, event["id"].as_i64)
-        fields = {
-          "type"      => event["type"].as_s,
-          "source"    => event["source"].as_s,
-          "id"        => event["id"].as_i64.to_s,
-          "timestamp" => Time.unix_ms(event["created_at"].as_i64).to_s,
-        }
-        # The event's own fields; `timestamp` is the publisher's clock when
-        # it sent one. The envelope's type, source and id are not overridden.
-        event["data"].as_h.each do |key, value|
-          fields[key] = value.as_s unless {"type", "source", "id"}.includes?(key)
-        end
-        fields
-      end
+      fetched.map { |event| event_fields(event) }
     rescue ex : PaphosBackend::Client::Error | IO::Error | Socket::Error
       @last_error = ex.message
       CogUtil::Logger.warn("Paphos events not read: #{ex.message}")
       [] of Hash(String, String)
+    end
+
+    # One backend event as flat string fields, counted as consumed.
+    private def event_fields(event : JSON::Any) : Hash(String, String)
+      @last_event_id = Math.max(@last_event_id, event["id"].as_i64)
+      fields = {
+        "type"      => event["type"].as_s,
+        "source"    => event["source"].as_s,
+        "id"        => event["id"].as_i64.to_s,
+        "timestamp" => Time.unix_ms(event["created_at"].as_i64).to_s,
+      }
+      # The event's own fields; `timestamp` is the publisher's clock when
+      # it sent one. The envelope's type, source and id are not overridden.
+      event["data"].as_h.each do |key, value|
+        fields[key] = value.as_s unless {"type", "source", "id"}.includes?(key)
+      end
+      fields
+    end
+
+    # The stream opened by `follow_events`, while it is open.
+    getter follow : PaphosBackend::Client::EventFollow?
+
+    # Have the block called with each event of this account as the backend
+    # publishes it, starting after the last one consumed. Only the
+    # subscribed types are sent unless `subscribed_only` is false. Returns
+    # false without a backend, or when the stream could not be opened.
+    # `consume_events` afterwards returns only what the block has not seen.
+    def follow_events(subscribed_only : Bool = true, &block : Hash(String, String) ->) : Bool
+      return false unless @connected
+      client = @client || return false
+      stop_following
+      types = subscribed_only ? @subscriptions : nil
+      @follow = client.follow_events(after: @last_event_id, types: types) do |event|
+        block.call(event_fields(event))
+      end
+      @last_error = nil
+      true
+    rescue ex : PaphosBackend::Client::Error | IO::Error | Socket::Error
+      @last_error = ex.message
+      CogUtil::Logger.warn("Paphos events not followed: #{ex.message}")
+      false
+    end
+
+    # True while the backend is sending this handler its events.
+    def following? : Bool
+      @follow.try { |follow| !follow.closed? } || false
+    end
+
+    def stop_following : Nil
+      @follow.try(&.close)
+      @follow = nil
     end
 
     # The consumed events whose type this handler subscribes to.

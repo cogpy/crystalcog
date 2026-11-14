@@ -137,6 +137,99 @@ module PaphosBackend
       request("GET", "/events?" + URI::Params.encode(query))["events"].as_a
     end
 
+    # An open event stream, as `follow_events` returns it.
+    class EventFollow
+      getter? closed = false
+      # Why the stream ended, when it was not closed from this side.
+      getter error : Exception?
+
+      def initialize(@http : HTTP::Client)
+      end
+
+      # Stop following. The block is not called again.
+      def close : Nil
+        return if @closed
+        @closed = true
+        @http.close
+      end
+
+      protected def ended(@error : Exception?) : Nil
+        @closed = true
+      end
+    end
+
+    # Follow the caller's events as the backend publishes them. The block
+    # is called, in a fiber of its own, with each event after `after`, in
+    # order. `close` the returned follow to stop. When the backend goes
+    # away the follow closes by itself and its `error` says why.
+    def follow_events(after : Int64 = 0_i64, types : Array(String)? = nil, &block : JSON::Any ->) : EventFollow
+      token = @token || raise Error.new(401, "Not authenticated: call login or register first")
+      query = {"after" => after.to_s}
+      types.try { |list| query["types"] = list.join(",") }
+      uri = URI.parse(@base_url + "/events/stream?" + URI::Params.encode(query))
+      headers = HTTP::Headers{"Accept" => "text/event-stream", "Authorization" => "Bearer #{token}"}
+
+      http = HTTP::Client.new(uri)
+      http.connect_timeout = @timeout
+      # The backend writes a keep-alive line when nothing happens, so a
+      # long silence means the connection is dead.
+      http.read_timeout = 2.minutes
+      follow = EventFollow.new(http)
+      opened = Channel(Exception?).new(1)
+
+      spawn do
+        answered = false
+        begin
+          http.get(uri.request_target, headers: headers) do |response|
+            answered = true
+            unless response.success?
+              opened.send(Error.new(response.status_code, "event stream refused: HTTP #{response.status_code}"))
+              next
+            end
+            opened.send(nil)
+            read_event_stream(response.body_io, follow, &block)
+          end
+          follow.ended(nil) unless follow.closed?
+        rescue ex
+          opened.send(ex) unless answered
+          follow.ended(ex) unless follow.closed?
+        end
+      end
+
+      select
+      when failure = opened.receive
+        if failure
+          follow.close
+          raise failure.is_a?(Error) ? failure : Error.new(502, "event stream failed: #{failure.message}")
+        end
+      when timeout(@timeout)
+        follow.close
+        raise Error.new(504, "event stream did not open in time")
+      end
+      follow
+    end
+
+    # Read server-sent events: "data:" lines up to a blank line are one
+    # event. "id:", "event:" and comment lines carry nothing the data lacks.
+    private def read_event_stream(io : IO, follow : EventFollow, &block : JSON::Any ->) : Nil
+      data = String::Builder.new
+      has_data = false
+      io.each_line do |line|
+        break if follow.closed?
+        if line.empty?
+          if has_data
+            block.call(JSON.parse(data.to_s))
+            data = String::Builder.new
+            has_data = false
+          end
+        elsif line.starts_with?("data:")
+          data << '\n' if has_data
+          data << line.lchop("data:").lchop(' ')
+          has_data = true
+        end
+      end
+    end
+
     # The service functions the backend offers: name and description.
     def actions : Array(JSON::Any)
       request("GET", "/actions")["actions"].as_a

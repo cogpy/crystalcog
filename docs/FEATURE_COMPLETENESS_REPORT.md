@@ -237,17 +237,22 @@ Two minor test failures in distributed storage edge cases:
 | Query lexer and parser with DISTINCT, LIMIT, OPTIONAL and positioned errors | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
 | Progressive JPEG decoding | `src/vision/jpeg.cr` |
 | Paphos events kept across restarts | `src/integrations/platform/paphos_server.cr` |
+| PLN evidence of each derivation combined once | `PLN::Provenance` in `src/pln/pln.cr` |
+| Query FILTER, UNION and ORDER BY; queries that leave the AtomSpace unchanged | `src/opencog/query_language.cr` |
+| Pattern mining of conjunctions | `ConjunctionMiner` in `src/pattern_mining/pattern_mining.cr` |
+| CMYK and YCCK JPEG decoding | `src/vision/jpeg.cr` |
+| Paphos event journal and server-sent event stream | `src/integrations/platform/paphos_server.cr`, `paphos_client.cr` |
 
 ### Still simplified
 
 | Area | State |
 |---|---|
-| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. Evidence from a second derivation of a known conclusion is not combined with the first. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. A second derivation is combined with the first unless it rests on the conclusion itself; only direct parents are checked, so longer circles of evidence are not caught. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
 | URE rules | A rule declares only the atom types of its premises and conclusion. The unifier is used for queries and goal checks, not to select rules. |
-| Query language | Clauses are inheritance and subject-predicate-object triples. No FILTER, UNION, ORDER BY or nested groups. Running a query adds its pattern atoms to the AtomSpace. |
-| Pattern mining | Patterns are single trees. Conjunctions of several clauses are not mined. |
-| Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded, 12-bit and CMYK JPEGs are refused. |
-| Paphos events | The last 1,000 per server are kept, and written to the data file in full on every event. Clients follow the stream by long polling. |
+| Query language | Clauses are inheritance and subject-predicate-object triples. No nested groups other than OPTIONAL, no aggregates (COUNT, GROUP BY), no OFFSET, no arithmetic in FILTER. |
+| Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. Their surprisingness compares against independent clauses only, not against every partition. |
+| Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded and 12-bit JPEGs are refused. CMYK is converted without a colour profile. |
+| Paphos events | The last 1,000 per server are kept, not per user. An open stream looks for new events every 20 ms; it is not woken by them. |
 | Distributed cluster | Membership converges by announcement and heartbeat; there is no consensus protocol. |
 
 ---

@@ -123,6 +123,9 @@ module PaphosBackend
       property next_message_id : Int64 = 1
       # The most recent events, oldest first, and the id the next one gets.
       # Ids keep counting across restarts so a client's "after" still works.
+      # Events are written to their own journal file, one line each, not
+      # with the rest of the store; a store file that has them is still read.
+      @[JSON::Field(ignore_serialize: true)]
       property events = [] of Event
       property next_event_id : Int64 = 1
 
@@ -154,6 +157,15 @@ module PaphosBackend
     # Longest a GET /events?wait= request is held open.
     EVENT_WAIT_LIMIT = 25.seconds
 
+    # How often an open event stream gets a comment line when nothing
+    # happens. Writing is how the server notices a client that went away.
+    property stream_keepalive : Time::Span = 15.seconds
+    # Event streams being served now.
+    getter active_streams = 0
+    @stopped = false
+    # Lines in the journal file, to know when to cut it back.
+    @journal_lines = 0
+
     getter port : Int32 = 0
     @actions = {} of String => Action
     @store : Store
@@ -165,6 +177,7 @@ module PaphosBackend
                    @secret : String = ENV["SECRET_KEY_BASE"]? || Random::Secure.hex(32),
                    @data_file : String? = nil)
       @store = load_store
+      load_journal
       @store.users.each do |u|
         user = User.new(u["id"].to_i64, u["email"], u["password_hash"])
         @users[user.id] = user
@@ -190,7 +203,7 @@ module PaphosBackend
         @store.next_event_id += 1
         @store.events << event
         @store.events.shift if @store.events.size > EVENT_LIMIT
-        persist
+        journal(event)
         event
       end
     end
@@ -209,6 +222,7 @@ module PaphosBackend
       address = server.bind_tcp(@host, @requested_port)
       @port = address.port
       @server = server
+      @stopped = false
       spawn { server.listen }
       Fiber.yield
       CogUtil::Logger.info("Paphos backend listening on #{url}")
@@ -216,6 +230,7 @@ module PaphosBackend
     end
 
     def stop
+      @stopped = true
       @server.try(&.close)
     end
 
@@ -277,6 +292,8 @@ module PaphosBackend
           list_events(ctx, current_user(ctx))
         elsif seg.size == 1 && seg[0] == "events" && method == "POST"
           create_event(ctx, current_user(ctx))
+        elsif seg.size == 2 && seg[0] == "events" && seg[1] == "stream" && method == "GET"
+          stream_events(ctx, current_user(ctx))
         elsif seg.size == 1 && seg[0] == "actions" && method == "GET"
           respond(ctx, {"actions" => @actions.values.sort_by(&.name).map { |action|
             {"name" => action.name, "description" => action.description}
@@ -615,6 +632,63 @@ module PaphosBackend
       respond(ctx, {"events" => matching.map(&.to_h), "last_id" => matching.last?.try(&.id) || after})
     end
 
+    # GET /events/stream sends the caller's events as server-sent events:
+    # first those with an id above `after` (or above the Last-Event-ID
+    # header a reconnecting client sends), then each new one as it is
+    # published, until the client goes away. `types` filters as for
+    # GET /events. Each event is
+    #
+    #   id: 17
+    #   event: atom_updates
+    #   data: {"id":17,"type":"atom_updates","source":...,"data":{...}}
+    private def stream_events(ctx, user)
+      query = ctx.request.query_params
+      after = query["after"]?.try(&.to_i64?) || ctx.request.headers["Last-Event-ID"]?.try(&.to_i64?) || 0_i64
+      types = query["types"]?.try(&.split(',', remove_empty: true))
+
+      response = ctx.response
+      response.content_type = "text/event-stream"
+      response.headers["Cache-Control"] = "no-cache"
+      response.headers["X-Accel-Buffering"] = "no"
+
+      # Counted before the first write, so a client that has the response
+      # can rely on the count.
+      @active_streams += 1
+      last_write = Time.monotonic
+      # The id the next event gets, as of the last look: nothing is
+      # searched while it stands still.
+      looked_at = 0_i64
+      begin
+        response.print ": stream open\n\n"
+        response.flush
+        until @stopped
+          upcoming = @store.next_event_id
+          pending = upcoming == looked_at ? [] of Event : events_for(user.id, after, types, EVENT_LIMIT)
+          looked_at = upcoming
+          if pending.empty?
+            if Time.monotonic - last_write >= @stream_keepalive
+              response.print ": keep-alive\n\n"
+              response.flush
+              last_write = Time.monotonic
+            end
+            sleep 20.milliseconds
+            next
+          end
+
+          pending.each do |event|
+            response.print "id: #{event.id}\nevent: #{event.type}\ndata: #{event.to_h.to_json}\n\n"
+            after = event.id
+          end
+          response.flush
+          last_write = Time.monotonic
+        end
+      rescue IO::Error
+        # The client closed the connection.
+      ensure
+        @active_streams -= 1
+      end
+    end
+
     private def events_for(owner_id : Int64, after : Int64, types : Array(String)?, limit : Int32) : Array(Event)
       @mutex.synchronize do
         @store.events.select do |event|
@@ -676,7 +750,7 @@ module PaphosBackend
         removed = @mutex.synchronize do
           before = @store.events.size
           @store.events.reject! { |event| event.owner_id == user }
-          persist
+          rewrite_journal
           before - @store.events.size
         end
         {"removed" => removed.to_s}
@@ -749,6 +823,55 @@ module PaphosBackend
       tmp = "#{path}.tmp"
       File.write(tmp, @store.to_json)
       File.rename(tmp, path)
+    end
+
+    # The event journal sits beside the data file.
+    private def journal_path : String?
+      @data_file.try { |path| "#{path}.events" }
+    end
+
+    # Read the journal into the store. Events from an older store file
+    # that held them come first; a damaged line is skipped.
+    private def load_journal : Nil
+      path = journal_path
+      if path && File.exists?(path)
+        File.each_line(path) do |line|
+          next if line.blank?
+          @journal_lines += 1
+          event = Event.from_json(line) rescue next
+          @store.events << event
+        end
+      end
+      @store.events.sort_by!(&.id)
+      @store.events.uniq!(&.id)
+      @store.events.shift(@store.events.size - EVENT_LIMIT) if @store.events.size > EVENT_LIMIT
+      last = @store.events.last?.try(&.id) || 0_i64
+      @store.next_event_id = Math.max(@store.next_event_id, last + 1)
+      # An older store file carried the events itself: move them over.
+      rewrite_journal if path && @journal_lines != @store.events.size
+    end
+
+    # Add one event to the journal: one line, however many events exist.
+    # The file is cut back to the kept events when it has grown to twice
+    # their limit.
+    private def journal(event : Event) : Nil
+      path = journal_path || return
+      if @journal_lines >= EVENT_LIMIT * 2
+        rewrite_journal
+      else
+        File.open(path, "a") { |file| file.puts event.to_json }
+        @journal_lines += 1
+      end
+    end
+
+    private def rewrite_journal : Nil
+      path = journal_path || return
+      tmp = "#{path}.tmp"
+      File.open(tmp, "w") { |file| @store.events.each { |event| file.puts event.to_json } }
+      File.rename(tmp, path)
+      @journal_lines = @store.events.size
+      # Keep the next id with the store, for a journal that ends up empty.
+      persist
     end
   end
 end
