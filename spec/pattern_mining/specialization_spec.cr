@@ -143,11 +143,13 @@ describe PatternMining::ConjunctionMiner do
 
     drinkers = found[%((AND (EVALUATIONLINK (PREDICATENODE "likes") (LISTLINK (VARIABLENODE "$v1") (CONCEPTNODE "water"))) (INHERITANCELINK (VARIABLENODE "$v1") (CONCEPTNODE "plant"))))]
     drinkers.support.should eq(3)
-    # Three atoms like water and three are plants. Were the two unrelated,
-    # a liker of water would be a given plant once in as many tries as
-    # there are atoms: 3 * 3 / atoms groundings, not the 3 there are.
-    drinkers.surprisingness.should be_close(1 - (3 * 3 / diets.size.to_f) / 3, 1e-12)
-    drinkers.surprisingness.should be > 0.9
+    # Three concepts like water and three are plants. Were the two
+    # unrelated, a liker of water would be a given plant once in as many
+    # tries as there are concepts: 3 * 3 / concepts groundings, not the 3
+    # there are. Links and predicates are not what $v1 could have been.
+    concepts = diets.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE).size
+    concepts.should eq(13)
+    drinkers.surprisingness.should be_close(1 - (3 * 3 / concepts.to_f) / 3, 1e-12)
 
     # Nothing eats meat and is a plant.
     found.keys.none? { |key| key.includes?("meat") && key.includes?("plant") }.should be_true
@@ -198,8 +200,9 @@ describe PatternMining::ConjunctionMiner do
     # all three. The split that comes closest to explaining that keeps
     # "carnivore and eats meat" (4) together and takes "animal" (6) as
     # unrelated: 4 * 6 / atoms. Three unrelated clauses would expect far
-    # fewer, 6 * 4 * 4 / atoms squared, and so look more surprising.
-    atoms = space.size.to_f
+    # fewer, 6 * 4 * 4 / atoms squared, and so look more surprising. The
+    # atoms that count are the concepts, which is all $v1 ever names.
+    atoms = space.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE).size.to_f
     wanted.surprisingness.should be_close(1 - (4 * 6 / atoms) / 4, 1e-12)
     wanted.surprisingness.should be < 1 - (6 * 4 * 4 / (atoms * atoms)) / 4
     triples.each { |conjunction| (0.0..1.0).includes?(conjunction.surprisingness).should be_true }
@@ -232,8 +235,10 @@ describe "PatternMining conjunction surprisingness" do
     grandparent.support.should eq(2)
     grandparent.groundings.map { |row| row.values.map(&.name) }.sort.should eq([%w(ann bob cy), %w(dee eve fay)])
     # Four parent links each way; the middle person is right by chance
-    # once in as many tries as there are atoms.
-    grandparent.surprisingness.should be_close(1 - (4 * 4 / space.size.to_f) / 2, 1e-12)
+    # once in six, there being six people. That expects 16 / 6 chains,
+    # a little more than the two there are.
+    grandparent.surprisingness.should be_close(1 - 2 / (4 * 4 / 6.0), 1e-12)
+    grandparent.surprisingness.should be_close(0.25, 1e-12)
   end
 
   it "measures a deviation as a share of the larger side" do
