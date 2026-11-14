@@ -244,7 +244,7 @@ Two minor test failures in distributed storage edge cases:
 | Paphos event journal and server-sent event stream | `src/integrations/platform/paphos_server.cr`, `paphos_client.cr` |
 | Paphos events kept per user; streams woken by an event, not by a timer | `src/integrations/platform/paphos_server.cr` |
 | Query arithmetic, OFFSET, and aggregates with GROUP BY and HAVING | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
-| PLN evidence followed back through every derivation | `PLN::Provenance#rests_on?` in `src/pln/pln.cr` |
+| PLN evidence combined only when it shares no asserted premise | `PLN::Provenance` in `src/pln/pln.cr` |
 | Conjunction surprisingness against every partition of the clauses | `ConjunctionMiner` in `src/pattern_mining/pattern_mining.cr` |
 | URE rules chosen and applied by unifying their patterns; backward proof search | `URE::PatternRule`, `RuleMatcher`, `BackwardChainer#prove` in `src/ure/ure.cr` |
 
@@ -252,7 +252,7 @@ Two minor test failures in distributed storage edge cases:
 
 | Area | State |
 |---|---|
-| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. A conclusion never comes back as evidence for itself, but two derivations that share a premise further back still count as two. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. A second derivation that shares part of its evidence with the conclusion is left out whole; the part that was new is not counted. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
 | URE rules | Of the stock rules only inheritance transitivity declares its shapes; conjunction, modus ponens and evaluation transitivity still declare types alone and get the first 500 pairs of those types. The proof search is depth-first with a depth limit and a budget, not a best-first search over the inference tree. |
 | Query language | Clauses are inheritance and subject-predicate-object triples. No nested groups other than OPTIONAL, no subqueries, no BIND. An aggregate's value is a NumberNode beside the AtomSpace, not an atom in it. |
 | Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. A variable's chance of matching is one in the number of atoms, whatever its type. |

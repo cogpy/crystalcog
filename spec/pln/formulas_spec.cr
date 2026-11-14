@@ -323,16 +323,18 @@ describe PLN::Provenance do
     provenance.independent?(ab, ab).should be_false
 
     # ad came from ac, which came from ab: ad rests on ab two steps back.
-    provenance.rests_on?(ad, ab).should be_true
-    provenance.rests_on?(ad, bc).should be_true
-    provenance.rests_on?(ac, cd).should be_false
-    provenance.rests_on?(ab, ad).should be_false # asserted: rests on nothing
+    provenance.shares_evidence?(ad, ab).should be_true
+    provenance.shares_evidence?(ad, bc).should be_true
+    provenance.shares_evidence?(ac, cd).should be_false
     provenance.independent?(ab, ad).should be_false
     provenance.independent?(cd, ad).should be_false
     provenance.independent?(cd, ac).should be_true
+    # Asserted links rest on themselves: numbered as they are first met.
+    provenance.evidence(ab).size.should eq(1)
+    provenance.evidence(ad).should eq((provenance.evidence(ab) + provenance.evidence(bc) + provenance.evidence(cd)).sort)
   end
 
-  it "follows evidence that was revised into a link" do
+  it "combines only evidence that shares no asserted link" do
     space = AtomSpace::AtomSpace.new
     nodes = %w(a b c d e).map { |name| space.add_concept_node(name) }
     ab = space.add_inheritance_link(nodes[0], nodes[1])
@@ -345,28 +347,40 @@ describe PLN::Provenance do
     provenance = PLN::Provenance.new
     provenance.record(ac, ab, bc)
     provenance.record(ae, ac, ce)
-    provenance.rests_on?(ae, ad).should be_false
 
-    # A second chain is revised into ac: what rests on ac now rests on it too.
+    # A second chain to a->c through d shares nothing with the first.
+    provenance.independent?(ac, ad, dc).should be_true
     provenance.revised(ac, ad, dc)
-    provenance.rests_on?(ac, ad).should be_true
-    provenance.rests_on?(ae, dc).should be_true
-    provenance.independent?(ad, ae).should be_false
+    provenance.shares_evidence?(ac, ad).should be_true
+    # It is in a->c now and is not counted into it again.
+    provenance.independent?(ac, ad, dc).should be_false
+    # a->e was drawn before the revision and still rests on the first chain only.
+    provenance.shares_evidence?(ae, dc).should be_false
+    # Evidence that overlaps in part is not combined either: a->e rests on a->b.
+    provenance.independent?(ac, ae).should be_false
+    provenance.independent?(ad, ae).should be_true
 
-    # A link that was asserted and then revised rests on what revised it.
+    # An asserted link that was revised rests on what revised it as well.
     provenance.revised(ce, ab)
-    provenance.rests_on?(ce, ab).should be_true
-    provenance.rests_on?(ce, bc).should be_false
+    provenance.shares_evidence?(ce, ab).should be_true
+    provenance.shares_evidence?(ce, bc).should be_false
   end
 
-  it "answers for a long chain of derivations without recursion" do
+  it "stays quick when links rest on many others" do
     space = AtomSpace::AtomSpace.new
     origin = space.add_concept_node("origin")
-    links = Array(AtomSpace::Atom).new(5001) { |i| space.add_inheritance_link(origin, space.add_concept_node("n#{i}")) }
+    links = Array(AtomSpace::Atom).new(2001) { |i| space.add_inheritance_link(origin, space.add_concept_node("n#{i}")) }
     provenance = PLN::Provenance.new
-    (1..5000).each { |i| provenance.record(links[i], links[i - 1]) }
-    provenance.rests_on?(links[5000], links[0]).should be_true
-    provenance.rests_on?(links[0], links[5000]).should be_false
-    provenance.rests_on?(links[2500], links[2501]).should be_false
+    # Each link drawn from the one before and a fresh asserted one.
+    derived = links[0]
+    (1..1000).each do |i|
+      provenance.record(links[1000 + i], derived, links[i])
+      derived = links[1000 + i]
+    end
+    provenance.evidence(derived).size.should eq(1001)
+    started = Time.monotonic
+    20_000.times { provenance.independent?(links[0], derived).should be_false }
+    20_000.times { provenance.independent?(links[2000], links[1500]).should be_false }
+    (Time.monotonic - started).should be < 5.seconds
   end
 end
