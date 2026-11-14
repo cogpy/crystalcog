@@ -187,15 +187,64 @@ module PLN
       @parents[conclusion.handle] = {premise.handle, other.handle}
     end
 
+    # The premises later revised into a link that existed already.
+    @revisions = Hash(AtomSpace::Handle, Array(AtomSpace::Handle)).new
+    # Reused by `rests_on?`, so that asking leaves no garbage behind.
+    @pending = [] of AtomSpace::Handle
+    @visited = Set(AtomSpace::Handle).new
+
+    # Links looked at before `rests_on?` gives up and answers yes: a
+    # derivation it cannot clear is not counted.
+    ANCESTRY_LIMIT = 100_000
+
+    # `known` has taken the evidence of these premises as well.
+    def revised(known : AtomSpace::Atom, premise : AtomSpace::Atom, other : AtomSpace::Atom = premise) : Nil
+      sources = (@revisions[known.handle] ||= [] of AtomSpace::Handle)
+      sources << premise.handle
+      sources << other.handle unless other.same?(premise)
+    end
+
     # Was `candidate` one of the links `derived` was drawn from?
     def parent?(candidate : AtomSpace::Atom, derived : AtomSpace::Atom) : Bool
       parents = @parents[derived.handle]? || return false
       parents[0] == candidate.handle || parents[1] == candidate.handle
     end
 
+    # Does `derived` rest on `candidate`, through any number of
+    # derivations and revisions? A link that was asserted and never
+    # revised rests on nothing.
+    def rests_on?(derived : AtomSpace::Atom, candidate : AtomSpace::Atom) : Bool
+      target = candidate.handle
+      start = derived.handle
+      return false unless @parents.has_key?(start) || @revisions.has_key?(start)
+
+      pending = @pending
+      visited = @visited
+      pending.clear
+      visited.clear
+      pending << start
+      while handle = pending.pop?
+        if parents = @parents[handle]?
+          return true if parents[0] == target || parents[1] == target
+          pending << parents[0] if visited.add?(parents[0])
+          pending << parents[1] if visited.add?(parents[1])
+        end
+        if sources = @revisions[handle]?
+          sources.each do |source|
+            return true if source == target
+            pending << source if visited.add?(source)
+          end
+        end
+        return true if visited.size > ANCESTRY_LIMIT
+      end
+      false
+    end
+
     # May `evidence` (the premises of a new derivation) revise `known`?
+    # Not when a premise is `known` itself or was drawn from it, however
+    # many steps back: that would be a conclusion supporting itself.
     def independent?(known : AtomSpace::Atom, *evidence : AtomSpace::Atom) : Bool
-      evidence.none? { |premise| premise.same?(known) || parent?(known, premise) }
+      evidence.none? { |premise| premise.same?(known) || rests_on?(premise, known) }
     end
 
     def derivations : Int32
@@ -270,6 +319,7 @@ module PLN
           # A conclusion is not evidence for itself or for its own premises.
           if @provenance.first_use?(Provenance::DEDUCTION, premise, link) && @provenance.independent?(known, premise, link)
             known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+            @provenance.revised(known, premise, link)
           end
           next
         end
@@ -335,6 +385,7 @@ module PLN
       if known = atomspace.find_link(AtomSpace::AtomType::INHERITANCE_LINK, b, a)
         if @provenance.first_use?(Provenance::INVERSION, premise) && @provenance.independent?(known, premise)
           known.truth_value = PLN.revise_truth_values(known.truth_value, inverted_tv)
+          @provenance.revised(known, premise)
         end
         return known
       end
@@ -487,6 +538,7 @@ module PLN
           first_conclusion ||= known
           if @provenance.first_use?(Provenance::ABDUCTION, premise, link) && @provenance.independent?(known, premise, link)
             known.truth_value = PLN.revise_truth_values(known.truth_value, *conclusion_values(premise, link))
+            @provenance.revised(known, premise, link)
           end
           next
         end

@@ -266,10 +266,35 @@ describe "PLN evidence from several derivations" do
     {ab.truth_value.strength, ab.truth_value.confidence}.should eq({0.8, 0.9})
     {bc.truth_value.strength, bc.truth_value.confidence}.should eq({0.7, 0.9})
   end
+
+  it "does not let a conclusion come back as evidence for its own premises, however far round" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c).map { |name| space.add_concept_node(name, AtomSpace::SimpleTruthValue.new(0.5, 0.9)) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1], AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    bc = space.add_inheritance_link(nodes[1], nodes[2], AtomSpace::SimpleTruthValue.new(0.7, 0.9))
+    # Everything the engine can conclude here rests on these two links:
+    # a->c, then c->a, then c->b from c->a and a->b, whose inverse is b->c
+    # again. That circle is three derivations long.
+    PLN.create_engine(space).reason(12)
+    space.find_link(AtomSpace::AtomType::INHERITANCE_LINK, [nodes[2], nodes[1]]).should_not be_nil
+    {ab.truth_value.strength, ab.truth_value.confidence}.should eq({0.8, 0.9})
+    {bc.truth_value.strength, bc.truth_value.confidence}.should eq({0.7, 0.9})
+  end
+
+  it "settles: more iterations change nothing once every derivation is counted" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c d).map { |name| space.add_concept_node(name, AtomSpace::SimpleTruthValue.new(0.5, 0.9)) }
+    3.times { |i| space.add_inheritance_link(nodes[i], nodes[i + 1], AtomSpace::SimpleTruthValue.new(0.8, 0.9)) }
+    engine = PLN.create_engine(space)
+    engine.reason(40)
+    settled = space.get_all_atoms.map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort
+    engine.reason(10)
+    space.get_all_atoms.map { |atom| {atom.to_s, atom.truth_value.strength, atom.truth_value.confidence} }.sort.should eq(settled)
+  end
 end
 
 describe PLN::Provenance do
-  it "counts each derivation once and remembers direct parents only" do
+  it "counts each derivation once and remembers what each link was drawn from" do
     space = AtomSpace::AtomSpace.new
     nodes = %w(a b c d).map { |name| space.add_concept_node(name) }
     ab = space.add_inheritance_link(nodes[0], nodes[1])
@@ -296,5 +321,52 @@ describe PLN::Provenance do
     provenance.independent?(ab, ac, cd).should be_false
     provenance.independent?(ab, cd).should be_true
     provenance.independent?(ab, ab).should be_false
+
+    # ad came from ac, which came from ab: ad rests on ab two steps back.
+    provenance.rests_on?(ad, ab).should be_true
+    provenance.rests_on?(ad, bc).should be_true
+    provenance.rests_on?(ac, cd).should be_false
+    provenance.rests_on?(ab, ad).should be_false # asserted: rests on nothing
+    provenance.independent?(ab, ad).should be_false
+    provenance.independent?(cd, ad).should be_false
+    provenance.independent?(cd, ac).should be_true
+  end
+
+  it "follows evidence that was revised into a link" do
+    space = AtomSpace::AtomSpace.new
+    nodes = %w(a b c d e).map { |name| space.add_concept_node(name) }
+    ab = space.add_inheritance_link(nodes[0], nodes[1])
+    bc = space.add_inheritance_link(nodes[1], nodes[2])
+    ac = space.add_inheritance_link(nodes[0], nodes[2])
+    ad = space.add_inheritance_link(nodes[0], nodes[3])
+    dc = space.add_inheritance_link(nodes[3], nodes[2])
+    ce = space.add_inheritance_link(nodes[2], nodes[4])
+    ae = space.add_inheritance_link(nodes[0], nodes[4])
+    provenance = PLN::Provenance.new
+    provenance.record(ac, ab, bc)
+    provenance.record(ae, ac, ce)
+    provenance.rests_on?(ae, ad).should be_false
+
+    # A second chain is revised into ac: what rests on ac now rests on it too.
+    provenance.revised(ac, ad, dc)
+    provenance.rests_on?(ac, ad).should be_true
+    provenance.rests_on?(ae, dc).should be_true
+    provenance.independent?(ad, ae).should be_false
+
+    # A link that was asserted and then revised rests on what revised it.
+    provenance.revised(ce, ab)
+    provenance.rests_on?(ce, ab).should be_true
+    provenance.rests_on?(ce, bc).should be_false
+  end
+
+  it "answers for a long chain of derivations without recursion" do
+    space = AtomSpace::AtomSpace.new
+    origin = space.add_concept_node("origin")
+    links = Array(AtomSpace::Atom).new(5001) { |i| space.add_inheritance_link(origin, space.add_concept_node("n#{i}")) }
+    provenance = PLN::Provenance.new
+    (1..5000).each { |i| provenance.record(links[i], links[i - 1]) }
+    provenance.rests_on?(links[5000], links[0]).should be_true
+    provenance.rests_on?(links[0], links[5000]).should be_false
+    provenance.rests_on?(links[2500], links[2501]).should be_false
   end
 end
