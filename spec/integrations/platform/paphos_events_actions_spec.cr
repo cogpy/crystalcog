@@ -92,6 +92,55 @@ describe "Paphos events API" do
       kept.first["data"]["n"].as_s.should eq("5")
     end
   end
+
+  it "keeps each user's events whatever the others publish" do
+    with_paphos_server do |server|
+      ada = client_for(server, "ada@example.com")
+      bob = client_for(server, "bob@example.com")
+      ada.publish_event("atom_updates", {"atom" => "cat"})
+      ada.publish_event("atom_updates", {"atom" => "dog"})
+      # Bob is user 2 and fills his own allowance twice over.
+      (PaphosBackend::Server::EVENT_LIMIT * 2).times { |i| server.publish_event(2_i64, "tick", {"n" => i.to_s}) }
+
+      ada.events.map { |event| event["data"]["atom"].as_s }.should eq(["cat", "dog"])
+      kept = bob.events(limit: PaphosBackend::Server::EVENT_LIMIT)
+      kept.size.should eq(PaphosBackend::Server::EVENT_LIMIT)
+      kept.first["data"]["n"].as_s.should eq(PaphosBackend::Server::EVENT_LIMIT.to_s)
+    end
+  end
+
+  it "answers a waiting request as soon as its user has an event, and not for another's" do
+    with_paphos_server do |server|
+      ada = client_for(server, "ada@example.com")
+      bob = client_for(server, "bob@example.com")
+
+      answered = Channel({Int32, Time::Span}).new(1)
+      started = Time.monotonic
+      spawn { answered.send({ada.events(wait: 5.seconds).size, Time.monotonic - started}) }
+      sleep 100.milliseconds
+      bob.publish_event("atom_updates", {"atom" => "not ada's"})
+      select
+      when early = answered.receive
+        fail "answered #{early[0]} events for another user's event"
+      when timeout(200.milliseconds)
+      end
+
+      ada.publish_event("atom_updates", {"atom" => "cat"})
+      count, took = take(answered)
+      count.should eq(1)
+      took.should be < 3.seconds
+    end
+  end
+
+  it "ends a waiting request when the server stops" do
+    server = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret").start
+    ada = client_for(server, "ada@example.com")
+    answered = Channel(Int32).new(1)
+    spawn { answered.send((ada.events(wait: 20.seconds).size rescue -1)) }
+    sleep 100.milliseconds
+    server.stop
+    take(answered).should be <= 0
+  end
 end
 
 describe "Paphos events across a restart" do
@@ -232,6 +281,28 @@ describe "Paphos event journal" do
       again = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path)
       again.publish_event(1_i64, "atom_updates", no_fields, "new").id.should eq(9)
       File.read_lines(journal).map { |line| JSON.parse(line)["source"].as_s }.should eq(["old", "new", "new"])
+    ensure
+      {path, journal}.each { |file| File.delete(file) if File.exists?(file) }
+    end
+  end
+
+  it "keeps each user's newest events across a restart" do
+    path = File.tempname("paphos-per-user", ".json")
+    journal = "#{path}.events"
+    limit = PaphosBackend::Server::EVENT_LIMIT
+    begin
+      first = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path)
+      first.publish_event(1_i64, "note", {"n" => "kept"}, "spec")
+      (limit + 3).times { |index| first.publish_event(2_i64, "tick", {"n" => index.to_s}, "spec") }
+      # One user at their limit does not make the journal worth cutting back.
+      File.read_lines(journal).size.should eq(limit + 4)
+
+      second = PaphosBackend::Server.new(requested_port: 0, secret: "test-secret", data_file: path)
+      lines = File.read_lines(journal).map { |line| JSON.parse(line) }
+      lines.count { |event| event["owner_id"].as_i64 == 1 }.should eq(1)
+      lines.count { |event| event["owner_id"].as_i64 == 2 }.should eq(limit)
+      lines.first["data"]["n"].as_s.should eq("kept")
+      second.publish_event(2_i64, "tick", no_fields, "spec").id.should eq(limit + 5)
     ensure
       {path, journal}.each { |file| File.delete(file) if File.exists?(file) }
     end

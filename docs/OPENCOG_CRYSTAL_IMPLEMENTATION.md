@@ -130,6 +130,8 @@ Sophisticated pattern matching and query system:
 
 `PatternMiner#mine_conjunctions` joins frequent single patterns into patterns of several clauses that share variables, such as `(AND (INHERITANCELINK $v1 animal) (EVALUATIONLINK likes (LISTLINK $v1 $v2)))`. Each result has its clauses, its variables, its support (the distinct groundings that satisfy every clause at once) and a surprisingness score. A conjunction that only repeats what one of its clauses already says is left out.
 
+The surprisingness of a conjunction is its I-surprisingness. The support is compared with what each way of splitting the clauses into unrelated blocks would give: a block's groundings are counted on their own, and a variable two blocks share is right by chance once in as many tries as there are atoms. The split that comes closest sets the score, so a conjunction two of whose clauses already explain it scores lower than one of three unrelated clauses would.
+
 ### 6. CogServer - Network Server ✅
 **Location:** `src/cogserver/`
 
