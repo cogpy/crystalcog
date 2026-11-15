@@ -427,7 +427,6 @@ module PatternMining
       # mining: the same ones are asked for again and again.
       @clause_rows = {} of String => Array(Hash(String, AtomSpace::Atom))
       @block_supports = {} of String => Float64
-      @type_sizes = {} of AtomSpace::AtomType => Int32
     end
 
     # Conjunctions of the given patterns, most supported first. A pattern
@@ -436,7 +435,6 @@ module PatternMining
       started = Time.monotonic
       @clause_rows.clear
       @block_supports.clear
-      @type_sizes.clear
       parts = patterns.compact_map do |pattern|
         next if pattern.variables.empty? || PatternMatching::Pattern.variable?(pattern.template)
         rows = @calculator.valuations(pattern).map do |valuation|
@@ -538,13 +536,14 @@ module PatternMining
     # it would have if its clauses fell into blocks that had nothing to do
     # with one another. A block's groundings are counted on their own; a
     # variable two blocks share is then right by chance once in as many
-    # tries as there are atoms it could have been. A conjunction is only
+    # tries as there are atoms it could have been (see `domain`). A
+    # conjunction is only
     # as surprising as its best explanation leaves it, so the smallest
     # distance over every split into two or more blocks is the score.
     private def surprisingness(clauses : Array(AtomSpace::Atom), groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
       return 0.0 if clauses.size < 2 || groundings.empty?
       observed = groundings.size.to_f
-      domains = groundings.first.keys.to_h { |name| {name, domain(name, groundings)} }
+      domains = groundings.first.keys.to_h { |name| {name, domain(name, clauses)} }
 
       least = 1.0
       each_partition(clauses) do |blocks|
@@ -561,13 +560,41 @@ module PatternMining
       least
     end
 
-    # How many atoms a variable could have stood for: those of the types
-    # it takes in the groundings. A variable that only ever names concepts
-    # is not weighed against every link and predicate in the AtomSpace.
-    private def domain(name : String, groundings : Array(Hash(String, AtomSpace::Atom))) : Float64
-      types = groundings.compact_map { |row| row[name]?.try(&.type) }.uniq
-      size = types.sum { |type| @type_sizes[type] ||= @atomspace.get_atoms_by_type(type).size }
-      Math.max(size, 1).to_f
+    # How many atoms a variable could have stood for: those that fill its
+    # place in links of the same kind. In (Inheritance $x plant) that is
+    # whatever inherits from anything, and in (Evaluation likes (List $x
+    # water)) whatever likes anything. An atom that is never in such a
+    # place, as `plant` itself or a predicate, is not one $x could have
+    # been by chance, and is not counted. Where several clauses use the
+    # variable, any of their places will do.
+    private def domain(name : String, clauses : Array(AtomSpace::Atom)) : Float64
+      fillers = Set(AtomSpace::Handle).new
+      clauses.each do |clause|
+        next unless variable_names(clause).includes?(name)
+        clause_rows(opened(clause, [0])).each do |row|
+          row[name]?.try { |atom| fillers << atom.handle }
+        end
+      end
+      Math.max(fillers.size, 1).to_f
+    end
+
+    # The clause with every atom it names made a variable of its own, so
+    # that it fits every link with a place like each of its places. The
+    # predicate of an evaluation stays: what likes something and what
+    # eats something are different places.
+    private def opened(atom : AtomSpace::Atom, made : Array(Int32)) : AtomSpace::Atom
+      return atom if PatternMatching::Pattern.variable?(atom)
+      unless atom.link?
+        made[0] += 1
+        return AtomSpace::VariableNode.new("$_any#{made[0]}").as(AtomSpace::Atom)
+      end
+
+      children = [] of AtomSpace::Atom
+      atom.outgoing.each_with_index do |child, i|
+        predicate = i == 0 && atom.type == AtomSpace::AtomType::EVALUATION_LINK && !child.link?
+        children << (predicate ? child : opened(child, made))
+      end
+      AtomSpace::Link.new(atom.type, children).as(AtomSpace::Atom)
     end
 
     # Every way of putting the clauses into two or more blocks.
