@@ -86,6 +86,11 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 "SELECT $x WHERE { $x ISA+ Animal }"
 "SELECT $part $whole WHERE { $part part_of* $whole . $whole ISA+ Animal }"
 
+# Paths over several relations: one after the other, either of two, backwards
+"SELECT $place WHERE { Ann owns/located_in/part_of* $place }"
+"SELECT $x WHERE { Campus (^part_of|has_part)+ $x }"
+"SELECT $a $b WHERE { $a located_in/^located_in $b . FILTER($a != $b) }"
+
 # Yes or no, and atoms built from the matches
 "ASK { Claw part_of+ Dog }"
 "CONSTRUCT { $x ISA Animal . $x seen_in Zoo } WHERE { $x ISA+ Animal }"
@@ -102,6 +107,7 @@ query     := select | ask | construct
 ask       := ASK [WHERE] block { UNION block }
 construct := CONSTRUCT "{" template { ( "." | newline ) template } "}"
              WHERE block { UNION block }
+             [ ORDER BY key { "," key } ] [ LIMIT integer ] [ OFFSET integer ]
 template  := term ( ISA | inherits_from | "->" ) term | term term term
 select    := SELECT [DISTINCT] ( "*" | item { [","] item } )
              WHERE block { UNION block }
@@ -115,8 +121,9 @@ aggregate := COUNT "(" ( "*" | [DISTINCT] value ) ")"
            | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 variable  := "$" name [ ":" type ]
 block     := "{" clause { ( "." | newline ) clause } "}"
-clause    := term ( ISA | inherits_from | "->" ) [steps] term
-           | term term [steps] term
+clause    := term ( ISA | inherits_from | "->" ) term
+           | term term term
+           | term path term
            | OPTIONAL "{" clauses "}"
            | FILTER "(" condition ")"
            | BIND "(" value AS "$" name ")"
@@ -125,7 +132,10 @@ clause    := term ( ISA | inherits_from | "->" ) [steps] term
            | MINUS block
            | VALUES "$" name "{" { term | UNDEF } "}"
            | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
-steps     := "+" | "*"
+path      := sequence { "|" sequence }
+sequence  := step { "/" step }
+step      := [ "^" ] ( relation | "(" path ")" ) [ "+" | "*" | "?" ]
+relation  := ISA | inherits_from | "->" | name
 term      := "$" name | name | "quoted name"
 condition := condition OR condition | condition AND condition
            | NOT condition | "(" condition ")"
@@ -202,6 +212,18 @@ key       := value [ ASC | DESC ]
 - A path joins with the rest of its block like any clause, inside OPTIONAL and MINUS too. A typed variable, `$x:CONCEPT`, holds at a path's end as elsewhere.
 - The predicate of a path is a name, not a variable.
 
+A path can be put together from several relations:
+
+- `a/b` is `a` and then `b`: `$x located_in/part_of $y` holds when `$x` is located in something that is part of `$y`.
+- `a|b` is either: `$x part_of|located_in Lab`.
+- `^a` walks `a` backwards, from its object to its subject: `Campus ^part_of $x` gives what is part of the campus. `$a located_in/^located_in $b` gives things in the same place.
+- `a?` is `a` once or not at all.
+- Brackets group, and a mark after them repeats the whole: `(part_of/part_of)+` goes two steps at a time. `/` binds tighter than `|`, and `+`, `*`, `?` and `^` tighter than either.
+- `ISA`, `inherits_from` and `->` stand for inheritance inside a path as they do outside: `Ann owns/ISA $kind`.
+- A path that could be no step at all, as `a*`, `a?` or `(a/b)*`, joins an atom to itself. With variables at both ends that is every atom any of the path's relations touches.
+- The search runs the path as a small machine of states over pairs of an atom and a state, breadth first, so each pair of ends comes once however many ways lead between them, with the links of a shortest way as what was matched. From the object's end the path is read backwards.
+- Still not there: a path over a variable predicate, and a path that excludes a relation.
+
 ### ASK
 
 - `ASK { ... }` says whether its block matches anything. `WHERE` may be written before the block, and blocks may be joined by UNION. Nothing else follows: there is nothing to sort or limit.
@@ -216,7 +238,7 @@ key       := value [ ASC | DESC ]
 - A template clause is left out for a match that gives one of its variables no value, as an OPTIONAL part can.
 - A built atom is as strong as the weakest atom its match rests on and as confident as the match. Where several matches build the same atom, the most confident one is kept. A match that rests on no atoms (VALUES alone, or a subquery's rows) gives the default truth value.
 - The atoms stand beside the AtomSpace and nothing is added. `construct(text, into: space)` adds them to an AtomSpace, the queried one or another, and returns the stored atoms. That AtomSpace merges an atom it already holds in its usual way; nodes it already has are used as they are.
-- ORDER BY, LIMIT and OFFSET do not follow a CONSTRUCT. A subquery in its WHERE can do the choosing.
+- ORDER BY, LIMIT and OFFSET may follow the WHERE block. They choose among the matches as they do among the results of a SELECT, and the template is filled from the ones chosen: `CONSTRUCT { $x ISA Cheap } WHERE { $x price $p } ORDER BY $p LIMIT 2`. Without ORDER BY the most confident matches come first.
 - Run through `query`, a CONSTRUCT lists its matches with the template's variables.
 - `CONSTRUCT` is not a reserved word.
 
