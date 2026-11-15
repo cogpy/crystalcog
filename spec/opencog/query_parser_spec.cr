@@ -896,7 +896,7 @@ describe "OpenCog query CONSTRUCT" do
     parse_error("CONSTRUCT { $x ISA+ Animal } WHERE { $x ISA Mammal }").should eq("a path cannot be built: the template takes single steps at line 1, column 19")
     parse_error("CONSTRUCT { } WHERE { $x ISA Mammal }").should eq("CONSTRUCT needs at least one clause at line 1, column 13")
     parse_error("CONSTRUCT { $x ISA Animal }").should eq("Missing WHERE clause: expected WHERE, found the end of the query at line 1, column 28")
-    parse_error("CONSTRUCT { $x ISA Animal } WHERE { $x ISA Mammal } LIMIT 2").should eq(%(expected the end of the query, found "LIMIT" at line 1, column 53))
+    parse_error("CONSTRUCT { $x ISA Animal } WHERE { $x ISA Mammal } GROUP BY $x").should eq(%(expected the end of the query, found "GROUP" at line 1, column 53))
     parse_error("CONSTRUCT { FILTER($x = Dog) } WHERE { $x ISA Mammal }").should contain("expected")
   end
 
@@ -984,5 +984,166 @@ describe "OpenCog query CONSTRUCT" do
     expect_raises(OpenCog::QueryLanguage::QueryExecutionException, "Not a CONSTRUCT query") do
       executor.construct(parse("SELECT $x WHERE { $x ISA Mammal }"))
     end
+  end
+end
+
+# Places inside places, things in them, and who owns what.
+#
+#   Lab part_of Wing part_of Hall part_of Campus     Campus has_part Garden
+#   Desk, Lamp located_in Lab     Bench located_in Garden     Ann owns Desk
+private def campus : AtomSpace::AtomSpace
+  space = AtomSpace::AtomSpace.new
+  relate = ->(predicate : String, from : String, to : String, confidence : Float64) do
+    space.add_evaluation_link(space.add_predicate_node(predicate),
+      space.add_list_link([space.add_concept_node(from), space.add_concept_node(to)] of AtomSpace::Atom),
+      AtomSpace::SimpleTruthValue.new(1.0, confidence))
+  end
+  %w(Lab Wing Hall Campus).each_cons_pair { |part, whole| relate.call("part_of", part, whole, 0.9) }
+  relate.call("has_part", "Campus", "Garden", 0.9)
+  relate.call("located_in", "Desk", "Lab", 0.5)
+  relate.call("located_in", "Lamp", "Lab", 0.5)
+  relate.call("located_in", "Bench", "Garden", 0.5)
+  relate.call("owns", "Ann", "Desk", 0.9)
+  furniture = space.add_concept_node("Furniture")
+  %w(Desk Bench).each { |name| space.add_inheritance_link(space.get_nodes_by_name(name).first, furniture, AtomSpace::SimpleTruthValue.new(1.0, 0.9)) }
+  space
+end
+
+describe "OpenCog query path expressions" do
+  it "reads ^ | and ? as tokens" do
+    tokens = OpenCog::QueryLanguage::QueryLexer.new("$x ^a|(b/c)? $y").tokens
+    tokens.map(&.text).should eq(["x", "^", "a", "|", "(", "b", "/", "c", ")", "?", "y", ""])
+  end
+
+  it "parses sequences, alternatives, inverses and brackets" do
+    shape = ->(path : String) { parse("SELECT * WHERE { $x #{path} $y }").clauses.first.to_s }
+    shape.call("a/b").should eq("PathClause($x a/b $y)")
+    shape.call("a|b").should eq("PathClause($x a|b $y)")
+    shape.call("^a").should eq("PathClause($x ^a $y)")
+    shape.call("a?").should eq("PathClause($x a? $y)")
+    # A sequence binds tighter than a choice, a mark tighter than either.
+    shape.call("a/b|c").should eq("PathClause($x a/b|c $y)")
+    shape.call("a/(b|c)").should eq("PathClause($x a/(b|c) $y)")
+    shape.call("(a/b)+").should eq("PathClause($x (a/b)+ $y)")
+    shape.call("a/b+").should eq("PathClause($x a/b+ $y)")
+    shape.call("^(a/b)*").should eq("PathClause($x ^(a/b)* $y)")
+    shape.call("a / ISA / ^ -> | inherits_from+").should eq("PathClause($x a/ISA/^ISA|ISA+ $y)")
+    shape.call("(a)").should eq("TripleClause($x a $y)")
+    shape.call("(ISA)").should eq("InheritanceClause($x -> $y)")
+  end
+
+  it "says what is wrong with a path" do
+    parse_error("SELECT $x WHERE { $x (a/b $y }").should eq(%[expected ')' to close the path, found $y at line 1, column 27])
+    parse_error("SELECT $x WHERE { $x a/ }").should eq(%(expected a predicate, ISA or '->', found "}" at line 1, column 25))
+    parse_error("SELECT $x WHERE { $x a/$p $y }").should eq("a path follows a named predicate, not $p at line 1, column 24")
+    parse_error("SELECT $x WHERE { $x a|b }").should eq(%(expected the end of the path, found "}" at line 1, column 26))
+    parse_error("SELECT $x WHERE { $x $p/a $y }").should eq("a path follows a named predicate, not $p at line 1, column 22")
+    parse_error("CONSTRUCT { $x a/b $y } WHERE { $x a $y }").should eq("a path cannot be built: the template takes single steps at line 1, column 17")
+    parse_error("CONSTRUCT { $x ^a $y } WHERE { $x a $y }").should eq(%(expected a predicate, ISA or '->', found "^" at line 1, column 16))
+    # A misspelt keyword is not taken for the start of a path.
+    parse_error("SELECT $x WHERE { $x ISA a . FILTR($x != b) }").should eq(%[expected a predicate, ISA or '->', found "(" at line 1, column 35])
+    parse_error("SELECT $x WHERE { $x ^^a $y }").should eq(%(expected a predicate, ISA or '->', found "^" at line 1, column 23))
+  end
+
+  it "follows one relation and then another" do
+    space = campus
+    table(ask(space, "SELECT $x $y WHERE { $x located_in/part_of $y } ORDER BY $x"), "x", "y").should eq([["Desk", "Wing"], ["Lamp", "Wing"]])
+    names(ask(space, "SELECT $y WHERE { Desk located_in/part_of+ $y }"), "y").should eq(["Campus", "Hall", "Wing"])
+    names(ask(space, "SELECT $y WHERE { Desk located_in/part_of* $y }"), "y").should eq(["Campus", "Hall", "Lab", "Wing"])
+    names(ask(space, "SELECT $place WHERE { Ann owns/located_in/part_of* $place }"), "place").should eq(["Campus", "Hall", "Lab", "Wing"])
+    names(ask(space, "SELECT $x WHERE { $x located_in/ISA Furniture }"), "x").should be_empty
+    names(ask(space, "SELECT $kind WHERE { Ann owns/ISA $kind }"), "kind").should eq(["Furniture"])
+  end
+
+  it "takes either of two relations at each step" do
+    space = campus
+    names(ask(space, "SELECT $x WHERE { $x part_of|located_in Lab }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { $x (part_of|located_in)+ Campus }"), "x").should eq(["Desk", "Hall", "Lab", "Lamp", "Wing"])
+    names(ask(space, "SELECT $x WHERE { Desk located_in|ISA $x }"), "x").should eq(["Furniture", "Lab"])
+  end
+
+  it "walks a relation backwards" do
+    space = campus
+    names(ask(space, "SELECT $x WHERE { Campus ^part_of $x }"), "x").should eq(["Hall"])
+    names(ask(space, "SELECT $x WHERE { Campus ^part_of+ $x }"), "x").should eq(["Hall", "Lab", "Wing"])
+    # What the campus holds, whichever way round it was said.
+    names(ask(space, "SELECT $x WHERE { Campus (^part_of|has_part)+ $x }"), "x").should eq(["Garden", "Hall", "Lab", "Wing"])
+    names(ask(space, "SELECT $x WHERE { Wing ^(located_in/part_of) $x }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { Furniture ^ISA/located_in $x }"), "x").should eq(["Garden", "Lab"])
+    # Things in the same place: out by one relation and back by it.
+    pairs = table(ask(space, "SELECT $a $b WHERE { $a located_in/^located_in $b . FILTER($a != $b) } ORDER BY $a"), "a", "b")
+    pairs.should eq([["Desk", "Lamp"], ["Lamp", "Desk"]])
+  end
+
+  it "lets a ? step be left out" do
+    space = campus
+    names(ask(space, "SELECT $x WHERE { Lab part_of? $x }"), "x").should eq(["Lab", "Wing"])
+    names(ask(space, "SELECT $x WHERE { $x located_in/part_of? Lab }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { $x located_in/part_of? Wing }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { $x located_in/part_of? Hall }"), "x").should be_empty
+  end
+
+  it "repeats a bracketed path as a whole" do
+    space = campus
+    # Two steps at a time from the lab: itself and the hall, not the wing.
+    names(ask(space, "SELECT $x WHERE { Lab (part_of/part_of)* $x }"), "x").should eq(["Hall", "Lab"])
+    names(ask(space, "SELECT $x WHERE { Lab (part_of/part_of)+ $x }"), "x").should eq(["Hall"])
+    names(ask(space, "SELECT $x WHERE { Wing (part_of/part_of)+ $x }"), "x").should eq(["Campus"])
+  end
+
+  it "finds the same pairs from either end" do
+    space = campus
+    names(ask(space, "SELECT $x WHERE { $x located_in/part_of+ Campus }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { $x owns/located_in/part_of* Hall }"), "x").should eq(["Ann"])
+    names(ask(space, "SELECT $x WHERE { $x (^part_of|has_part)+ Lab }"), "x").should eq(["Campus", "Hall", "Wing"])
+    holds(space, "ASK { Ann owns/located_in/part_of+ Campus }").should be_true
+    holds(space, "ASK { Ann owns/part_of+ Campus }").should be_false
+    holds(space, "ASK { Campus ^part_of+/^located_in/^owns Ann }").should be_true
+    # With both ends open every pair comes once.
+    pairs = table(ask(space, "SELECT $a $b WHERE { $a located_in/part_of* $b }"), "a", "b").map { |(a, b)| "#{a}>#{b}" }.sort
+    pairs.should eq(["Bench>Garden", "Desk>Campus", "Desk>Hall", "Desk>Lab", "Desk>Wing",
+                     "Lamp>Campus", "Lamp>Hall", "Lamp>Lab", "Lamp>Wing"])
+  end
+
+  it "rests a match on the links of the shortest way" do
+    space = campus
+    size = space.size
+    # located_in at 0.5, then part_of at 0.9.
+    ask(space, "SELECT $y WHERE { Desk located_in/part_of $y }").first.confidence.should be_close(0.7, 1e-9)
+    ask(space, "SELECT $x WHERE { $x located_in/part_of Wing . FILTER($x = Desk) }").first.confidence.should be_close(0.7, 1e-9)
+    ask(space, "SELECT $y WHERE { Desk located_in/part_of+ $y . FILTER($y = Campus) }").first.confidence.should be_close(0.8, 1e-9)
+    built = construct(space, "CONSTRUCT { $thing somewhere_in $place } WHERE { $thing located_in/part_of+ $place }")
+    built.size.should eq(6)
+    space.size.should eq(size)
+  end
+end
+
+describe "OpenCog query CONSTRUCT with ORDER BY, LIMIT and OFFSET" do
+  it "parses the modifiers after the block" do
+    query = parse("CONSTRUCT { $x ISA Cheap } WHERE { $x price $p } ORDER BY $p DESC, $x LIMIT 2 OFFSET 1")
+    query.form.should eq(:construct)
+    query.order.size.should eq(2)
+    query.limit.should eq(2)
+    query.offset.should eq(1)
+    parse("CONSTRUCT { $x ISA Cheap } WHERE { $x price $p } OFFSET 1 LIMIT 2").limit.should eq(2)
+  end
+
+  it "builds from the matches the modifiers choose" do
+    space = shop
+    cheap = ->(tail : String) do
+      construct(space, "CONSTRUCT { $x ISA Cheap } WHERE { $x price $p } #{tail}").map { |atom| atom.outgoing.first.name }
+    end
+    cheap.call("ORDER BY $p LIMIT 2").should eq(["leek", "apple"])
+    cheap.call("ORDER BY $p LIMIT 1 OFFSET 1").should eq(["apple"])
+    cheap.call("ORDER BY $p DESC, $x DESC LIMIT 1").should eq(["plum"])
+    cheap.call("ORDER BY $p OFFSET 2").sort.should eq(["pear", "plum"])
+    cheap.call("LIMIT 0").should be_empty
+    cheap.call("").size.should eq(4)
+  end
+
+  it "takes the most confident matches when no order is asked for" do
+    space = graded
+    built = construct(space, "CONSTRUCT { $x ISA Sure } WHERE { $x ISA Animal } LIMIT 2")
+    built.map { |atom| atom.outgoing.first.name }.should eq(["Dog", "Cat"])
   end
 end

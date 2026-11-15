@@ -7,6 +7,7 @@
 #   ask       := ASK [WHERE] block { UNION block }
 #   construct := CONSTRUCT "{" template { ( "." | newline ) template } "}"
 #                WHERE block { UNION block }
+#                [ ORDER BY key { "," key } ] [ LIMIT integer ] [ OFFSET integer ]
 #   template  := term ( ISA | inherits_from | "->" ) term | term term term
 #   select    := SELECT [DISTINCT] ( "*" | item { [","] item } )
 #                WHERE block { UNION block }
@@ -20,8 +21,9 @@
 #              | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 #   variable  := "$" name [ ":" type ]
 #   block     := "{" clause { ( "." | newline ) clause } "}"
-#   clause    := term ( ISA | inherits_from | "->" ) [steps] term
-#              | term term [steps] term            (subject predicate object)
+#   clause    := term ( ISA | inherits_from | "->" ) term
+#              | term term term                    (subject predicate object)
+#              | term path term
 #              | OPTIONAL "{" clauses "}"
 #              | FILTER "(" condition ")"
 #              | BIND "(" value AS "$" name ")"
@@ -30,7 +32,10 @@
 #              | MINUS block
 #              | VALUES "$" name "{" { term | UNDEF } "}"
 #              | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
-#   steps     := "+" | "*"         (one or more steps; none or more)
+#   path      := sequence { "|" sequence }         (one or the other)
+#   sequence  := step { "/" step }                 (one after the other)
+#   step      := [ "^" ] ( relation | "(" path ")" ) [ "+" | "*" | "?" ]
+#   relation  := ISA | inherits_from | "->" | name
 #   term      := "$" name | name | "quoted name"
 #   condition := condition OR condition | condition AND condition
 #              | NOT condition | "(" condition ")"
@@ -50,9 +55,12 @@
 # keywords are read as such only where the grammar expects them, so `order`
 # or `filter` can still name a concept.
 #
-# A clause with steps is a path: `$x ISA+ Animal` holds when a chain of
-# inheritance links leads from $x to Animal, and `$a part_of* $b` when a
-# chain of part_of triples does, or when $a and $b are the same atom.
+# A path says how to get from one atom to another over several links.
+# `+` repeats a step once or more, `*` any number of times and `?` once
+# or not at all; `/` puts steps one after the other, `|` offers a choice
+# and `^` walks a relation backwards. So `$x ISA+ Animal` holds when a
+# chain of inheritance links leads from $x to Animal, and
+# `$part (part_of/ISA)+ $kind | ^has_part $kind` reads as it is written.
 #
 # ASK says whether anything matches. CONSTRUCT builds the atoms of its
 # template once for each match.
@@ -195,28 +203,217 @@ module OpenCog
       end
     end
 
-    # A path: the relation of a clause followed for any number of steps.
-    # Without a predicate the steps are inheritance links, with one they
-    # are triples of that predicate. `zero` lets the path be no step at
-    # all, which relates an atom to itself.
-    class PathClause < QueryClause
-      getter subject : String
-      getter predicate : String?
-      getter object : String
-      getter? zero : Bool
+    # How to get from one atom to another over links: a single relation,
+    # or steps put together.
+    abstract class QueryPath
+      abstract def to_s(io : IO)
 
-      def initialize(@subject : String, @predicate : String?, @object : String, @zero : Bool = false)
+      # Brackets where the path is part of a larger one.
+      def to_s(io : IO, inside : Bool)
+        to_s(io)
       end
+    end
 
-      # One step of the path as a pattern. The executor follows the steps
-      # itself; this is what the clause looks like to anything else.
-      def to_atoms(atomspace : AtomSpace::AtomSpace, var_map : Hash(String, AtomSpace::Atom)) : Array(AtomSpace::Atom)
-        step = @predicate.try { |name| TripleClause.new(@subject, name, @object) } || InheritanceClause.new(@subject, @object)
-        step.to_atoms(atomspace, var_map)
+    # One link: an inheritance link when no relation is named, else a
+    # triple of that predicate.
+    class PathStep < QueryPath
+      getter relation : String?
+
+      def initialize(@relation : String?)
       end
 
       def to_s(io : IO)
-        io << "PathClause(#{@subject} #{@predicate || "ISA"}#{@zero ? '*' : '+'} #{@object})"
+        io << (@relation || "ISA")
+      end
+    end
+
+    # The inner path walked from its end to its start.
+    class PathInverse < QueryPath
+      getter inner : QueryPath
+
+      def initialize(@inner : QueryPath)
+      end
+
+      def to_s(io : IO)
+        io << '^'
+        @inner.to_s(io, true)
+      end
+    end
+
+    # The parts one after the other.
+    class PathSequence < QueryPath
+      getter parts : Array(QueryPath)
+
+      def initialize(@parts : Array(QueryPath))
+      end
+
+      def to_s(io : IO)
+        @parts.each_with_index do |part, i|
+          io << '/' if i > 0
+          part.is_a?(PathAlternative) ? part.to_s(io, true) : part.to_s(io)
+        end
+      end
+
+      def to_s(io : IO, inside : Bool)
+        io << '('
+        to_s(io)
+        io << ')'
+      end
+    end
+
+    # Any one of the parts.
+    class PathAlternative < QueryPath
+      getter parts : Array(QueryPath)
+
+      def initialize(@parts : Array(QueryPath))
+      end
+
+      def to_s(io : IO)
+        @parts.each_with_index do |part, i|
+          io << '|' if i > 0
+          part.to_s(io)
+        end
+      end
+
+      def to_s(io : IO, inside : Bool)
+        io << '('
+        to_s(io)
+        io << ')'
+      end
+    end
+
+    # The inner path once or more (`+`), any number of times (`*`), or
+    # once or not at all (`?`).
+    class PathRepeat < QueryPath
+      getter inner : QueryPath
+      getter mark : String
+
+      def initialize(@inner : QueryPath, @mark : String)
+      end
+
+      # Whether no step at all will do.
+      def optional? : Bool
+        @mark != "+"
+      end
+
+      # Whether the inner path may be gone through again.
+      def again? : Bool
+        @mark != "?"
+      end
+
+      def to_s(io : IO)
+        @inner.to_s(io, true)
+        io << @mark
+      end
+    end
+
+    # A path as a machine: states, moves along one link of a relation in
+    # one direction, and moves that cost nothing. Following the path is
+    # then a search over pairs of an atom and a state. `inverted` builds
+    # the machine of the path read from its end.
+    class PathAutomaton
+      record Move, relation : String?, forward : Bool, target : Int32
+
+      getter start : Int32
+      getter accept : Int32
+      # The relations the path goes over.
+      getter relations = [] of String?
+
+      def initialize(path : QueryPath, inverted : Bool = false)
+        @moves = [] of Array(Move)
+        @free = [] of Array(Int32)
+        @start, @accept = build(path, inverted)
+        @closures = Array(Array(Int32)?).new(@moves.size, nil)
+      end
+
+      def moves(state : Int32) : Array(Move)
+        @moves[state]
+      end
+
+      # The states reached from one at no cost, itself among them.
+      def closure(state : Int32) : Array(Int32)
+        @closures[state] ||= begin
+          seen = [state]
+          at = 0
+          while at < seen.size
+            @free[seen[at]].each { |other| seen << other unless seen.includes?(other) }
+            at += 1
+          end
+          seen
+        end
+      end
+
+      # Whether the path holds between an atom and itself over no link.
+      def empty? : Bool
+        closure(@start).includes?(@accept)
+      end
+
+      private def state : Int32
+        @moves << [] of Move
+        @free << [] of Int32
+        @moves.size - 1
+      end
+
+      private def build(path : QueryPath, inverted : Bool) : {Int32, Int32}
+        case path
+        when PathStep
+          from, to = state, state
+          @relations << path.relation unless @relations.includes?(path.relation)
+          @moves[from] << Move.new(path.relation, !inverted, to)
+          {from, to}
+        when PathInverse
+          build(path.inner, !inverted)
+        when PathSequence
+          parts = inverted ? path.parts.reverse : path.parts
+          first, last = build(parts[0], inverted)
+          parts.each_with_index do |part, i|
+            next if i == 0
+            from, to = build(part, inverted)
+            @free[last] << from
+            last = to
+          end
+          {first, last}
+        when PathAlternative
+          from, to = state, state
+          path.parts.each do |part|
+            inner_from, inner_to = build(part, inverted)
+            @free[from] << inner_from
+            @free[inner_to] << to
+          end
+          {from, to}
+        when PathRepeat
+          from, to = state, state
+          inner_from, inner_to = build(path.inner, inverted)
+          @free[from] << inner_from
+          @free[inner_to] << to
+          @free[inner_to] << inner_from if path.again?
+          @free[from] << to if path.optional?
+          {from, to}
+        else
+          raise QueryExecutionException.new("Unknown kind of path: #{path.class}")
+        end
+      end
+    end
+
+    # A clause that holds when its path leads from the subject to the
+    # object.
+    class PathClause < QueryClause
+      getter subject : String
+      getter path : QueryPath
+      getter object : String
+
+      def initialize(@subject : String, @path : QueryPath, @object : String)
+      end
+
+      # A path is not one pattern: the executor follows it.
+      def to_atoms(atomspace : AtomSpace::AtomSpace, var_map : Hash(String, AtomSpace::Atom)) : Array(AtomSpace::Atom)
+        [] of AtomSpace::Atom
+      end
+
+      def to_s(io : IO)
+        io << "PathClause(" << @subject << ' '
+        @path.to_s(io)
+        io << ' ' << @object << ')'
       end
     end
 
@@ -618,7 +815,7 @@ module OpenCog
         when '\n'
           advance
           Token.new(:newline, "\n", line, column)
-        when '{', '}', ',', ':', '*', '(', ')', '=', '+', '/'
+        when '{', '}', ',', ':', '*', '(', ')', '=', '+', '/', '^', '|', '?'
           advance
           Token.new(:punctuation, char.to_s, line, column)
         when '.'
@@ -825,43 +1022,8 @@ module OpenCog
           skip_newlines
         end
 
-        order = [] of QueryOrder
-        if word?("ORDER")
-          advance
-          skip_newlines
-          fail("expected BY after ORDER, found #{current.describe}") unless word?("BY")
-          advance
-          loop do
-            skip_newlines
-            value = parse_value(used, declare: false)
-            descending = false
-            if word?("ASC") || word?("DESC")
-              descending = advance.text.upcase == "DESC"
-            end
-            order << QueryOrder.new(value, descending)
-            break unless punctuation?(",")
-            advance
-          end
-          skip_newlines
-        end
-
-        limit = nil
-        offset = nil
-        loop do
-          if keyword?("LIMIT") && limit.nil?
-            advance
-            fail("expected a number after LIMIT, found #{current.describe}") unless current.kind == :integer
-            limit = current.text.to_i? || fail("LIMIT #{current.text} is too large")
-          elsif word?("OFFSET") && offset.nil?
-            advance
-            fail("expected a number after OFFSET, found #{current.describe}") unless current.kind == :integer
-            offset = current.text.to_i? || fail("OFFSET #{current.text} is too large")
-          else
-            break
-          end
-          advance
-          skip_newlines
-        end
+        order = parse_order(used)
+        limit, offset = parse_limits
         if nested
           fail("expected '}' to close the subquery, found #{current.describe}") unless punctuation?("}")
         else
@@ -937,13 +1099,60 @@ module OpenCog
         skip_newlines
         used = [] of String
         blocks = parse_alternatives(used)
+        order = parse_order(used)
+        limit, offset = parse_limits
         fail("expected the end of the query, found #{current.describe}") unless current.kind == :end
 
         wanted.each do |token|
           fail("$#{token.text} is in the template but does not appear in WHERE", token) unless used.includes?(token.text)
         end
         variables = wanted.map(&.text).uniq.map { |name| QueryVariable.new(name) }
-        ParsedQuery.new(variables, blocks, form: :construct, template: template)
+        ParsedQuery.new(variables, blocks, false, limit, order, offset || 0, form: :construct, template: template)
+      end
+
+      # [ ORDER BY key { "," key } ]
+      private def parse_order(used : Array(String)) : Array(QueryOrder)
+        order = [] of QueryOrder
+        return order unless word?("ORDER")
+        advance
+        skip_newlines
+        fail("expected BY after ORDER, found #{current.describe}") unless word?("BY")
+        advance
+        loop do
+          skip_newlines
+          value = parse_value(used, declare: false)
+          descending = false
+          if word?("ASC") || word?("DESC")
+            descending = advance.text.upcase == "DESC"
+          end
+          order << QueryOrder.new(value, descending)
+          break unless punctuation?(",")
+          advance
+        end
+        skip_newlines
+        order
+      end
+
+      # [ LIMIT integer ] [ OFFSET integer ], in either order.
+      private def parse_limits : {Int32?, Int32?}
+        limit = nil
+        offset = nil
+        loop do
+          if keyword?("LIMIT") && limit.nil?
+            advance
+            fail("expected a number after LIMIT, found #{current.describe}") unless current.kind == :integer
+            limit = current.text.to_i? || fail("LIMIT #{current.text} is too large")
+          elsif word?("OFFSET") && offset.nil?
+            advance
+            fail("expected a number after OFFSET, found #{current.describe}") unless current.kind == :integer
+            offset = current.text.to_i? || fail("OFFSET #{current.text} is too large")
+          else
+            break
+          end
+          advance
+          skip_newlines
+        end
+        {limit, offset}
       end
 
       # block { UNION block }, up to what follows the last of them.
@@ -1452,28 +1661,98 @@ module OpenCog
 
       private def parse_clause(used : Array(String), paths : Bool = true) : QueryClause
         first = parse_term(used)
-        if keyword?("ISA") || punctuation?("->") || (current.kind == :name && current.text.downcase == "inherits_from")
-          advance
-          steps = parse_steps(paths)
-          second = parse_term(used)
-          return steps ? PathClause.new(first, nil, second, steps == "*") : InheritanceClause.new(first, second)
+
+        # A variable in the predicate's place makes a plain triple.
+        if current.kind == :variable
+          named = current
+          if PATH_MARKS.any? { |mark| next_is?(mark) }
+            fail("a path follows a named predicate, not $#{named.text}")
+          end
+          predicate = parse_term(used)
+          return TripleClause.new(first, predicate, parse_term(used, "the object of the triple"))
         end
 
-        named = current
-        if named.kind == :variable && (next_is?("+") || next_is?("*"))
-          fail("a path follows a named predicate, not $#{named.text}")
+        path = parse_path(paths)
+        single = path.is_a?(PathRepeat) ? path.inner : path
+        expected = if single.is_a?(PathStep)
+                     single.relation ? "the object of the triple" : "a term"
+                   else
+                     "the end of the path"
+                   end
+        second = parse_term(used, expected)
+        if path.is_a?(PathStep)
+          path.relation.try { |name| TripleClause.new(first, name, second) } || InheritanceClause.new(first, second)
+        else
+          PathClause.new(first, path, second)
         end
-        predicate = parse_term(used, "a predicate, ISA or '->'")
-        steps = parse_steps(paths)
-        object = parse_term(used, "the object of the triple")
-        steps ? PathClause.new(first, predicate, object, steps == "*") : TripleClause.new(first, predicate, object)
       end
 
-      # "+" or "*" after the relation of a clause, which makes it a path.
-      private def parse_steps(allowed : Bool) : String?
-        return nil unless punctuation?("+") || punctuation?("*")
+      PATH_MARKS = {"+", "*", "?", "/", "|"}
+
+      # A template takes single steps: anything that makes a path is
+      # refused there.
+      private def path_mark(allowed : Bool) : Token
         fail("a path cannot be built: the template takes single steps") unless allowed
-        advance.text
+        advance
+      end
+
+      # path := sequence { "|" sequence }
+      private def parse_path(allowed : Bool) : QueryPath
+        parts = [parse_path_sequence(allowed)]
+        while punctuation?("|")
+          path_mark(allowed)
+          parts << parse_path_sequence(allowed)
+        end
+        parts.size == 1 ? parts[0] : PathAlternative.new(parts)
+      end
+
+      # sequence := step { "/" step }
+      private def parse_path_sequence(allowed : Bool) : QueryPath
+        parts = [parse_path_step(allowed)]
+        while punctuation?("/")
+          path_mark(allowed)
+          parts << parse_path_step(allowed)
+        end
+        parts.size == 1 ? parts[0] : PathSequence.new(parts)
+      end
+
+      # step := [ "^" ] ( relation | "(" path ")" ) [ "+" | "*" | "?" ]
+      private def parse_path_step(allowed : Bool) : QueryPath
+        # Where no path can be, and before a variable, a bracket is not
+        # the start of one: `FILTR($x = a)` is a misspelt word, not a path.
+        opens = punctuation?("^") || (punctuation?("(") && @tokens[@position + 1]?.try(&.kind) != :variable)
+        fail("expected a predicate, ISA or '->', found #{current.describe}") if punctuation?("(") && !opens
+        fail("expected a predicate, ISA or '->', found #{current.describe}") if opens && !allowed
+
+        inverse = false
+        if punctuation?("^")
+          advance
+          inverse = true
+        end
+
+        token = current
+        inner = if punctuation?("(")
+                  advance
+                  bracketed = parse_path(allowed)
+                  fail("expected ')' to close the path, found #{current.describe}") unless punctuation?(")")
+                  advance
+                  bracketed
+                elsif keyword?("ISA") || punctuation?("->") || (token.kind == :name && token.text.downcase == "inherits_from")
+                  advance
+                  PathStep.new(nil)
+                elsif token.kind == :name || token.kind == :string || token.kind == :integer
+                  advance
+                  PathStep.new(token.text)
+                elsif token.kind == :variable
+                  fail("a path follows a named predicate, not $#{token.text}")
+                else
+                  fail("expected a predicate, ISA or '->', found #{token.describe}")
+                end
+
+        if punctuation?("+") || punctuation?("*") || punctuation?("?")
+          inner = PathRepeat.new(inner, path_mark(allowed).text)
+        end
+        inverse ? PathInverse.new(inner) : inner
       end
 
       # A term as the clause classes take it: "$name" for a variable, the
@@ -1514,24 +1793,7 @@ module OpenCog
           end
         end
 
-        if query.order.empty?
-          # Sort by confidence descending
-          rows.sort! { |a, b| b[1] <=> a[1] }
-        else
-          # The values ORDER BY sorts on are taken before a result is cut
-          # down to what SELECT lists.
-          keyed = rows.map { |row| {row, query.order.map(&.value.evaluate(row[0]))} }
-          keyed.sort! do |a, b|
-            order = 0
-            query.order.each_with_index do |key, i|
-              order = compare_keys(a[1][i], b[1][i])
-              order = -order if key.descending
-              break unless order == 0
-            end
-            order
-          end
-          rows = keyed.map(&.[0])
-        end
+        rows = ordering(query, rows.map(&.[0]), rows.map(&.[1])).map { |i| rows[i] }
 
         selected = query.columns
         results = rows.map do |(bindings, confidence)|
@@ -1570,8 +1832,16 @@ module OpenCog
       def construct(query : ParsedQuery, into : AtomSpace::AtomSpace? = nil) : Array(AtomSpace::Atom)
         raise QueryExecutionException.new("Not a CONSTRUCT query") unless query.form == :construct
 
+        # ORDER BY, OFFSET and LIMIT choose among the matches, as they do
+        # among the results of a SELECT.
+        found = matches(query)
+        chosen = ordering(query, found.map(&.[0]), found.map { |(_, matched)| calculate_confidence(matched) })
+        chosen = chosen.skip(query.offset) if query.offset > 0
+        query.limit.try { |limit| chosen = chosen.first(limit) }
+
         built = {} of String => AtomSpace::Atom
-        matches(query).each do |(bindings, matched)|
+        chosen.each do |index|
+          bindings, matched = found[index]
           truth = if matched.empty?
                     AtomSpace::TruthValue::DEFAULT_TV
                   else
@@ -1593,6 +1863,29 @@ module OpenCog
 
       private def matches(query : ParsedQuery) : Array(Solution)
         query.blocks.flat_map { |block| solve_block(block, query.variables) }
+      end
+
+      # The order a query asks for, as positions in its rows: by the
+      # ORDER BY keys, or without them by falling confidence. The keys are
+      # read from all a row binds, not only what is selected.
+      private def ordering(query : ParsedQuery, bindings : Array(Hash(String, AtomSpace::Atom)),
+                           confidences : Array(Float64)) : Array(Int32)
+        positions = (0...bindings.size).to_a
+        if query.order.empty?
+          positions.sort! { |a, b| confidences[b] <=> confidences[a] }
+        else
+          keys = bindings.map { |bound| query.order.map(&.value.evaluate(bound)) }
+          positions.sort! do |a, b|
+            order = 0
+            query.order.each_with_index do |key, i|
+              order = compare_keys(keys[a][i], keys[b][i])
+              order = -order if key.descending
+              break unless order == 0
+            end
+            order
+          end
+        end
+        positions
       end
 
       # One template clause with the values of a match in place of its
@@ -1852,12 +2145,13 @@ module OpenCog
         found
       end
 
-      # The single steps of a path's relation: from, to, and the link that
-      # says so.
-      private def path_steps(clause : PathClause, var_map : Hash(String, AtomSpace::Atom)) : Array({AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom})
+      # The single links of a relation: from, to, and the link that says
+      # so. Inheritance links when no relation is named, else the triples
+      # of that predicate.
+      private def path_steps(relation : String?, var_map : Hash(String, AtomSpace::Atom)) : Array({AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom})
         steps = [] of {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom}
-        if name = clause.predicate
-          predicate = QueryLanguage.resolve_term(name, @atomspace, var_map, AtomSpace::AtomType::PREDICATE_NODE)
+        if relation
+          predicate = QueryLanguage.resolve_term(relation, @atomspace, var_map, AtomSpace::AtomType::PREDICATE_NODE)
           return steps unless @atomspace.contains?(predicate)
           @atomspace.get_incoming(predicate).each do |link|
             next unless link.type == AtomSpace::AtomType::EVALUATION_LINK
@@ -1889,53 +2183,45 @@ module OpenCog
         known.map { |(bound, _)| bound[name] }.uniq(&.handle)
       end
 
+      # The links of each relation of a path, by the atom they leave and
+      # by the atom they reach.
+      alias PathLinks = Hash(String?, Hash(AtomSpace::Handle, Array({AtomSpace::Atom, AtomSpace::Atom})))
+
       # Every pair of atoms a path joins, with the links of a shortest
-      # chain between them as what was matched. The search goes breadth
-      # first from whichever end is given, forwards by preference.
+      # way between them as what was matched. The search goes breadth
+      # first from whichever end is given, forwards by preference; from
+      # the far end the path is read backwards.
       private def path_solutions(clause : PathClause, var_map : Hash(String, AtomSpace::Atom),
                                  type_constraints : Array(PatternMatching::TypeConstraint),
                                  known : Array(Solution)) : Array(Solution)
-        onward = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
-        back = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
-        touched = {} of AtomSpace::Handle => AtomSpace::Atom
-        path_steps(clause, var_map).each do |(from, to, link)|
-          (onward[from.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {to, link}
-          (back[to.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {from, link}
-          touched[from.handle] = from
-          touched[to.handle] = to
-        end
-
         starts = path_end(clause.subject, var_map, known)
         ends = path_end(clause.object, var_map, known)
         forwards = !starts.nil? || ends.nil?
+        automaton = PathAutomaton.new(clause.path, inverted: !forwards)
+
+        onward = PathLinks.new
+        back = PathLinks.new
+        touched = {} of AtomSpace::Handle => AtomSpace::Atom
+        automaton.relations.each do |relation|
+          leaving = onward[relation] = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+          reaching = back[relation] = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+          path_steps(relation, var_map).each do |(from, to, link)|
+            (leaving[from.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {to, link}
+            (reaching[to.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {from, link}
+            touched[from.handle] = from
+            touched[to.handle] = to
+          end
+        end
+
         origins = (forwards ? starts : ends) || touched.values
         allowed = (forwards ? ends : starts).try(&.map(&.handle).to_set)
-        edges = forwards ? onward : back
-
         subject = clause.subject.starts_with?('$') ? clause.subject.lchop('$') : nil
         object = clause.object.starts_with?('$') ? clause.object.lchop('$') : nil
         typed = type_constraints.map { |constraint| {constraint.variable.name.lchop('$'), constraint.allowed_types} }
 
         solutions = [] of Solution
         origins.each do |origin|
-          reached = reach(origin, edges)
-          found = [] of {AtomSpace::Atom, Array(AtomSpace::Atom)}
-          found << {origin, [] of AtomSpace::Atom} if clause.zero?
-          reached.each do |handle, (atom, _, _)|
-            next if clause.zero? && handle == origin.handle
-            links = [] of AtomSpace::Atom
-            at = handle
-            loop do
-              _, link, before = reached[at]
-              links << link
-              break if before == origin.handle
-              at = before
-            end
-            links.reverse! if forwards
-            found << {atom, links}
-          end
-
-          found.each do |(other, links)|
+          reach(origin, automaton, onward, back).each do |(other, links)|
             next if allowed && !allowed.includes?(other.handle)
             from, to = forwards ? {origin, other} : {other, origin}
             next if subject && subject == object && from.handle != to.handle
@@ -1943,27 +2229,56 @@ module OpenCog
             bound[subject] = from if subject
             bound[object] = to if object
             next unless typed.all? { |(name, types)| (atom = bound[name]?).nil? || types.includes?(atom.type) }
-            solutions << {bound, links}
+            # The links in the order the path goes over them.
+            solutions << {bound, forwards ? links.reverse : links}
           end
         end
         solutions
       end
 
-      # Every atom that steps lead to from an origin, each with the link
-      # of its last step and the atom that step left from.
-      private def reach(origin : AtomSpace::Atom,
-                        edges : Hash(AtomSpace::Handle, Array({AtomSpace::Atom, AtomSpace::Atom}))) : Hash(AtomSpace::Handle, {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Handle})
-        reached = {} of AtomSpace::Handle => {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Handle}
-        waiting = Deque{origin}
+      # Every atom the path's machine accepts from an origin, each once
+      # with the links of a shortest way there, last link first. An atom
+      # the path joins to itself over no link comes with no links, and
+      # not a second time for a way round a circle.
+      private def reach(origin : AtomSpace::Atom, automaton : PathAutomaton,
+                        onward : PathLinks, back : PathLinks) : Array({AtomSpace::Atom, Array(AtomSpace::Atom)})
+        seen = Set({AtomSpace::Handle, Int32}).new
+        # How each pair of atom and state was first come to: the pair
+        # before it and the link gone over.
+        came = {} of {AtomSpace::Handle, Int32} => { {AtomSpace::Handle, Int32}, AtomSpace::Atom }
+        accepted = {} of AtomSpace::Handle => {AtomSpace::Atom, {AtomSpace::Handle, Int32}?}
+        waiting = Deque({AtomSpace::Atom, Int32}).new
+
+        automaton.closure(automaton.start).each do |state|
+          seen << {origin.handle, state}
+          waiting << {origin, state}
+        end
+        accepted[origin.handle] = {origin, nil} if automaton.empty?
+
         until waiting.empty?
-          at = waiting.shift
-          edges[at.handle]?.try &.each do |(to, link)|
-            next if reached.has_key?(to.handle)
-            reached[to.handle] = {to, link, at.handle}
-            waiting << to
+          atom, state = waiting.shift
+          automaton.moves(state).each do |move|
+            links = (move.forward ? onward : back)[move.relation]?.try(&.[atom.handle]?) || next
+            links.each do |(to, link)|
+              automaton.closure(move.target).each do |after|
+                pair = {to.handle, after}
+                next unless seen.add?(pair)
+                came[pair] = { {atom.handle, state}, link }
+                waiting << {to, after}
+                accepted[to.handle] = {to, pair} if after == automaton.accept && !accepted.has_key?(to.handle)
+              end
+            end
           end
         end
-        reached
+
+        accepted.values.map do |(atom, pair)|
+          links = [] of AtomSpace::Atom
+          while pair && (step = came[pair]?)
+            links << step[1]
+            pair = step[0]
+          end
+          {atom, links}
+        end
       end
 
       # Every pairing of a solution from each side that agrees on the

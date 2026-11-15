@@ -145,11 +145,12 @@ describe PatternMining::ConjunctionMiner do
     drinkers.support.should eq(3)
     # Three concepts like water and three are plants. Were the two
     # unrelated, a liker of water would be a given plant once in as many
-    # tries as there are concepts: 3 * 3 / concepts groundings, not the 3
-    # there are. Links and predicates are not what $v1 could have been.
-    concepts = diets.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE).size
-    concepts.should eq(13)
-    drinkers.surprisingness.should be_close(1 - (3 * 3 / concepts.to_f) / 3, 1e-12)
+    # tries as there are atoms $v1 could have been: the nine that inherit
+    # from something, the three that like something being among them.
+    # That expects 3 * 3 / 9 groundings, not the 3 there are. The kinds
+    # themselves, meat and water are concepts too, but never in $v1's place.
+    diets.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE).size.should eq(13)
+    drinkers.surprisingness.should be_close(1 - (3 * 3 / 9.0) / 3, 1e-12)
 
     # Nothing eats meat and is a plant.
     found.keys.none? { |key| key.includes?("meat") && key.includes?("plant") }.should be_true
@@ -201,8 +202,9 @@ describe PatternMining::ConjunctionMiner do
     # "carnivore and eats meat" (4) together and takes "animal" (6) as
     # unrelated: 4 * 6 / atoms. Three unrelated clauses would expect far
     # fewer, 6 * 4 * 4 / atoms squared, and so look more surprising. The
-    # atoms that count are the concepts, which is all $v1 ever names.
-    atoms = space.get_atoms_by_type(AtomSpace::AtomType::CONCEPT_NODE).size.to_f
+    # atoms that count are the nine that inherit from something or eat
+    # something, which is where $v1 stands.
+    atoms = 9.0
     wanted.surprisingness.should be_close(1 - (4 * 6 / atoms) / 4, 1e-12)
     wanted.surprisingness.should be < 1 - (6 * 4 * 4 / (atoms * atoms)) / 4
     triples.each { |conjunction| (0.0..1.0).includes?(conjunction.surprisingness).should be_true }
@@ -239,6 +241,36 @@ describe "PatternMining conjunction surprisingness" do
     # a little more than the two there are.
     grandparent.surprisingness.should be_close(1 - 2 / (4 * 4 / 6.0), 1e-12)
     grandparent.surprisingness.should be_close(0.25, 1e-12)
+  end
+
+  it "weighs a variable against what fills its place, and nothing else" do
+    space = AtomSpace::AtomSpace.new
+    parent = space.add_predicate_node("parent")
+    people = %w(ann bob cy dee eve fay).map { |name| space.add_concept_node(name) }
+    [{0, 1}, {1, 2}, {3, 4}, {4, 5}].each do |(older, younger)|
+      space.add_evaluation_link(parent, space.add_list_link([people[older], people[younger]] of AtomSpace::Atom))
+    end
+    x, y, z = %w($x $y $z).map { |name| AtomSpace::VariableNode.new(name).as(AtomSpace::Atom) }
+    pattern = PatternMatching::Pattern.new(AtomSpace::Link.new(AtomSpace::AtomType::EVALUATION_LINK,
+      [parent.as(AtomSpace::Atom), AtomSpace::Link.new(AtomSpace::AtomType::LIST_LINK, [x, y]).as(AtomSpace::Atom)]).as(AtomSpace::Atom))
+    score = -> do
+      chains = PatternMining::ConjunctionMiner.new(space, min_support: 2).mine([pattern])
+      chains.find { |conjunction| conjunction.variables.size == 3 }.not_nil!.surprisingness
+    end
+    score.call.should be_close(0.25, 1e-12)
+
+    # Concepts that are nobody's parent or child, and people in another
+    # relation, are not who the middle person could have been.
+    towns = %w(york bath hull ely).map { |name| space.add_concept_node(name) }
+    near = space.add_predicate_node("near")
+    space.add_evaluation_link(near, space.add_list_link([towns[0], towns[1]] of AtomSpace::Atom))
+    space.add_evaluation_link(near, space.add_list_link([towns[2], towns[3]] of AtomSpace::Atom))
+    score.call.should be_close(0.25, 1e-12)
+
+    # Two more people in the same relation are. Five parent links each
+    # way and eight people: 25 / 8 chains expected, two found.
+    space.add_evaluation_link(parent, space.add_list_link([space.add_concept_node("gil"), space.add_concept_node("hal")] of AtomSpace::Atom))
+    score.call.should be_close(1 - 2 / (25 / 8.0), 1e-12)
   end
 
   it "measures a deviation as a share of the larger side" do
