@@ -3,7 +3,12 @@
 #
 # Grammar (keywords in any case; `#` starts a comment):
 #
-#   query     := SELECT [DISTINCT] ( "*" | item { [","] item } )
+#   query     := select | ask | construct
+#   ask       := ASK [WHERE] block { UNION block }
+#   construct := CONSTRUCT "{" template { ( "." | newline ) template } "}"
+#                WHERE block { UNION block }
+#   template  := term ( ISA | inherits_from | "->" ) term | term term term
+#   select    := SELECT [DISTINCT] ( "*" | item { [","] item } )
 #                WHERE block { UNION block }
 #                [ GROUP BY "$" name { [","] "$" name } ]
 #                [ HAVING "(" condition ")" ]
@@ -15,8 +20,8 @@
 #              | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 #   variable  := "$" name [ ":" type ]
 #   block     := "{" clause { ( "." | newline ) clause } "}"
-#   clause    := term ( ISA | inherits_from | "->" ) term
-#              | term term term                    (subject predicate object)
+#   clause    := term ( ISA | inherits_from | "->" ) [steps] term
+#              | term term [steps] term            (subject predicate object)
 #              | OPTIONAL "{" clauses "}"
 #              | FILTER "(" condition ")"
 #              | BIND "(" value AS "$" name ")"
@@ -25,6 +30,7 @@
 #              | MINUS block
 #              | VALUES "$" name "{" { term | UNDEF } "}"
 #              | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
+#   steps     := "+" | "*"         (one or more steps; none or more)
 #   term      := "$" name | name | "quoted name"
 #   condition := condition OR condition | condition AND condition
 #              | NOT condition | "(" condition ")"
@@ -44,8 +50,16 @@
 # keywords are read as such only where the grammar expects them, so `order`
 # or `filter` can still name a concept.
 #
+# A clause with steps is a path: `$x ISA+ Animal` holds when a chain of
+# inheritance links leads from $x to Animal, and `$a part_of* $b` when a
+# chain of part_of triples does, or when $a and $b are the same atom.
+#
+# ASK says whether anything matches. CONSTRUCT builds the atoms of its
+# template once for each match.
+#
 # Running a query does not change the AtomSpace: its patterns are built
-# beside it.
+# beside it, and so is what CONSTRUCT builds unless it is told where to
+# put it.
 
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
@@ -180,6 +194,34 @@ module OpenCog
         io << "InheritanceClause(#{@child} -> #{@parent})"
       end
     end
+
+    # A path: the relation of a clause followed for any number of steps.
+    # Without a predicate the steps are inheritance links, with one they
+    # are triples of that predicate. `zero` lets the path be no step at
+    # all, which relates an atom to itself.
+    class PathClause < QueryClause
+      getter subject : String
+      getter predicate : String?
+      getter object : String
+      getter? zero : Bool
+
+      def initialize(@subject : String, @predicate : String?, @object : String, @zero : Bool = false)
+      end
+
+      # One step of the path as a pattern. The executor follows the steps
+      # itself; this is what the clause looks like to anything else.
+      def to_atoms(atomspace : AtomSpace::AtomSpace, var_map : Hash(String, AtomSpace::Atom)) : Array(AtomSpace::Atom)
+        step = @predicate.try { |name| TripleClause.new(@subject, name, @object) } || InheritanceClause.new(@subject, @object)
+        step.to_atoms(atomspace, var_map)
+      end
+
+      def to_s(io : IO)
+        io << "PathClause(#{@subject} #{@predicate || "ISA"}#{@zero ? '*' : '+'} #{@object})"
+      end
+    end
+
+    # One way a block matches: its variables by name, and the atoms matched.
+    alias Solution = {Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)}
 
     # What a FILTER or ORDER BY looks at: a variable, a literal, or a
     # property of the atom a variable is bound to.
@@ -439,6 +481,10 @@ module OpenCog
       getter having : Array(QueryCondition)
       # The names a result carries, in the order SELECT lists them.
       getter columns : Array(String)
+      # :select, :ask or :construct.
+      getter form : Symbol
+      # What a CONSTRUCT query builds for each match.
+      getter template : Array(QueryClause)
 
       def initialize(@variables : Array(QueryVariable), @blocks : Array(QueryBlock),
                      @distinct : Bool = false, @limit : Int32? = nil,
@@ -447,7 +493,9 @@ module OpenCog
                      @aggregates : Array(QueryAggregate) = [] of QueryAggregate,
                      @group_by : Array(String) = [] of String,
                      @having : Array(QueryCondition) = [] of QueryCondition,
-                     columns : Array(String)? = nil)
+                     columns : Array(String)? = nil,
+                     @form : Symbol = :select,
+                     @template : Array(QueryClause) = [] of QueryClause)
         @columns = columns || @variables.map(&.name)
       end
 
@@ -712,8 +760,13 @@ module OpenCog
 
       def parse(nested : Bool = false) : ParsedQuery
         skip_newlines
+        unless nested
+          return parse_ask if word?("ASK") && (next_is?("{") || keyword_at?(1, "WHERE") || newline_at?(1))
+          return parse_construct if word?("CONSTRUCT") && (next_is?("{") || newline_at?(1))
+        end
         unless keyword?("SELECT")
-          raise QueryParseException.new("Query must start with SELECT, found #{current.describe} at #{where(current)}")
+          expected = nested ? "SELECT" : "SELECT, ASK or CONSTRUCT"
+          raise QueryParseException.new("Query must start with #{expected}, found #{current.describe} at #{where(current)}")
         end
         advance
         skip_newlines
@@ -744,16 +797,7 @@ module OpenCog
         skip_newlines
 
         used = [] of String
-        blocks = [parse_block(used)]
-        loop do
-          skip_newlines
-          break unless word?("UNION")
-          advance
-          skip_newlines
-          blocks << parse_block(used)
-        end
-
-        skip_newlines
+        blocks = parse_alternatives(used)
         group_by = [] of String
         if word?("GROUP") && word?("BY", 1)
           advance
@@ -846,6 +890,74 @@ module OpenCog
         end
 
         ParsedQuery.new(variables, blocks, distinct, limit, order, offset || 0, aggregates, group_by, having, columns)
+      end
+
+      # ASK [WHERE] block { UNION block }
+      private def parse_ask : ParsedQuery
+        advance
+        skip_newlines
+        if keyword?("WHERE")
+          advance
+          skip_newlines
+        end
+        blocks = parse_alternatives([] of String)
+        fail("expected the end of the query, found #{current.describe}") unless current.kind == :end
+        ParsedQuery.new([] of QueryVariable, blocks, form: :ask)
+      end
+
+      # CONSTRUCT "{" template "}" WHERE block { UNION block }
+      private def parse_construct : ParsedQuery
+        advance
+        skip_newlines
+        fail("expected '{' after CONSTRUCT, found #{current.describe}") unless punctuation?("{")
+        advance
+        wanted = [] of Token
+        template = [] of QueryClause
+        loop do
+          while current.kind == :newline || punctuation?(".")
+            advance
+          end
+          break if punctuation?("}")
+          fail("expected '}' to close the template, found #{current.describe}") if current.kind == :end
+          first = @position
+          template << parse_clause([] of String, paths: false)
+          @tokens[first...@position].each { |token| wanted << token if token.kind == :variable }
+          unless current.kind == :newline || punctuation?(".") || punctuation?("}")
+            fail("expected '.', a line break or '}' after the clause, found #{current.describe}")
+          end
+        end
+        closing = advance
+        fail("CONSTRUCT needs at least one clause", closing) if template.empty?
+        skip_newlines
+
+        unless keyword?("WHERE")
+          raise QueryParseException.new("Missing WHERE clause: expected WHERE, found #{current.describe} at #{where(current)}")
+        end
+        advance
+        skip_newlines
+        used = [] of String
+        blocks = parse_alternatives(used)
+        fail("expected the end of the query, found #{current.describe}") unless current.kind == :end
+
+        wanted.each do |token|
+          fail("$#{token.text} is in the template but does not appear in WHERE", token) unless used.includes?(token.text)
+        end
+        variables = wanted.map(&.text).uniq.map { |name| QueryVariable.new(name) }
+        ParsedQuery.new(variables, blocks, form: :construct, template: template)
+      end
+
+      # block { UNION block }, up to what follows the last of them.
+      private def parse_alternatives(used : Array(String)) : Array(QueryBlock)
+        blocks = [parse_block(used)]
+        loop do
+          skip_newlines
+          break unless word?("UNION")
+          advance
+          skip_newlines
+          blocks << parse_block(used)
+        end
+        skip_newlines
+        blocks
       end
 
       AGGREGATES = {"COUNT" => :count, "SUM" => :sum, "AVG" => :avg, "MIN" => :min, "MAX" => :max}
@@ -965,6 +1077,15 @@ module OpenCog
       private def next_is?(text : String) : Bool
         token = @tokens[@position + 1]? || return false
         token.kind == :punctuation && token.text == text
+      end
+
+      private def keyword_at?(offset : Int32, word : String) : Bool
+        token = @tokens[@position + offset]? || return false
+        token.kind == :keyword && token.text == word
+      end
+
+      private def newline_at?(offset : Int32) : Bool
+        @tokens[@position + offset]?.try(&.kind) == :newline
       end
 
       private def skip_newlines : Nil
@@ -1161,6 +1282,7 @@ module OpenCog
         terms = case clause
                 when TripleClause      then [clause.subject, clause.predicate, clause.object]
                 when InheritanceClause then [clause.child, clause.parent]
+                when PathClause        then [clause.subject, clause.object]
                 else                        [] of String | AtomSpace::Atom
                 end
         terms.compact_map { |term| term.is_a?(String) && term.starts_with?('$') ? term.lchop('$') : nil }
@@ -1328,16 +1450,30 @@ module OpenCog
         end
       end
 
-      private def parse_clause(used : Array(String)) : QueryClause
+      private def parse_clause(used : Array(String), paths : Bool = true) : QueryClause
         first = parse_term(used)
         if keyword?("ISA") || punctuation?("->") || (current.kind == :name && current.text.downcase == "inherits_from")
           advance
-          return InheritanceClause.new(first, parse_term(used))
+          steps = parse_steps(paths)
+          second = parse_term(used)
+          return steps ? PathClause.new(first, nil, second, steps == "*") : InheritanceClause.new(first, second)
         end
 
+        named = current
+        if named.kind == :variable && (next_is?("+") || next_is?("*"))
+          fail("a path follows a named predicate, not $#{named.text}")
+        end
         predicate = parse_term(used, "a predicate, ISA or '->'")
+        steps = parse_steps(paths)
         object = parse_term(used, "the object of the triple")
-        TripleClause.new(first, predicate, object)
+        steps ? PathClause.new(first, predicate, object, steps == "*") : TripleClause.new(first, predicate, object)
+      end
+
+      # "+" or "*" after the relation of a clause, which makes it a path.
+      private def parse_steps(allowed : Bool) : String?
+        return nil unless punctuation?("+") || punctuation?("*")
+        fail("a path cannot be built: the template takes single steps") unless allowed
+        advance.text
       end
 
       # A term as the clause classes take it: "$name" for a variable, the
@@ -1369,12 +1505,7 @@ module OpenCog
 
       # Execute a parsed query and return results
       def execute(query : ParsedQuery) : Array(Query::QueryResult)
-        rows = [] of {Hash(String, AtomSpace::Atom), Float64}
-        query.blocks.each do |block|
-          solve_block(block, query.variables).each do |(bindings, matched)|
-            rows << {bindings, calculate_confidence(matched)}
-          end
-        end
+        rows = matches(query).map { |(bindings, matched)| {bindings, calculate_confidence(matched)} }
 
         if query.grouped?
           rows = aggregate(query, rows)
@@ -1413,8 +1544,101 @@ module OpenCog
         end
         results = results.skip(query.offset) if query.offset > 0
         query.limit.try { |limit| results = results.first(limit) }
+        # ASK has nothing to list: one empty result says yes, none says no.
+        results = results.first(1) if query.form == :ask
 
         results
+      end
+
+      # Whether the query matches anything.
+      def ask(query : ParsedQuery) : Bool
+        query.blocks.any? { |block| !solve_block(block, query.variables).empty? }
+      end
+
+      # The atoms a CONSTRUCT query builds: its template filled in once for
+      # each match, each distinct atom once. A template clause is left out
+      # for a match that gives one of its variables no value.
+      #
+      # A built atom is as strong as the weakest atom its match rests on,
+      # and as confident as the match (the mean confidence of those atoms).
+      # Where several matches build the same atom, the most confident one
+      # is kept.
+      #
+      # The atoms stand beside the AtomSpace unless `into` names one to add
+      # them to (the queried one or another), which then merges them with
+      # what it already holds in its usual way.
+      def construct(query : ParsedQuery, into : AtomSpace::AtomSpace? = nil) : Array(AtomSpace::Atom)
+        raise QueryExecutionException.new("Not a CONSTRUCT query") unless query.form == :construct
+
+        built = {} of String => AtomSpace::Atom
+        matches(query).each do |(bindings, matched)|
+          truth = if matched.empty?
+                    AtomSpace::TruthValue::DEFAULT_TV
+                  else
+                    AtomSpace::SimpleTruthValue.new(matched.min_of(&.truth_value.strength), calculate_confidence(matched))
+                  end
+          query.template.each do |clause|
+            atom = build(clause, bindings, truth) || next
+            shape = shape_of(atom)
+            existing = built[shape]?
+            built[shape] = atom if existing.nil? || atom.truth_value.confidence > existing.truth_value.confidence
+          end
+        end
+        atoms = built.values
+        return atoms unless into
+        stored = [] of AtomSpace::Atom
+        atoms.each { |atom| stored << store(atom, into) }
+        stored
+      end
+
+      private def matches(query : ParsedQuery) : Array(Solution)
+        query.blocks.flat_map { |block| solve_block(block, query.variables) }
+      end
+
+      # One template clause with the values of a match in place of its
+      # variables, or nil when a variable has none.
+      private def build(clause : QueryClause, bindings : Hash(String, AtomSpace::Atom), truth : AtomSpace::TruthValue) : AtomSpace::Atom?
+        case clause
+        when InheritanceClause
+          child = template_term(clause.child, bindings) || return nil
+          parent = template_term(clause.parent, bindings) || return nil
+          AtomSpace::InheritanceLink.new(child, parent, truth)
+        when TripleClause
+          subject = template_term(clause.subject, bindings) || return nil
+          predicate = template_term(clause.predicate, bindings, AtomSpace::AtomType::PREDICATE_NODE) || return nil
+          object = template_term(clause.object, bindings) || return nil
+          AtomSpace::EvaluationLink.new(predicate, AtomSpace::ListLink.new([subject, object]), truth)
+        end
+      end
+
+      private def template_term(term : String | AtomSpace::Atom, bindings : Hash(String, AtomSpace::Atom),
+                                preferred : AtomSpace::AtomType = AtomSpace::AtomType::CONCEPT_NODE) : AtomSpace::Atom?
+        return bindings[term.lchop('$')]? if term.is_a?(String) && term.starts_with?('$')
+        QueryLanguage.resolve_term(term, @atomspace, Hash(String, AtomSpace::Atom).new, preferred)
+      end
+
+      # What makes two built atoms the same atom.
+      private def shape_of(atom : AtomSpace::Atom) : String
+        return "#{atom.type}:#{atom.name}" unless atom.link?
+        parts = [] of String
+        atom.outgoing.each { |child| parts << shape_of(child) }
+        "(#{atom.type} #{parts.join(" ")})"
+      end
+
+      # Add a built atom to an AtomSpace, parts first. A node that is
+      # already there is used as it is.
+      private def store(atom : AtomSpace::Atom, space : AtomSpace::AtomSpace) : AtomSpace::Atom
+        unless atom.link?
+          return space.get_nodes_by_name(atom.name, atom.type).first? || space.add_node(atom.type, atom.name, atom.truth_value)
+        end
+        parts = [] of AtomSpace::Atom
+        atom.outgoing.each { |child| parts << store(child, space) }
+        case atom.type
+        when AtomSpace::AtomType::INHERITANCE_LINK then space.add_inheritance_link(parts[0], parts[1], atom.truth_value)
+        when AtomSpace::AtomType::EVALUATION_LINK  then space.add_evaluation_link(parts[0], parts[1], atom.truth_value)
+        when AtomSpace::AtomType::LIST_LINK        then space.add_list_link(parts, atom.truth_value)
+        else                                            space.add_link(atom.type, parts, atom.truth_value)
+        end
       end
 
       private def in_order(bindings : Hash(String, AtomSpace::Atom), names : Array(String)) : Hash(String, AtomSpace::Atom)
@@ -1524,7 +1748,6 @@ module OpenCog
       # FILTER conditions applied.
       private def solve_block(block : QueryBlock, variables : Array(QueryVariable)) : Array({Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)})
         var_map = Hash(String, AtomSpace::Atom).new
-        pattern_atoms = block.clauses.flat_map(&.to_atoms(@atomspace, var_map))
         empty = [] of {Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)}
         return empty unless block.matches_something?
 
@@ -1538,8 +1761,8 @@ module OpenCog
         # Match each clause on its own, then natural-join the solutions on
         # shared variable names (a conjunctive query).
         solutions = [{Hash(String, AtomSpace::Atom).new, Array(AtomSpace::Atom).new}]
-        pattern_atoms.each do |template|
-          solutions = join(solutions, solve(template, type_constraints))
+        block.clauses.each do |clause|
+          solutions = join(solutions, clause_solutions(clause, var_map, type_constraints, solutions))
           return empty if solutions.empty?
         end
 
@@ -1573,15 +1796,13 @@ module OpenCog
         # OPTIONAL clauses add bindings where they match and leave a
         # solution as it is where they do not (a left join).
         block.optional_clauses.each do |clause|
-          clause.to_atoms(@atomspace, var_map).each do |template|
-            optional_solutions = solve(template, type_constraints)
-            solutions = solutions.flat_map do |(bound, matched)|
-              extended = optional_solutions.compact_map do |(clause_bound, clause_matched)|
-                next unless clause_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing == atom }
-                {bound.merge(clause_bound), matched + clause_matched}
-              end
-              extended.empty? ? [{bound, matched}] : extended
+          optional_solutions = clause_solutions(clause, var_map, type_constraints, solutions)
+          solutions = solutions.flat_map do |(bound, matched)|
+            extended = optional_solutions.compact_map do |(clause_bound, clause_matched)|
+              next unless clause_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing == atom }
+              {bound.merge(clause_bound), matched + clause_matched}
             end
+            extended.empty? ? [{bound, matched}] : extended
           end
         end
 
@@ -1615,6 +1836,134 @@ module OpenCog
           solutions.select! { |(bound, _)| condition.holds?(bound) }
         end
         solutions
+      end
+
+      # Every way one clause matches. `known` is what the block has matched
+      # so far, which tells a path where it need not look.
+      private def clause_solutions(clause : QueryClause, var_map : Hash(String, AtomSpace::Atom),
+                                   type_constraints : Array(PatternMatching::TypeConstraint),
+                                   known : Array(Solution)) : Array(Solution)
+        return path_solutions(clause, var_map, type_constraints, known) if clause.is_a?(PathClause)
+
+        found = [{Hash(String, AtomSpace::Atom).new, Array(AtomSpace::Atom).new}]
+        clause.to_atoms(@atomspace, var_map).each do |template|
+          found = join(found, solve(template, type_constraints))
+        end
+        found
+      end
+
+      # The single steps of a path's relation: from, to, and the link that
+      # says so.
+      private def path_steps(clause : PathClause, var_map : Hash(String, AtomSpace::Atom)) : Array({AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom})
+        steps = [] of {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom}
+        if name = clause.predicate
+          predicate = QueryLanguage.resolve_term(name, @atomspace, var_map, AtomSpace::AtomType::PREDICATE_NODE)
+          return steps unless @atomspace.contains?(predicate)
+          @atomspace.get_incoming(predicate).each do |link|
+            next unless link.type == AtomSpace::AtomType::EVALUATION_LINK
+            parts = link.outgoing
+            next unless parts.size == 2 && parts[0].handle == predicate.handle
+            next unless parts[1].type == AtomSpace::AtomType::LIST_LINK
+            ends = parts[1].outgoing
+            steps << {ends[0], ends[1], link} if ends.size == 2
+          end
+        else
+          @atomspace.get_atoms_by_type(AtomSpace::AtomType::INHERITANCE_LINK).each do |link|
+            parts = link.outgoing
+            steps << {parts[0], parts[1], link} if parts.size == 2
+          end
+        end
+        steps
+      end
+
+      # Where one end of a path may be: the atom a name stands for, the
+      # values every match so far gives its variable, or anywhere (nil).
+      # A name the AtomSpace does not know is nowhere.
+      private def path_end(term : String, var_map : Hash(String, AtomSpace::Atom), known : Array(Solution)) : Array(AtomSpace::Atom)?
+        unless term.starts_with?('$')
+          atom = QueryLanguage.resolve_term(term, @atomspace, var_map)
+          return @atomspace.contains?(atom) ? [atom] : [] of AtomSpace::Atom
+        end
+        name = term.lchop('$')
+        return nil unless known.all? { |(bound, _)| bound.has_key?(name) }
+        known.map { |(bound, _)| bound[name] }.uniq(&.handle)
+      end
+
+      # Every pair of atoms a path joins, with the links of a shortest
+      # chain between them as what was matched. The search goes breadth
+      # first from whichever end is given, forwards by preference.
+      private def path_solutions(clause : PathClause, var_map : Hash(String, AtomSpace::Atom),
+                                 type_constraints : Array(PatternMatching::TypeConstraint),
+                                 known : Array(Solution)) : Array(Solution)
+        onward = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+        back = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+        touched = {} of AtomSpace::Handle => AtomSpace::Atom
+        path_steps(clause, var_map).each do |(from, to, link)|
+          (onward[from.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {to, link}
+          (back[to.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {from, link}
+          touched[from.handle] = from
+          touched[to.handle] = to
+        end
+
+        starts = path_end(clause.subject, var_map, known)
+        ends = path_end(clause.object, var_map, known)
+        forwards = !starts.nil? || ends.nil?
+        origins = (forwards ? starts : ends) || touched.values
+        allowed = (forwards ? ends : starts).try(&.map(&.handle).to_set)
+        edges = forwards ? onward : back
+
+        subject = clause.subject.starts_with?('$') ? clause.subject.lchop('$') : nil
+        object = clause.object.starts_with?('$') ? clause.object.lchop('$') : nil
+        typed = type_constraints.map { |constraint| {constraint.variable.name.lchop('$'), constraint.allowed_types} }
+
+        solutions = [] of Solution
+        origins.each do |origin|
+          reached = reach(origin, edges)
+          found = [] of {AtomSpace::Atom, Array(AtomSpace::Atom)}
+          found << {origin, [] of AtomSpace::Atom} if clause.zero?
+          reached.each do |handle, (atom, _, _)|
+            next if clause.zero? && handle == origin.handle
+            links = [] of AtomSpace::Atom
+            at = handle
+            loop do
+              _, link, before = reached[at]
+              links << link
+              break if before == origin.handle
+              at = before
+            end
+            links.reverse! if forwards
+            found << {atom, links}
+          end
+
+          found.each do |(other, links)|
+            next if allowed && !allowed.includes?(other.handle)
+            from, to = forwards ? {origin, other} : {other, origin}
+            next if subject && subject == object && from.handle != to.handle
+            bound = Hash(String, AtomSpace::Atom).new
+            bound[subject] = from if subject
+            bound[object] = to if object
+            next unless typed.all? { |(name, types)| (atom = bound[name]?).nil? || types.includes?(atom.type) }
+            solutions << {bound, links}
+          end
+        end
+        solutions
+      end
+
+      # Every atom that steps lead to from an origin, each with the link
+      # of its last step and the atom that step left from.
+      private def reach(origin : AtomSpace::Atom,
+                        edges : Hash(AtomSpace::Handle, Array({AtomSpace::Atom, AtomSpace::Atom}))) : Hash(AtomSpace::Handle, {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Handle})
+        reached = {} of AtomSpace::Handle => {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Handle}
+        waiting = Deque{origin}
+        until waiting.empty?
+          at = waiting.shift
+          edges[at.handle]?.try &.each do |(to, link)|
+            next if reached.has_key?(to.handle)
+            reached[to.handle] = {to, link, at.handle}
+            waiting << to
+          end
+        end
+        reached
       end
 
       # Every pairing of a solution from each side that agrees on the
@@ -1694,6 +2043,18 @@ module OpenCog
           CogUtil::Logger.error("Unexpected query error: #{ex.message}")
           raise QueryExecutionException.new("Query execution failed: #{ex.message}")
         end
+      end
+
+      # Whether a query matches anything: an ASK query, or any other.
+      def ask(query_string : String) : Bool
+        parsed = QueryParser.parse(query_string)
+        parsed.form == :select ? !@executor.execute(parsed).empty? : @executor.ask(parsed)
+      end
+
+      # The atoms a CONSTRUCT query builds. They are added to `into` when
+      # it is given, and stand beside the AtomSpace when it is not.
+      def construct(query_string : String, into : AtomSpace::AtomSpace? = nil) : Array(AtomSpace::Atom)
+        @executor.construct(QueryParser.parse(query_string), into)
       end
 
       # Convenience method for simple queries

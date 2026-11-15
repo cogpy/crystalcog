@@ -82,6 +82,14 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 "SELECT $x $p WHERE { VALUES $x { apple leek } . $x price $p }"
 "SELECT $x $n WHERE { $x ISA $kind . { SELECT $kind (COUNT($y) AS $n) WHERE { $y ISA $kind } GROUP BY $kind } }"
 
+# Following a relation for any number of steps
+"SELECT $x WHERE { $x ISA+ Animal }"
+"SELECT $part $whole WHERE { $part part_of* $whole . $whole ISA+ Animal }"
+
+# Yes or no, and atoms built from the matches
+"ASK { Claw part_of+ Dog }"
+"CONSTRUCT { $x ISA Animal . $x seen_in Zoo } WHERE { $x ISA+ Animal }"
+
 # Counting and grouping
 "SELECT COUNT(*) AS $n WHERE { $x ISA Fruit }"
 "SELECT $kind COUNT($x) AS $n, AVG($p) AS $mean WHERE { $x ISA $kind . $x price $p } GROUP BY $kind HAVING($n > 2) ORDER BY $n DESC"
@@ -90,7 +98,12 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 ### Grammar
 
 ```
-query     := SELECT [DISTINCT] ( "*" | item { [","] item } )
+query     := select | ask | construct
+ask       := ASK [WHERE] block { UNION block }
+construct := CONSTRUCT "{" template { ( "." | newline ) template } "}"
+             WHERE block { UNION block }
+template  := term ( ISA | inherits_from | "->" ) term | term term term
+select    := SELECT [DISTINCT] ( "*" | item { [","] item } )
              WHERE block { UNION block }
              [ GROUP BY "$" name { [","] "$" name } ]
              [ HAVING "(" condition ")" ]
@@ -102,8 +115,8 @@ aggregate := COUNT "(" ( "*" | [DISTINCT] value ) ")"
            | ( SUM | AVG | MIN | MAX ) "(" [DISTINCT] value ")"
 variable  := "$" name [ ":" type ]
 block     := "{" clause { ( "." | newline ) clause } "}"
-clause    := term ( ISA | inherits_from | "->" ) term
-           | term term term
+clause    := term ( ISA | inherits_from | "->" ) [steps] term
+           | term term [steps] term
            | OPTIONAL "{" clauses "}"
            | FILTER "(" condition ")"
            | BIND "(" value AS "$" name ")"
@@ -112,6 +125,7 @@ clause    := term ( ISA | inherits_from | "->" ) term
            | MINUS block
            | VALUES "$" name "{" { term | UNDEF } "}"
            | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
+steps     := "+" | "*"
 term      := "$" name | name | "quoted name"
 condition := condition OR condition | condition AND condition
            | NOT condition | "(" condition ")"
@@ -176,6 +190,35 @@ key       := value [ ASC | DESC ]
 - A whole query in braces is a subquery: `{ SELECT $kind (COUNT($y) AS $n) WHERE { $y ISA $kind } GROUP BY $kind }`. Its own grouping, HAVING, ORDER BY, LIMIT and OFFSET apply first, and what it selects is joined with the rest of the block. Only what it selects is seen outside.
 - Order within a block: clauses, VALUES, subqueries, groups, OPTIONAL, BIND, MINUS, then FILTER, wherever each is written.
 - `MINUS` and `VALUES` are not reserved words.
+
+### Paths
+
+- `+` after the relation of a clause follows it for one or more steps, `*` for none or more. `$x ISA+ Animal` holds when a chain of inheritance links leads from `$x` to `Animal`; `$a part_of+ $b` when a chain of `part_of` triples leads from `$a` to `$b`. The mark may stand apart from the relation: `$x ISA + Animal`.
+- Either end, both or neither may be a variable. `ASK { Claw part_of+ Dog }` decides one pair; `SELECT $a $b WHERE { $a part_of+ $b }` lists every pair the relation joins.
+- No step relates an atom to itself. With a name at one end of a `*` path, that atom is among the answers. With variables at both ends, every atom the relation touches is joined to itself. A name the AtomSpace does not know is joined to nothing, itself included.
+- A circle is gone round once: on `Spring precedes Summer ... Winter precedes Spring`, `Spring precedes+ $x` gives the four seasons, Spring among them. The same variable at both ends, `$x precedes+ $x`, asks what leads back to itself.
+- The search goes breadth first from the end that is given, or from the values the clauses before it in the block already gave that end. With nothing given it starts from every atom the relation touches.
+- What a path matched is the links of a shortest chain, and a result's confidence is their mean as for any match. A path of no steps matched nothing and has confidence 0.
+- A path joins with the rest of its block like any clause, inside OPTIONAL and MINUS too. A typed variable, `$x:CONCEPT`, holds at a path's end as elsewhere.
+- The predicate of a path is a name, not a variable.
+
+### ASK
+
+- `ASK { ... }` says whether its block matches anything. `WHERE` may be written before the block, and blocks may be joined by UNION. Nothing else follows: there is nothing to sort or limit.
+- `QueryLanguageInterface#ask(text)` returns true or false. It takes any query, and is true for a SELECT that has a result.
+- Run through `query`, an ASK gives one result without bindings when the answer is yes, with the confidence of the most confident match, and no result when it is no.
+- `ASK` is not a reserved word.
+
+### CONSTRUCT
+
+- `CONSTRUCT { template } WHERE { ... }` builds atoms from the matches. The template is inheritance and triple clauses, single steps only. Every variable in it must appear in WHERE.
+- `QueryLanguageInterface#construct(text)` returns the atoms: the template filled in once for each match, each distinct atom once. A name in the template is the stored node of that name, or a new ConceptNode (a PredicateNode in the predicate's place).
+- A template clause is left out for a match that gives one of its variables no value, as an OPTIONAL part can.
+- A built atom is as strong as the weakest atom its match rests on and as confident as the match. Where several matches build the same atom, the most confident one is kept. A match that rests on no atoms (VALUES alone, or a subquery's rows) gives the default truth value.
+- The atoms stand beside the AtomSpace and nothing is added. `construct(text, into: space)` adds them to an AtomSpace, the queried one or another, and returns the stored atoms. That AtomSpace merges an atom it already holds in its usual way; nodes it already has are used as they are.
+- ORDER BY, LIMIT and OFFSET do not follow a CONSTRUCT. A subquery in its WHERE can do the choosing.
+- Run through `query`, a CONSTRUCT lists its matches with the template's variables.
+- `CONSTRUCT` is not a reserved word.
 
 ### Variable Types
 - `$var` - Generic variable

@@ -85,7 +85,7 @@ describe OpenCog::QueryLanguage::QueryParser do
   end
 
   it "says what it expected, what it found and where" do
-    parse_error("GET $x WHERE { $x }").should eq(%(Query must start with SELECT, found "GET" at line 1, column 1))
+    parse_error("GET $x WHERE { $x }").should eq(%(Query must start with SELECT, ASK or CONSTRUCT, found "GET" at line 1, column 1))
     parse_error("SELECT $x").should eq("Missing WHERE clause: expected WHERE, found the end of the query at line 1, column 10")
     parse_error("SELECT x WHERE { x ISA y }").should eq("Variables must start with $ : x at line 1, column 8")
     parse_error("SELECT $x:Blob WHERE { $x ISA y }").should eq("unknown type Blob at line 1, column 11")
@@ -686,5 +686,303 @@ describe "OpenCog query subqueries" do
       %[expected '}' to close the subquery, found "nonsense" at line 1, column 50])
     parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { { SELECT $x WHERE { $x ISA z } } } }").should eq(
       "a subquery cannot be inside OPTIONAL at line 1, column 41")
+  end
+end
+
+# Kinds, parts and a circle of seasons.
+#
+#   Poodle -> Dog -> Mammal -> Animal        Claw part_of Paw part_of Leg part_of Dog
+#   Cat -> Mammal    Trout -> Fish -> Animal Fin part_of Trout
+private def anatomy : AtomSpace::AtomSpace
+  space = AtomSpace::AtomSpace.new
+  kind = ->(child : String, parent : String, strength : Float64, confidence : Float64) do
+    space.add_inheritance_link(space.add_concept_node(child), space.add_concept_node(parent),
+      AtomSpace::SimpleTruthValue.new(strength, confidence))
+  end
+  kind.call("Poodle", "Dog", 0.9, 0.9)
+  kind.call("Dog", "Mammal", 0.8, 0.8)
+  kind.call("Mammal", "Animal", 0.7, 0.6)
+  kind.call("Cat", "Mammal", 0.9, 0.9)
+  kind.call("Trout", "Fish", 0.9, 0.9)
+  kind.call("Fish", "Animal", 0.9, 0.9)
+
+  relate = ->(predicate : String, from : String, to : String) do
+    space.add_evaluation_link(space.add_predicate_node(predicate),
+      space.add_list_link([space.add_concept_node(from), space.add_concept_node(to)] of AtomSpace::Atom),
+      AtomSpace::SimpleTruthValue.new(1.0, 0.5))
+  end
+  relate.call("part_of", "Claw", "Paw")
+  relate.call("part_of", "Paw", "Leg")
+  relate.call("part_of", "Leg", "Dog")
+  relate.call("part_of", "Fin", "Trout")
+  %w(Spring Summer Autumn Winter Spring).each_cons_pair { |from, to| relate.call("precedes", from, to) }
+  space
+end
+
+private def holds(space, text : String) : Bool
+  OpenCog::QueryLanguage.create_interface(space).ask(text)
+end
+
+private def construct(space, text : String, into : AtomSpace::AtomSpace? = nil)
+  OpenCog::QueryLanguage.create_interface(space).construct(text, into)
+end
+
+describe "OpenCog query paths" do
+  it "reads + and * after a relation as a path" do
+    query = parse("SELECT * WHERE { $x ISA+ Animal . $x ->* $y . $a part_of+ $b . Claw part_of * $w . $x inherits_from + $z }")
+    query.clauses.map(&.to_s).should eq([
+      "PathClause($x ISA+ Animal)", "PathClause($x ISA* $y)", "PathClause($a part_of+ $b)",
+      "PathClause(Claw part_of* $w)", "PathClause($x ISA+ $z)",
+    ])
+    query.variables.map(&.name).should eq(["x", "y", "a", "b", "w", "z"])
+    # A single step is still the clause it was.
+    parse("SELECT $x WHERE { $x ISA Animal . $x part_of $y }").clauses.map(&.to_s).should eq([
+      "InheritanceClause($x -> Animal)", "TripleClause($x part_of $y)",
+    ])
+  end
+
+  it "refuses a path over a variable predicate or without an end" do
+    parse_error("SELECT $a WHERE { $a $p+ $b }").should eq("a path follows a named predicate, not $p at line 1, column 22")
+    parse_error("SELECT $a WHERE { $a part_of+ }").should eq(%(expected the object of the triple, found "}" at line 1, column 31))
+    parse_error("SELECT $a WHERE { $a ISA* }").should eq(%(expected a term, found "}" at line 1, column 27))
+  end
+
+  it "follows inheritance for one or more steps" do
+    space = anatomy
+    names(ask(space, "SELECT $x WHERE { $x ISA+ Animal }"), "x").should eq(["Cat", "Dog", "Fish", "Mammal", "Poodle", "Trout"])
+    names(ask(space, "SELECT $x WHERE { Poodle ISA+ $x }"), "x").should eq(["Animal", "Dog", "Mammal"])
+    names(ask(space, "SELECT $x WHERE { $x ISA Animal }"), "x").should eq(["Fish", "Mammal"])
+    names(ask(space, "SELECT $x WHERE { $x ISA+ Poodle }"), "x").should be_empty
+  end
+
+  it "lets a * path take no step" do
+    space = anatomy
+    names(ask(space, "SELECT $x WHERE { Poodle ISA* $x }"), "x").should eq(["Animal", "Dog", "Mammal", "Poodle"])
+    names(ask(space, "SELECT $x WHERE { $x ISA* Mammal }"), "x").should eq(["Cat", "Dog", "Mammal", "Poodle"])
+    # With both ends open, every atom the relation touches is joined to itself.
+    pairs = table(ask(space, "SELECT $a $b WHERE { $a part_of* $b }"), "a", "b")
+    pairs.size.should eq(7 + 6)
+    pairs.count { |(a, b)| a == b }.should eq(6)
+    pairs.should contain(["Dog", "Dog"])
+  end
+
+  it "follows a predicate, between any two atoms it joins" do
+    space = anatomy
+    pairs = table(ask(space, "SELECT $a $b WHERE { $a part_of+ $b }"), "a", "b").map { |(a, b)| "#{a}<#{b}" }.sort
+    pairs.should eq(["Claw<Dog", "Claw<Leg", "Claw<Paw", "Fin<Trout", "Leg<Dog", "Paw<Dog", "Paw<Leg"])
+    names(ask(space, "SELECT $x WHERE { $x part_of+ Dog }"), "x").should eq(["Claw", "Leg", "Paw"])
+    names(ask(space, "SELECT $x WHERE { Paw part_of+ $x }"), "x").should eq(["Dog", "Leg"])
+    names(ask(space, "SELECT $x WHERE { $x made_of+ Dog }"), "x").should be_empty
+  end
+
+  it "decides a path between two given atoms" do
+    space = anatomy
+    holds(space, "ASK { Claw part_of+ Dog }").should be_true
+    holds(space, "ASK { Dog part_of+ Claw }").should be_false
+    holds(space, "ASK { Dog part_of+ Dog }").should be_false
+    holds(space, "ASK { Dog part_of* Dog }").should be_true
+    holds(space, "ASK { Poodle ISA+ Animal }").should be_true
+    holds(space, "ASK { Poodle ISA+ Fish }").should be_false
+    # A name the AtomSpace does not know is not even joined to itself.
+    holds(space, "ASK { Unicorn ISA* Unicorn }").should be_false
+    holds(space, "ASK { Unicorn ISA+ Animal }").should be_false
+  end
+
+  it "comes round a circle once" do
+    space = anatomy
+    names(ask(space, "SELECT $x WHERE { Spring precedes+ $x }"), "x").should eq(["Autumn", "Spring", "Summer", "Winter"])
+    names(ask(space, "SELECT $x WHERE { Spring precedes* $x }"), "x").should eq(["Autumn", "Spring", "Summer", "Winter"])
+    names(ask(space, "SELECT $x WHERE { $x precedes+ Spring }"), "x").should eq(["Autumn", "Spring", "Summer", "Winter"])
+    # The same variable at both ends asks what leads back to itself.
+    names(ask(space, "SELECT $x WHERE { $x precedes+ $x }"), "x").should eq(["Autumn", "Spring", "Summer", "Winter"])
+    names(ask(space, "SELECT $x WHERE { $x part_of+ $x }"), "x").should be_empty
+    ask(space, "SELECT $a $b WHERE { $a precedes+ $b }").size.should eq(16)
+  end
+
+  it "takes the links of a shortest chain as what was matched" do
+    space = anatomy
+    # Poodle -> Dog -> Mammal -> Animal: confidences 0.9, 0.8 and 0.6.
+    ask(space, "SELECT $x WHERE { Poodle ISA+ $x . FILTER($x = Animal) }").first.confidence.should be_close(2.3 / 3, 1e-9)
+    # A short cut is the chain that counts.
+    space.add_inheritance_link(space.get_nodes_by_name("Poodle").first, space.get_nodes_by_name("Mammal").first,
+      AtomSpace::SimpleTruthValue.new(0.5, 0.2))
+    ask(space, "SELECT $x WHERE { Poodle ISA+ $x . FILTER($x = Animal) }").first.confidence.should be_close(0.4, 1e-9)
+    ask(space, "SELECT $x WHERE { $x ISA+ Animal . FILTER($x = Poodle) }").first.confidence.should be_close(0.4, 1e-9)
+    # No step, nothing matched.
+    ask(space, "SELECT $x WHERE { Animal ISA* $x }").map(&.confidence).should eq([0.0])
+  end
+
+  it "joins paths with the rest of the block" do
+    space = anatomy
+    size = space.size
+    rows = table(ask(space, "SELECT $part $whole WHERE { $whole ISA+ Animal . $part part_of+ $whole } ORDER BY $part"), "part", "whole")
+    rows.should eq([["Claw", "Dog"], ["Fin", "Trout"], ["Leg", "Dog"], ["Paw", "Dog"]])
+    rows = table(ask(space, "SELECT $part $whole WHERE { $part part_of+ $whole . $whole ISA+ Animal } ORDER BY $part"), "part", "whole")
+    rows.should eq([["Claw", "Dog"], ["Fin", "Trout"], ["Leg", "Dog"], ["Paw", "Dog"]])
+
+    names(ask(space, "SELECT $x WHERE { $x ISA+ Animal . FILTER($x != Mammal) . MINUS { $x ISA+ Fish } }"), "x").should eq(["Cat", "Dog", "Fish", "Poodle"])
+    rows = table(ask(space, "SELECT $x $part WHERE { $x ISA Mammal . OPTIONAL { $part part_of+ $x } } ORDER BY $x, $part"), "x", "part")
+    rows.should eq([["Cat", nil], ["Dog", "Claw"], ["Dog", "Leg"], ["Dog", "Paw"]])
+    rows = table(ask(space, "SELECT $whole (COUNT($part) AS $n) WHERE { $part part_of+ $whole } GROUP BY $whole ORDER BY $whole"), "whole", "n")
+    rows.should eq([["Dog", "3"], ["Leg", "2"], ["Paw", "1"], ["Trout", "1"]])
+    space.size.should eq(size)
+  end
+
+  it "holds a typed variable to its type" do
+    space = anatomy
+    names(ask(space, "SELECT $x:CONCEPT WHERE { $x ISA+ Animal }"), "x").size.should eq(6)
+    ask(space, "SELECT $x:PREDICATE WHERE { $x ISA+ Animal }").should be_empty
+  end
+end
+
+describe "OpenCog query ASK" do
+  it "parses ASK with or without WHERE" do
+    query = parse("ASK { Dog ISA Mammal }")
+    query.form.should eq(:ask)
+    query.variables.should be_empty
+    query.clauses.map(&.to_s).should eq(["InheritanceClause(Dog -> Mammal)"])
+    parse("ask where { $x ISA Mammal . $x part_of $y }").form.should eq(:ask)
+    parse("ASK\n{ Dog ISA Mammal }\nUNION\n{ Dog ISA Fish }").blocks.size.should eq(2)
+    parse("SELECT $x WHERE { $x ISA Mammal }").form.should eq(:select)
+    # The word is still a name anywhere else.
+    parse("SELECT $x WHERE { $x ISA ask . ask likes $x }").clauses.size.should eq(2)
+  end
+
+  it "refuses what an answer of yes or no has no use for" do
+    parse_error("ASK { Dog ISA Mammal } LIMIT 1").should eq(%(expected the end of the query, found "LIMIT" at line 1, column 24))
+    parse_error("ASK { }").should eq(%(WHERE needs at least one clause at line 1, column 7))
+    parse_error("ASK Dog ISA Mammal").should eq(%(Query must start with SELECT, ASK or CONSTRUCT, found "ASK" at line 1, column 1))
+    parse_error("SELECT $x WHERE { { ASK { $x ISA Dog } } }").should contain("expected")
+  end
+
+  it "says whether anything matches" do
+    space = anatomy
+    holds(space, "ASK { Dog ISA Mammal }").should be_true
+    holds(space, "ASK { Dog ISA Fish }").should be_false
+    holds(space, "ASK { $x ISA Mammal . $part part_of $x }").should be_true
+    holds(space, "ASK { $x ISA Fish . $part part_of $x . FILTER($part != Fin) }").should be_false
+    holds(space, "ASK { Dog ISA Fish } UNION { Trout ISA Fish }").should be_true
+    holds(space, "ASK WHERE { Dog ISA Fish } UNION { Trout ISA Mammal }").should be_false
+    # Any other query can be asked the same way.
+    holds(space, "SELECT $x WHERE { $x ISA Mammal }").should be_true
+    holds(space, "SELECT $x WHERE { $x ISA Poodle }").should be_false
+  end
+
+  it "answers a plain query call with one empty result or none" do
+    space = anatomy
+    yes = ask(space, "ASK { $x ISA Mammal }")
+    yes.size.should eq(1)
+    yes.first.bindings.should be_empty
+    # The most confident match speaks for the answer.
+    yes.first.confidence.should be_close(0.9, 1e-9)
+    ask(space, "ASK { $x ISA Poodle }").should be_empty
+  end
+end
+
+describe "OpenCog query CONSTRUCT" do
+  it "parses a template and the block it is filled from" do
+    query = parse("CONSTRUCT { $x ISA Animal . $x seen_with $y\n$y ISA Thing } WHERE { $x ISA+ Animal . $x part_of $y }")
+    query.form.should eq(:construct)
+    query.template.map(&.to_s).should eq([
+      "InheritanceClause($x -> Animal)", "TripleClause($x seen_with $y)", "InheritanceClause($y -> Thing)",
+    ])
+    query.variables.map(&.name).should eq(["x", "y"])
+    query.clauses.size.should eq(2)
+    parse("construct\n{ $x ISA Animal }\nwhere { $x ISA Mammal } UNION { $x ISA Fish }").blocks.size.should eq(2)
+  end
+
+  it "refuses a template it cannot fill" do
+    parse_error("CONSTRUCT { $x ISA $kind } WHERE { $x ISA Mammal }").should eq("$kind is in the template but does not appear in WHERE at line 1, column 20")
+    parse_error("CONSTRUCT { $x ISA+ Animal } WHERE { $x ISA Mammal }").should eq("a path cannot be built: the template takes single steps at line 1, column 19")
+    parse_error("CONSTRUCT { } WHERE { $x ISA Mammal }").should eq("CONSTRUCT needs at least one clause at line 1, column 13")
+    parse_error("CONSTRUCT { $x ISA Animal }").should eq("Missing WHERE clause: expected WHERE, found the end of the query at line 1, column 28")
+    parse_error("CONSTRUCT { $x ISA Animal } WHERE { $x ISA Mammal } LIMIT 2").should eq(%(expected the end of the query, found "LIMIT" at line 1, column 53))
+    parse_error("CONSTRUCT { FILTER($x = Dog) } WHERE { $x ISA Mammal }").should contain("expected")
+  end
+
+  it "builds its template once for each match, beside the AtomSpace" do
+    space = anatomy
+    size = space.size
+    built = construct(space, "CONSTRUCT { $x ISA Animal } WHERE { $x ISA+ Animal }")
+    built.map { |atom| atom.outgoing.first.name }.sort.should eq(["Cat", "Dog", "Fish", "Mammal", "Poodle", "Trout"])
+    built.all? { |atom| atom.type == AtomSpace::AtomType::INHERITANCE_LINK && atom.outgoing.last.name == "Animal" }.should be_true
+    # The nodes are the stored ones; the links are not stored.
+    built.all? { |atom| atom.outgoing.all? { |node| space.contains?(node) } }.should be_true
+    space.size.should eq(size)
+
+    # As strong as the weakest link of the chain, as confident as the match.
+    poodle = built.find! { |atom| atom.outgoing.first.name == "Poodle" }
+    poodle.truth_value.strength.should be_close(0.7, 1e-9)
+    poodle.truth_value.confidence.should be_close(2.3 / 3, 1e-9)
+  end
+
+  it "makes the nodes its template names and builds each atom once" do
+    space = anatomy
+    built = construct(space, "CONSTRUCT { $part belongs_to $whole . $part ISA Part } WHERE { $part part_of+ $whole }")
+    triples = built.select(&.is_a?(AtomSpace::EvaluationLink))
+    triples.size.should eq(7)
+    triples.all? { |atom| atom.outgoing.first.type == AtomSpace::AtomType::PREDICATE_NODE && atom.outgoing.first.name == "belongs_to" }.should be_true
+    triples.map { |atom| atom.outgoing.last.outgoing.map(&.name).join("<") }.sort.first(3).should eq(["Claw<Dog", "Claw<Leg", "Claw<Paw"])
+    # Claw matches three times and is a Part once.
+    parts = built.select(&.is_a?(AtomSpace::InheritanceLink))
+    parts.map { |atom| atom.outgoing.first.name }.sort.should eq(["Claw", "Fin", "Leg", "Paw"])
+    space.get_nodes_by_name("Part").should be_empty
+    space.get_nodes_by_name("belongs_to").should be_empty
+  end
+
+  it "keeps the most confident of the matches that build one atom" do
+    space = AtomSpace::AtomSpace.new
+    likes = space.add_predicate_node("likes")
+    ann = space.add_concept_node("Ann")
+    {"tea" => 0.3, "jam" => 0.8, "rye" => 0.5}.each do |name, confidence|
+      space.add_evaluation_link(likes, space.add_list_link([ann, space.add_concept_node(name)] of AtomSpace::Atom),
+        AtomSpace::SimpleTruthValue.new(confidence, confidence))
+    end
+    built = construct(space, "CONSTRUCT { $who ISA Fan } WHERE { $who likes $what }")
+    built.size.should eq(1)
+    built.first.truth_value.strength.should be_close(0.8, 1e-9)
+    built.first.truth_value.confidence.should be_close(0.8, 1e-9)
+  end
+
+  it "leaves out a clause whose variable a match does not bind" do
+    space = anatomy
+    built = construct(space, "CONSTRUCT { $x ISA Pet . $part found_on $x } WHERE { $x ISA Mammal . OPTIONAL { $part part_of $x } }")
+    built.map { |atom| atom.type.to_s }.sort.should eq(["EVALUATION_LINK", "INHERITANCE_LINK", "INHERITANCE_LINK"])
+    built.select(&.is_a?(AtomSpace::InheritanceLink)).map { |atom| atom.outgoing.first.name }.sort.should eq(["Cat", "Dog"])
+  end
+
+  it "adds what it builds to the AtomSpace it is given" do
+    space = anatomy
+    size = space.size
+    stored = construct(space, "CONSTRUCT { $x ISA Animal } WHERE { $x ISA+ Animal }", into: space)
+    stored.size.should eq(6)
+    stored.all? { |atom| space.contains?(atom) }.should be_true
+    # Fish and Mammal were Animals already; four links are new.
+    space.size.should eq(size + 4)
+    names(ask(space, "SELECT $x WHERE { $x ISA Animal }"), "x").should eq(["Cat", "Dog", "Fish", "Mammal", "Poodle", "Trout"])
+    # What was there keeps its truth value.
+    mammal = stored.find! { |atom| atom.outgoing.first.name == "Mammal" }
+    mammal.truth_value.strength.should be_close(0.7, 1e-9)
+    mammal.truth_value.confidence.should be_close(0.6, 1e-9)
+
+    # Another AtomSpace gets nodes of its own.
+    other = AtomSpace::AtomSpace.new
+    copied = construct(space, "CONSTRUCT { $part belongs_to $whole } WHERE { $part part_of $whole }", into: other)
+    copied.size.should eq(4)
+    other.get_nodes_by_name("Claw").size.should eq(1)
+    other.get_nodes_by_name("Claw").first.same?(space.get_nodes_by_name("Claw").first).should be_false
+    names(ask(other, "SELECT $x WHERE { $x belongs_to Dog }"), "x").should eq(["Leg"])
+    space.get_nodes_by_name("belongs_to").should be_empty
+  end
+
+  it "lists its matches when run as a plain query" do
+    space = anatomy
+    results = ask(space, "CONSTRUCT { $part belongs_to Dog } WHERE { $part part_of+ $whole . FILTER($whole = Dog) }")
+    names(results, "part").should eq(["Claw", "Leg", "Paw"])
+    results.first.bindings.keys.should eq(["part"])
+    executor = OpenCog::QueryLanguage::QueryExecutor.new(space)
+    expect_raises(OpenCog::QueryLanguage::QueryExecutionException, "Not a CONSTRUCT query") do
+      executor.construct(parse("SELECT $x WHERE { $x ISA Mammal }"))
+    end
   end
 end
