@@ -261,12 +261,21 @@ module AtomSpace
     @replicating = false
     # How long the leader waits for one member to answer for the log.
     property replication_timeout : Time::Span = 1.second
+    # Where this member keeps what it must not forget: who it is, its
+    # term, its vote and its log. nil keeps them in memory alone.
+    getter state_path : String?
 
+    # With a `state_path` the member is the same member after a restart:
+    # it comes back under its old id, in the term it had reached, bound
+    # by the vote it gave, and with its log. Without one it is a new
+    # member each time.
     def initialize(@cluster_id : String, @local_atomspace : AtomSpace,
                    host : String = "localhost", port : Int32 = 0,
                    @sync_strategy : SyncStrategy = SyncStrategy::MergeUsingTruthValues,
-                   adaptive_heartbeat_enabled : Bool = true)
-      @node_id = UUID.random.to_s
+                   adaptive_heartbeat_enabled : Bool = true,
+                   @state_path : String? = nil)
+      kept_id, @term, @voted_for, @log = DistributedAtomSpaceCluster.read_state(@state_path)
+      @node_id = kept_id || UUID.random.to_s
       @cluster_nodes = Hash(String, ClusterNodeInfo).new
       @vector_clock = Hash(String, UInt64).new
       @pending_sync_ops = [] of SyncOperation
@@ -285,6 +294,10 @@ module AtomSpace
 
       # Set up AtomSpace event observers for local changes
       setup_atomspace_observers
+
+      # What was read is written back in its shortest form, and a new
+      # member's id is on disk before it first speaks to another.
+      write_state
 
       CogUtil::Logger.info("DistributedAtomSpaceCluster #{@cluster_id} node #{@node_id} initialized (adaptive_heartbeat=#{adaptive_heartbeat_enabled})")
     end
@@ -651,7 +664,12 @@ module AtomSpace
       end
 
       if known = @cluster_nodes[id]?
-        known.update_heartbeat if first_hand
+        if first_hand
+          # A member that came back may listen somewhere else.
+          known.host = host
+          known.port = port
+          known.update_heartbeat
+        end
         return false
       end
 
@@ -1021,6 +1039,7 @@ module AtomSpace
       term = @term
       @role = ClusterRole::Candidate
       @voted_for = @node_id
+      persist_term
       follow(nil)
 
       members = @cluster_nodes.values
@@ -1098,6 +1117,8 @@ module AtomSpace
       granted = term == @term && far_enough && (@voted_for.nil? || @voted_for == candidate)
       if granted
         @voted_for = candidate
+        # The vote is on disk before the candidate hears of it.
+        persist_term
         # Having voted, give the candidate time to win before standing.
         @last_leader_contact = Time.monotonic
       end
@@ -1125,6 +1146,7 @@ module AtomSpace
       @term = term
       @role = ClusterRole::Follower
       @voted_for = nil
+      persist_term
       follow(nil) if @leader_id == @node_id
     end
 
@@ -1245,7 +1267,9 @@ module AtomSpace
     private def take_in(kind : String, data : JSON::Any) : UInt64?
       return nil unless @running && leader?
       term = @term
-      @log << ClusterLogEntry.new(term, kind, data)
+      entry = ClusterLogEntry.new(term, kind, data)
+      @log << entry
+      persist([{"entry" => entry.to_h}.to_json])
       index = @log.size.to_u64
       settle_log
       @term == term && @commit_index >= index ? index : nil
@@ -1257,7 +1281,9 @@ module AtomSpace
     private def open_term : Nil
       @next_index.clear
       @match_index.clear
-      @log << ClusterLogEntry.new(@term, "term", JSON::Any.new(@node_id))
+      entry = ClusterLogEntry.new(@term, "term", JSON::Any.new(@node_id))
+      @log << entry
+      persist([{"entry" => entry.to_h}.to_json])
       settle_log
     end
 
@@ -1407,6 +1433,9 @@ module AtomSpace
       end
 
       entries = message["entries"].as_a
+      # What changes in the log goes to disk in one write, before the
+      # leader is told the entries are held.
+      changes = [] of String
       entries.each_with_index do |raw, i|
         entry = ClusterLogEntry.from(raw)
         index = before + i + 1
@@ -1414,13 +1443,17 @@ module AtomSpace
           next if @log[index - 1].term == entry.term
           if index <= @commit_index
             CogUtil::Logger.error("Node #{@node_id} was handed another entry #{index} than the one it committed")
+            persist(changes)
             client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => @commit_index.to_i64}.to_json))
             return
           end
           @log.pop(@log.size - (index - 1).to_i)
+          changes << {"truncate" => (index - 1).to_i64}.to_json
         end
         @log << entry
+        changes << {"entry" => entry.to_h}.to_json
       end
+      persist(changes)
 
       # Committed is what the leader says, as far as this log is known to
       # agree with the leader's.
@@ -1441,6 +1474,67 @@ module AtomSpace
       client.try(&.puts({"index" => index.try(&.to_i64)}.to_json))
     rescue ex
       CogUtil::Logger.debug("Proposal not answered: #{ex.message}")
+    end
+
+    # --------------------------------------------------------- kept state
+
+    # What a state file holds: the member's id, its term, its vote and
+    # its log. The file is a journal of JSON lines, each a change: the
+    # id, a term with the vote given in it, an entry added to the log, or
+    # the log cut back to a length. A last line torn by a crash is not a
+    # change that was ever answered for, and is left out.
+    def self.read_state(path : String?) : {String?, UInt64, String?, Array(ClusterLogEntry)}
+      id = nil
+      term = 0_u64
+      voted_for = nil
+      log = [] of ClusterLogEntry
+      return {id, term, voted_for, log} unless path && File.exists?(path)
+
+      File.each_line(path) do |line|
+        record = (JSON.parse(line) rescue nil).try(&.as_h?) || next
+        if kept = record["node_id"]?
+          id = kept.as_s?
+        elsif kept = record["term"]?
+          term = kept.as_i64.to_u64
+          voted_for = record["voted_for"]?.try(&.as_s?)
+        elsif kept = record["entry"]?
+          log << ClusterLogEntry.from(kept)
+        elsif kept = record["truncate"]?
+          length = kept.as_i64.to_i
+          log.pop(log.size - length) if log.size > length
+        end
+      end
+      {id, term, voted_for, log}
+    end
+
+    # Write the whole state afresh, in place of the journal so far.
+    private def write_state : Nil
+      path = @state_path || return
+      Dir.mkdir_p(File.dirname(path))
+      fresh = "#{path}.tmp"
+      File.open(fresh, "w") do |file|
+        file.puts({"node_id" => @node_id}.to_json)
+        file.puts({"term" => @term.to_i64, "voted_for" => @voted_for}.to_json)
+        @log.each { |entry| file.puts({"entry" => entry.to_h}.to_json) }
+        file.fsync
+      end
+      File.rename(fresh, path)
+    end
+
+    # Add changes to the journal, and have them on disk before going on.
+    private def persist(lines : Array(String)) : Nil
+      path = @state_path || return
+      return if lines.empty?
+      File.open(path, "a") do |file|
+        lines.each { |line| file.puts(line) }
+        file.fsync
+      end
+    rescue ex
+      CogUtil::Logger.error("Cluster state not written to #{@state_path}: #{ex.message}")
+    end
+
+    private def persist_term : Nil
+      persist([{"term" => @term.to_i64, "voted_for" => @voted_for}.to_json])
     end
 
     # One JSON line to a member and its one-line answer, nil when there
