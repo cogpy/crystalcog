@@ -257,18 +257,21 @@ Two minor test failures in distributed storage edge cases:
 | Query paths (`ISA+`, `part_of*`), ASK and CONSTRUCT | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
 | URE conjunction rule that finds facts with a common argument, each pair once, and proves a conjunction from its parts | `ConjunctionRule` in `src/ure/ure.cr` |
 | Cluster replicated log: commands and atoms committed by majority and applied in one order | `src/atomspace/distributed_cluster.cr`, [DISTRIBUTED_ATOMSPACE_CLUSTERING.md](DISTRIBUTED_ATOMSPACE_CLUSTERING.md) |
+| Query path expressions (`a/b`, `a\|b`, `^a`, brackets, `?`); ORDER BY and LIMIT on CONSTRUCT | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
+| Cluster members that keep their id, term, vote and log on disk and come back as themselves | `state_path` in `src/atomspace/distributed_cluster.cr`, [DISTRIBUTED_ATOMSPACE_CLUSTERING.md](DISTRIBUTED_ATOMSPACE_CLUSTERING.md) |
+| Mined variables weighed against the atoms that fill their place | `ConjunctionMiner` in `src/pattern_mining/pattern_mining.cr` |
 
 ### Still simplified
 
 | Area | State |
 |---|---|
-| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. A second derivation that shares part of its evidence with the conclusion is left out whole; the part that was new is not counted. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. |
+| PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. (A second derivation that shares part of its evidence with a conclusion is left out whole, and that is meant: a derivation needs all its premises, so the part that is not shared is not evidence on its own.) |
 | URE rules | Going forward the conjunction rule joins only two facts with an argument in common, and conjoins evaluations alone. The proof search is depth-first with a depth limit and a budget, not a best-first search over the inference tree. An antecedent that is written in an implication counts as a fact, because being in the AtomSpace is all a fact is. |
-| Query language | Clauses are inheritance and subject-predicate-object triples. A path repeats one relation; there are no sequences, alternatives or inverses of relations in a path, and no path over a variable predicate. CONSTRUCT takes no ORDER BY or LIMIT of its own. A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
-| Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. A variable is weighed against every atom of the types it takes, not only those that could fill its place in a clause. |
+| Query language | Clauses are inheritance and subject-predicate-object triples. No path over a variable predicate, and none that excludes a relation. A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
+| Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. A variable is weighed evenly against the atoms that fill its place, whether an atom fills it once or a hundred times. |
 | Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded and 12-bit JPEGs are refused. CMYK is converted without a colour profile. |
 | Paphos events | The last 1,000 of each user are kept. A stream takes over its connection, so a client that closes only its sending side is taken to have left. |
-| Distributed cluster | The log, the term and the vote are kept in memory: a member that restarts comes back empty and is brought up to date as a new member. The log is never cut short by a snapshot. Members join and leave outside the log. `add_atom` still spreads by broadcast with conflict resolution at each node; only `add_atom_in_order` goes through the log. |
+| Distributed cluster | The log is never cut short by a snapshot, so a kept log grows without end. Which entries are committed is not kept: a member that restarts applies its log again from the start. Members join and leave outside the log. `add_atom` still spreads by broadcast with conflict resolution at each node; only `add_atom_in_order` goes through the log. |
 
 ---
 

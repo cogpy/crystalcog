@@ -197,7 +197,25 @@ node.add_atom_in_order(link)   # => this node's atom once every reachable member
 
 Every member places the atom at the same point in the same order, so all end with the same truth value and no conflict has to be resolved: an atom that is already there takes the truth value given, and its parts are used as they are. `add_atom` still spreads by broadcast, with conflicts resolved at each node.
 
-This is Raft's election and log. What is not there: the log, the term and the vote are kept in memory, so a member that restarts comes back empty and is brought up to date as a new member; the log is never cut short by a snapshot; and members join and leave outside the log, by the membership messages.
+### Coming Back After a Restart
+
+A member given a state path is the same member when it comes back:
+
+```crystal
+node = AtomSpace::DistributedAtomSpaceCluster.new("cluster", atomspace,
+  host: "10.0.0.5", state_path: "/var/lib/crystalcog/cluster.journal")
+node.on_commit { |index, command| apply(command) }   # before start
+node.start
+node.join_cluster(seed_host, seed_port)
+```
+
+- The file keeps the member's id, its term, the vote it gave in that term, and its log. A change is on disk before the member answers for it, so a member cannot vote twice in one term by restarting, and an entry it said it held is still there.
+- The file is a journal of JSON lines. It is written afresh in its shortest form each time it is read, and a last line torn by a crash is passed over.
+- Which entries are committed is not kept. The member learns it again from the leader and applies its log from the first entry, so `on_commit` handlers see every command again after a restart: register them before `start`, and let them rebuild what they build.
+- Membership is not kept either: the member joins again through a seed, under its old id. The leader then hands it only what it missed.
+- Without a state path a member keeps all this in memory and is a new member each time.
+
+This is Raft's election and log. What is not there: the log is never cut short by a snapshot, so the file grows with it; and members join and leave outside the log, by the membership messages.
 
 ## Configuration Options
 
