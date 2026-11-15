@@ -1183,6 +1183,14 @@ module URE
       # search below.
       prove(target) if @rules.any? { |rule| rule.premise_patterns || rule.is_a?(ModusPonensRule) || rule.is_a?(ConjunctionRule) }
 
+      # A goal without variables that is in the AtomSpace is the stored
+      # atom. A goal built beside it is a different atom with the same
+      # content, and the tree below would search for what is already
+      # there until it ran out of iterations.
+      if Unifier.ground?(target)
+        target = RuleMatcher.canonical(target, @atomspace) || target
+      end
+
       @root_bit = BITNode.new(target, 0)
       @inference_tree = [@root_bit.not_nil!]
       @current_iteration = 0
