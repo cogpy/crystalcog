@@ -260,6 +260,9 @@ Two minor test failures in distributed storage edge cases:
 | Query path expressions (`a/b`, `a\|b`, `^a`, brackets, `?`); ORDER BY and LIMIT on CONSTRUCT | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
 | Cluster members that keep their id, term, vote and log on disk and come back as themselves | `state_path` in `src/atomspace/distributed_cluster.cr`, [DISTRIBUTED_ATOMSPACE_CLUSTERING.md](DISTRIBUTED_ATOMSPACE_CLUSTERING.md) |
 | Mined variables weighed against the atoms that fill their place | `ConjunctionMiner` in `src/pattern_mining/pattern_mining.cr` |
+| Lossless JPEG (2 to 16 bits, all predictors, point transform) and 12-bit sequential JPEG | `src/vision/jpeg.cr`, [VISION.md](VISION.md) |
+| Query negated relations in paths (`!a`, `!(a\|^b)`) | `src/opencog/query_language.cr`, [QUERY_LANGUAGE_SUMMARY.md](QUERY_LANGUAGE_SUMMARY.md) |
+| Cluster snapshots that cut the log short and bring lagging members up to date | `compact`, `on_restore` in `src/atomspace/distributed_cluster.cr`, [DISTRIBUTED_ATOMSPACE_CLUSTERING.md](DISTRIBUTED_ATOMSPACE_CLUSTERING.md) |
 
 ### Still simplified
 
@@ -267,11 +270,11 @@ Two minor test failures in distributed storage edge cases:
 |---|---|
 | PLN engine | A premise yields at most one new conclusion per rule per iteration, so a full closure can take many iterations. Confidence uses fixed discounts, not evidence counts. Modus ponens assumes P(B\|not A) = 0.2. (A second derivation that shares part of its evidence with a conclusion is left out whole, and that is meant: a derivation needs all its premises, so the part that is not shared is not evidence on its own.) |
 | URE rules | Going forward the conjunction rule joins only two facts with an argument in common, and conjoins evaluations alone. The proof search is depth-first with a depth limit and a budget, not a best-first search over the inference tree. An antecedent that is written in an implication counts as a fact, because being in the AtomSpace is all a fact is. |
-| Query language | Clauses are inheritance and subject-predicate-object triples. No path over a variable predicate, and none that excludes a relation. A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
+| Query language | Clauses are inheritance and subject-predicate-object triples. No path over a variable predicate (SPARQL has none either). A FILTER or BIND sees only what its own block matches. A computed value is a node beside the AtomSpace, not an atom in it. |
 | Pattern mining | Conjunctions join frequent single patterns on shared variables, two clauses by default. A variable is weighed evenly against the atoms that fill its place, whether an atom fills it once or a hundred times. |
-| Vision | Object detection expects flat-coloured shapes. Lossless, arithmetic-coded and 12-bit JPEGs are refused. CMYK is converted without a colour profile. |
+| Vision | Object detection expects flat-coloured shapes. Arithmetic-coded, hierarchical and 12-bit progressive JPEGs are refused. Samples of more than 8 bits are brought to 8. CMYK is converted without a colour profile. |
 | Paphos events | The last 1,000 of each user are kept. A stream takes over its connection, so a client that closes only its sending side is taken to have left. |
-| Distributed cluster | The log is never cut short by a snapshot, so a kept log grows without end. Which entries are committed is not kept: a member that restarts applies its log again from the start. Members join and leave outside the log. `add_atom` still spreads by broadcast with conflict resolution at each node; only `add_atom_in_order` goes through the log. |
+| Distributed cluster | Members join and leave outside the log. A snapshot travels as one message. Which entries are committed is not kept: a member that restarts applies its log again from its snapshot. `add_atom` still spreads by broadcast with conflict resolution at each node; only `add_atom_in_order` goes through the log. |
 
 ---
 

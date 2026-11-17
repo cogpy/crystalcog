@@ -134,7 +134,9 @@ clause    := term ( ISA | inherits_from | "->" ) term
            | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
 path      := sequence { "|" sequence }
 sequence  := step { "/" step }
-step      := [ "^" ] ( relation | "(" path ")" ) [ "+" | "*" | "?" ]
+step      := [ "^" ] ( relation | "(" path ")" | negated ) [ "+" | "*" | "?" ]
+negated   := "!" one | "!" "(" one { "|" one } ")"
+one       := [ "^" ] relation
 relation  := ISA | inherits_from | "->" | name
 term      := "$" name | name | "quoted name"
 condition := condition OR condition | condition AND condition
@@ -222,7 +224,8 @@ A path can be put together from several relations:
 - `ISA`, `inherits_from` and `->` stand for inheritance inside a path as they do outside: `Ann owns/ISA $kind`.
 - A path that could be no step at all, as `a*`, `a?` or `(a/b)*`, joins an atom to itself. With variables at both ends that is every atom any of the path's relations touches.
 - The search runs the path as a small machine of states over pairs of an atom and a state, breadth first, so each pair of ends comes once however many ways lead between them, with the links of a shortest way as what was matched. From the object's end the path is read backwards.
-- Still not there: a path over a variable predicate, and a path that excludes a relation.
+- `!a` is one link of any relation but `a`, inheritance and every predicate counted as relations: `Desk !located_in $x` gives what else the desk is joined to. `!^a` walks any relation but `a` backwards. `!(a|b|^c)` leaves out several: forwards anything but `a` and `b`, backwards anything but `c`; a set that names only forward relations takes no backward link, and the other way round. A negated set repeats and joins like any step: `Ann owns/!ISA/part_of* $place`.
+- A path over a variable predicate is not there; nor is it in SPARQL, whose paths these follow.
 
 ### ASK
 

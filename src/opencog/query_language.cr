@@ -34,7 +34,9 @@
 #              | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
 #   path      := sequence { "|" sequence }         (one or the other)
 #   sequence  := step { "/" step }                 (one after the other)
-#   step      := [ "^" ] ( relation | "(" path ")" ) [ "+" | "*" | "?" ]
+#   step      := [ "^" ] ( relation | "(" path ")" | negated ) [ "+" | "*" | "?" ]
+#   negated   := "!" one | "!" "(" one { "|" one } ")"
+#   one       := [ "^" ] relation
 #   relation  := ISA | inherits_from | "->" | name
 #   term      := "$" name | name | "quoted name"
 #   condition := condition OR condition | condition AND condition
@@ -57,8 +59,9 @@
 #
 # A path says how to get from one atom to another over several links.
 # `+` repeats a step once or more, `*` any number of times and `?` once
-# or not at all; `/` puts steps one after the other, `|` offers a choice
-# and `^` walks a relation backwards. So `$x ISA+ Animal` holds when a
+# or not at all; `/` puts steps one after the other, `|` offers a choice,
+# `^` walks a relation backwards and `!` takes any relation but those
+# named. So `$x ISA+ Animal` holds when a
 # chain of inheritance links leads from $x to Animal, and
 # `$part (part_of/ISA)+ $kind | ^has_part $kind` reads as it is written.
 #
@@ -227,6 +230,29 @@ module OpenCog
       end
     end
 
+    # One link of any relation but those named: `!a` any forward link
+    # whose relation is not `a`, `!^a` any link walked backwards whose
+    # relation is not `a`. `forward` and `backward` are the relations
+    # left out each way, nil where the set allows no link that way.
+    class PathNegated < QueryPath
+      getter forward : Array(String?)?
+      getter backward : Array(String?)?
+
+      def initialize(@forward : Array(String?)?, @backward : Array(String?)?)
+      end
+
+      def to_s(io : IO)
+        names = (@forward || [] of String?).map { |name| name || "ISA" } +
+                (@backward || [] of String?).map { |name| "^#{name || "ISA"}" }
+        io << '!'
+        if names.size == 1
+          io << names[0]
+        else
+          io << '(' << names.join('|') << ')'
+        end
+      end
+    end
+
     # The inner path walked from its end to its start.
     class PathInverse < QueryPath
       getter inner : QueryPath
@@ -312,12 +338,16 @@ module OpenCog
     # then a search over pairs of an atom and a state. `inverted` builds
     # the machine of the path read from its end.
     class PathAutomaton
-      record Move, relation : String?, forward : Bool, target : Int32
+      # A move over one link of `relation`, or with `except`, of any
+      # relation but those.
+      record Move, relation : String?, forward : Bool, target : Int32, except : Array(String?)? = nil
 
       getter start : Int32
       getter accept : Int32
-      # The relations the path goes over.
+      # The relations the path goes over by name.
       getter relations = [] of String?
+      # Whether some step takes any relation but those it names.
+      getter? any_relation = false
 
       def initialize(path : QueryPath, inverted : Bool = false)
         @moves = [] of Array(Move)
@@ -360,6 +390,12 @@ module OpenCog
           from, to = state, state
           @relations << path.relation unless @relations.includes?(path.relation)
           @moves[from] << Move.new(path.relation, !inverted, to)
+          {from, to}
+        when PathNegated
+          from, to = state, state
+          @any_relation = true
+          path.forward.try { |left_out| @moves[from] << Move.new(nil, !inverted, to, left_out) }
+          path.backward.try { |left_out| @moves[from] << Move.new(nil, inverted, to, left_out) }
           {from, to}
         when PathInverse
           build(path.inner, !inverted)
@@ -827,7 +863,6 @@ module OpenCog
             advance
             Token.new(:punctuation, "#{char}=", line, column)
           else
-            error("expected '!='", line, column) if char == '!'
             Token.new(:punctuation, char.to_s, line, column)
           end
         when '-'
@@ -1578,6 +1613,7 @@ module OpenCog
       private def parse_comparison(used : Array(String)) : QueryCondition
         left = parse_value(used, declare: false)
         operator = current
+        fail("expected '!='") if operator.kind == :punctuation && operator.text == "!"
         unless operator.kind == :punctuation && {"=", "!=", "<", "<=", ">", ">="}.includes?(operator.text)
           fail("expected a comparison such as = or <, found #{operator.describe}")
         end
@@ -1689,6 +1725,42 @@ module OpenCog
 
       PATH_MARKS = {"+", "*", "?", "/", "|"}
 
+      # After "!": one relation, or several in brackets, each perhaps
+      # walked backwards.
+      private def parse_negated : QueryPath
+        forward = nil
+        backward = nil
+        bracketed = punctuation?("(")
+        advance if bracketed
+        loop do
+          inverse = punctuation?("^")
+          advance if inverse
+          token = current
+          relation = if keyword?("ISA") || punctuation?("->") || (token.kind == :name && token.text.downcase == "inherits_from")
+                       nil
+                     elsif token.kind == :name || token.kind == :string || token.kind == :integer
+                       token.text
+                     elsif token.kind == :variable
+                       fail("a path follows a named predicate, not $#{token.text}")
+                     else
+                       fail("expected a predicate, ISA or '->' after '!', found #{token.describe}")
+                     end
+          advance
+          if inverse
+            (backward ||= [] of String?) << relation
+          else
+            (forward ||= [] of String?) << relation
+          end
+          break unless bracketed && punctuation?("|")
+          advance
+        end
+        if bracketed
+          fail("expected ')' to close the relations after '!', found #{current.describe}") unless punctuation?(")")
+          advance
+        end
+        PathNegated.new(forward, backward)
+      end
+
       # A template takes single steps: anything that makes a path is
       # refused there.
       private def path_mark(allowed : Bool) : Token
@@ -1720,7 +1792,8 @@ module OpenCog
       private def parse_path_step(allowed : Bool) : QueryPath
         # Where no path can be, and before a variable, a bracket is not
         # the start of one: `FILTR($x = a)` is a misspelt word, not a path.
-        opens = punctuation?("^") || (punctuation?("(") && @tokens[@position + 1]?.try(&.kind) != :variable)
+        opens = punctuation?("^") || punctuation?("!") ||
+                (punctuation?("(") && @tokens[@position + 1]?.try(&.kind) != :variable)
         fail("expected a predicate, ISA or '->', found #{current.describe}") if punctuation?("(") && !opens
         fail("expected a predicate, ISA or '->', found #{current.describe}") if opens && !allowed
 
@@ -1731,7 +1804,10 @@ module OpenCog
         end
 
         token = current
-        inner = if punctuation?("(")
+        inner = if punctuation?("!")
+                  advance
+                  parse_negated
+                elsif punctuation?("(")
                   advance
                   bracketed = parse_path(allowed)
                   fail("expected ')' to close the path, found #{current.describe}") unless punctuation?(")")
@@ -2202,15 +2278,33 @@ module OpenCog
         onward = PathLinks.new
         back = PathLinks.new
         touched = {} of AtomSpace::Handle => AtomSpace::Atom
-        automaton.relations.each do |relation|
-          leaving = onward[relation] = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
-          reaching = back[relation] = {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
-          path_steps(relation, var_map).each do |(from, to, link)|
+        add = ->(relation : String?, steps : Array({AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom})) do
+          leaving = onward[relation] ||= {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+          reaching = back[relation] ||= {} of AtomSpace::Handle => Array({AtomSpace::Atom, AtomSpace::Atom})
+          steps.each do |(from, to, link)|
             (leaving[from.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {to, link}
             (reaching[to.handle] ||= [] of {AtomSpace::Atom, AtomSpace::Atom}) << {from, link}
             touched[from.handle] = from
             touched[to.handle] = to
           end
+          nil
+        end
+        automaton.relations.each { |relation| add.call(relation, path_steps(relation, var_map)) }
+        # A step over any relation but some needs every relation there is:
+        # inheritance, and the triples of each predicate, by its name.
+        if automaton.any_relation?
+          add.call(nil, path_steps(nil, var_map)) unless onward.has_key?(nil)
+          by_name = {} of String => Array({AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom})
+          @atomspace.get_atoms_by_type(AtomSpace::AtomType::EVALUATION_LINK).each do |link|
+            next unless link.is_a?(AtomSpace::Link) && link.arity == 2
+            predicate = link[0]
+            arguments = link[1]
+            next if predicate.link? || !arguments.is_a?(AtomSpace::Link)
+            next if arguments.type != AtomSpace::AtomType::LIST_LINK || arguments.arity != 2
+            next if onward.has_key?(predicate.name)
+            (by_name[predicate.name] ||= [] of {AtomSpace::Atom, AtomSpace::Atom, AtomSpace::Atom}) << {arguments[0], arguments[1], link}
+          end
+          by_name.each { |name, steps| add.call(name, steps) }
         end
 
         origins = (forwards ? starts : ends) || touched.values
@@ -2258,7 +2352,18 @@ module OpenCog
         until waiting.empty?
           atom, state = waiting.shift
           automaton.moves(state).each do |move|
-            links = (move.forward ? onward : back)[move.relation]?.try(&.[atom.handle]?) || next
+            index = move.forward ? onward : back
+            links = if left_out = move.except
+                      # Every link of every relation but those left out.
+                      found = [] of {AtomSpace::Atom, AtomSpace::Atom}
+                      index.each do |relation, by_atom|
+                        next if left_out.includes?(relation)
+                        by_atom[atom.handle]?.try { |some| found.concat(some) }
+                      end
+                      found
+                    else
+                      index[move.relation]?.try(&.[atom.handle]?) || next
+                    end
             links.each do |(to, link)|
               automaton.closure(move.target).each do |after|
                 pair = {to.handle, after}
