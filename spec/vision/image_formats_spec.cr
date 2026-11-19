@@ -172,16 +172,21 @@ describe Vision::JPEG do
   it "says which kinds of JPEG it does not read" do
     jpeg = fixture("scene_420.jpg")
     frame = (0...jpeg.size - 1).find! { |i| jpeg[i] == 0xFF && jpeg[i + 1] == 0xC0 }
-    # The same file with its frame marked as arithmetic-coded, then as lossless.
-    {0xC9_u8, 0xC3_u8}.each do |marker|
+    # The same file with its frame marked as arithmetic-coded, then as hierarchical.
+    {0xC9_u8 => "arithmetic-coded JPEG is not supported", 0xC5_u8 => "hierarchical JPEG is not supported"}.each do |marker, message|
       other = jpeg.dup
       other[frame + 1] = marker
-      expect_raises(Vision::ImageError, "lossless, hierarchical or arithmetic-coded") { Vision::Image.from_jpeg(other) }
+      expect_raises(Vision::ImageError, message) { Vision::Image.from_jpeg(other) }
     end
-    # Twelve bits per sample.
+    # Ten bits per sample.
     deep = jpeg.dup
-    deep[frame + 4] = 12_u8
-    expect_raises(Vision::ImageError, "only 8-bit JPEG is supported") { Vision::Image.from_jpeg(deep) }
+    deep[frame + 4] = 10_u8
+    expect_raises(Vision::ImageError, "JPEG with 10 bits per sample is not supported") { Vision::Image.from_jpeg(deep) }
+    # Twelve bits in a progressive frame.
+    progressive = fixture("progressive_444.jpg")
+    start = (0...progressive.size - 1).find! { |i| progressive[i] == 0xFF && progressive[i + 1] == 0xC2 }
+    progressive[start + 4] = 12_u8
+    expect_raises(Vision::ImageError, "12-bit progressive JPEG is not supported") { Vision::Image.from_jpeg(progressive) }
     expect_raises(Vision::ImageError, "not a JPEG file") { Vision::Image.from_jpeg(fixture("scene.png")) }
   end
 
@@ -203,5 +208,103 @@ describe Vision::JPEG do
     four = jpeg.dup
     four[frame + 9] = 4_u8
     expect_raises(Vision::ImageError, "truncated JPEG frame header") { Vision::Image.from_jpeg(four) }
+  end
+end
+
+# The files in this part were written by libjpeg-turbo 3. Those it has no
+# option for (restart intervals, a point transform, subsampled components
+# and one component per scan in a lossless file) were written by a small
+# encoder made from the standard, and libjpeg-turbo decoded each back to
+# exactly what was encoded. Every reference is libjpeg-turbo's decode,
+# brought to 8 bits as (v * 255 + max / 2) / max.
+private def frame_of(bytes : Bytes, marker : UInt8) : Int32
+  (0...bytes.size - 1).find! { |i| bytes[i] == 0xFF && bytes[i + 1] == marker }
+end
+
+private def reference(name : String) : Vision::Image
+  path = File.join(FIXTURES, "#{name}.ppm")
+  Vision::Image.from_ppm(fixture(File.exists?(path) ? "#{name}.ppm" : "#{name}.pgm"))
+end
+
+describe "Vision::JPEG lossless" do
+  (1..7).each do |predictor|
+    it "decodes predictor #{predictor} exactly" do
+      bytes = fixture("lossless_p#{predictor}.jpg")
+      sof = frame_of(bytes, 0xC3_u8)
+      bytes[sof + 4].should eq(8)
+      scan = frame_of(bytes, 0xDA_u8)
+      bytes[scan + 11].should eq(predictor) # the scan's spectral start
+      image = Vision::Image.from_jpeg(bytes)
+      image.channels.should eq(3)
+      largest_difference(image, reference("lossless_p#{predictor}")).should eq(0)
+    end
+  end
+
+  {
+    "lossless_gray"    => "grayscale",
+    "lossless_gray12"  => "12-bit grayscale",
+    "lossless_gray16"  => "16-bit grayscale",
+    "lossless_rgb12"   => "12-bit colour",
+    "lossless_restart" => "restart markers every two lines",
+    "lossless_point"   => "a point transform of three, 12 bits, a restart every line",
+    "lossless_sub"     => "a full-resolution component beside two halved both ways",
+    "lossless_planar"  => "one component per scan",
+  }.each do |name, what|
+    it "decodes #{name} (#{what}) exactly" do
+      largest_difference(Vision::Image.from_jpeg(fixture("#{name}.jpg")), reference(name)).should eq(0)
+    end
+  end
+
+  it "is the picture that was encoded" do
+    original = Vision::Image.from_png(fixture("scene.png"))
+    Vision::Image.from_jpeg(fixture("lossless_p4.jpg")).should eq(original)
+    Vision::Image.from_jpeg(fixture("lossless_restart.jpg")).should eq(original)
+    Vision::Image.from_jpeg(fixture("lossless_planar.jpg")).should eq(original)
+  end
+
+  it "keeps the low bits of deep samples" do
+    # The 12-bit file's samples were spread with a pattern in their low
+    # four bits, which the 8-bit picture then shows in its last bit or two.
+    deep = Vision::Image.from_jpeg(fixture("lossless_gray12.jpg"))
+    eight = Vision::Image.from_jpeg(fixture("lossless_gray.jpg"))
+    largest_difference(deep, eight).should be > 0
+    largest_difference(deep, eight).should be <= 2
+  end
+
+  it "refuses what a lossless file cannot hold" do
+    bytes = fixture("lossless_gray.jpg")
+    scan = frame_of(bytes, 0xDA_u8)
+    no_predictor = bytes.dup
+    no_predictor[scan + 7] = 0_u8
+    expect_raises(Vision::ImageError, "lossless JPEG predictor 0 is not valid") { Vision::Image.from_jpeg(no_predictor) }
+    too_far = bytes.dup
+    too_far[scan + 9] = 8_u8 # point transform as large as the precision
+    expect_raises(Vision::ImageError, "point transform 8 is too large") { Vision::Image.from_jpeg(too_far) }
+    shallow = bytes.dup
+    shallow[frame_of(bytes, 0xC3_u8) + 4] = 1_u8
+    expect_raises(Vision::ImageError, "lossless JPEG with 1 bits per sample is not valid") { Vision::Image.from_jpeg(shallow) }
+  end
+end
+
+describe "Vision::JPEG 12-bit" do
+  {
+    "deep12_gray" => "grayscale",
+    "deep12_444"  => "full-resolution chroma",
+    "deep12_420"  => "chroma halved both ways",
+  }.each do |name, what|
+    it "decodes #{name} (#{what})" do
+      bytes = fixture("#{name}.jpg")
+      sof = frame_of(bytes, 0xC1_u8)
+      bytes[sof + 4].should eq(12)
+      image = Vision::Image.from_jpeg(bytes)
+      largest_difference(image, reference(name)).should be <= 3
+    end
+  end
+
+  it "stays close to the picture that was compressed" do
+    original = Vision::Image.from_png(fixture("scene.png"))
+    decoded = Vision::Image.from_jpeg(fixture("deep12_444.jpg"))
+    differences = original.data.zip(decoded.data).map { |x, y| (x.to_i - y.to_i).abs }
+    (differences.sum / differences.size).should be < 4.0
   end
 end
