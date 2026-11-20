@@ -45,11 +45,14 @@ describe OpenCog::Query do
 
   it "matches a detached concrete node by content" do
     space = AtomSpace::AtomSpace.new
-    cat = space.add_concept_node("cat")
+    cat = space.add_concept_node("cat", AtomSpace::SimpleTruthValue.new(0.8, 0.9))
+    space.add_inheritance_link(cat, space.add_concept_node("animal"))
     detached = AtomSpace::ConceptNode.new("cat")
 
     OpenCog::PatternMatcher.match(space, detached).should eq([{} of String => AtomSpace::Atom])
     OpenCog::PatternMatcher.match(space, AtomSpace::ConceptNode.new("dog")).should be_empty
+    nested = AtomSpace::InheritanceLink.new(detached, AtomSpace::ConceptNode.new("animal"))
+    OpenCog::PatternMatcher.match(space, nested).size.should eq(1)
     cat.should_not be(detached)
   end
 end

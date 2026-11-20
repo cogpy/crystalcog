@@ -458,7 +458,9 @@ module PatternMatching
 
       # Base case: both are atoms
       if !template.link? && !candidate.link?
-        return template == candidate || Pattern.variable?(template)
+        return true if Pattern.variable?(template)
+        equivalent = @atomspace.find_equivalent(template)
+        return equivalent.try(&.same?(candidate)) || false
       end
 
       # One is link, one is atom - no match unless template is variable
