@@ -1147,3 +1147,56 @@ describe "OpenCog query CONSTRUCT with ORDER BY, LIMIT and OFFSET" do
     built.map { |atom| atom.outgoing.first.name }.should eq(["Dog", "Cat"])
   end
 end
+
+describe "OpenCog query negated relations in paths" do
+  it "parses ! before one relation or several" do
+    shape = ->(path : String) { parse("SELECT * WHERE { $x #{path} $y }").clauses.first.to_s }
+    shape.call("!part_of").should eq("PathClause($x !part_of $y)")
+    shape.call("!^part_of").should eq("PathClause($x !^part_of $y)")
+    shape.call("!(part_of|ISA)").should eq("PathClause($x !(part_of|ISA) $y)")
+    shape.call("!(owns|^located_in)").should eq("PathClause($x !(owns|^located_in) $y)")
+    shape.call("!->").should eq("PathClause($x !ISA $y)")
+    shape.call("!part_of+").should eq("PathClause($x !part_of+ $y)")
+    shape.call("owns/!ISA").should eq("PathClause($x owns/!ISA $y)")
+    shape.call("^!owns").should eq("PathClause($x ^!owns $y)")
+  end
+
+  it "says what is wrong after a !" do
+    parse_error("SELECT $x WHERE { $x ! $y }").should eq("a path follows a named predicate, not $y at line 1, column 24")
+    parse_error("SELECT $x WHERE { $x !(a|b $y }").should eq(%[expected ')' to close the relations after '!', found $y at line 1, column 28])
+    parse_error("SELECT $x WHERE { $x !} }").should eq(%(expected a predicate, ISA or '->' after '!', found "}" at line 1, column 23))
+    parse_error("CONSTRUCT { $x !a $y } WHERE { $x a $y }").should eq(%(expected a predicate, ISA or '->', found "!" at line 1, column 16))
+    # A ! in a FILTER is still a comparison spelt wrong.
+    parse_error("SELECT $x WHERE { $x ISA y . FILTER($x ! y) }").should eq("expected '!=' at line 1, column 40")
+  end
+
+  it "takes any relation but those named" do
+    space = campus
+    # Ann owns the desk; the desk is located in the lab and is furniture.
+    names(ask(space, "SELECT $y WHERE { Desk !located_in $y }"), "y").should eq(["Furniture"])
+    names(ask(space, "SELECT $y WHERE { Desk !ISA $y }"), "y").should eq(["Lab"])
+    names(ask(space, "SELECT $y WHERE { Desk !(ISA|located_in) $y }"), "y").should be_empty
+    names(ask(space, "SELECT $y WHERE { Lab !located_in $y }"), "y").should eq(["Wing"])
+    # Everything the lab is joined to forwards, whatever by.
+    names(ask(space, "SELECT $y WHERE { Lab !nothing_at_all+ $y }"), "y").should eq(["Campus", "Garden", "Hall", "Wing"])
+  end
+
+  it "walks backwards over any relation but those named" do
+    space = campus
+    names(ask(space, "SELECT $x WHERE { Lab !^part_of $x }"), "x").should eq(["Desk", "Lamp"])
+    names(ask(space, "SELECT $x WHERE { Desk !^ISA $x }"), "x").should eq(["Ann"])
+    # Both ways at once: forwards by anything but ISA, backwards by anything but owns.
+    names(ask(space, "SELECT $x WHERE { Desk !(ISA|^owns) $x }"), "x").should eq(["Lab"])
+    names(ask(space, "SELECT $x WHERE { Desk !(located_in|^ISA) $x }"), "x").should eq(["Ann", "Furniture"])
+  end
+
+  it "joins with named relations in one path" do
+    space = campus
+    # From Ann by owning, then by anything but furniture's ISA.
+    names(ask(space, "SELECT $y WHERE { Ann owns/!ISA $y }"), "y").should eq(["Lab"])
+    names(ask(space, "SELECT $y WHERE { Ann owns/!ISA/part_of* $y }"), "y").should eq(["Campus", "Hall", "Lab", "Wing"])
+    names(ask(space, "SELECT $x WHERE { $x !ISA/part_of+ Campus }"), "x").should eq(["Desk", "Lab", "Lamp", "Wing"])
+    holds(space, "ASK { Bench !located_in Furniture }").should be_true
+    holds(space, "ASK { Bench !ISA Furniture }").should be_false
+  end
+end

@@ -251,6 +251,18 @@ module AtomSpace
     getter commit_index : UInt64 = 0_u64
     # How many of them it has applied.
     getter last_applied : UInt64 = 0_u64
+    # The snapshot the log was cut short behind: the last entry it covers
+    # and that entry's term, the application's state as given to
+    # `compact`, and the atoms placed through the log by then.
+    getter snapshot_index : UInt64 = 0_u64
+    @snapshot_term : UInt64 = 0_u64
+    @snapshot_data : JSON::Any = JSON::Any.new(nil)
+    # Every atom placed through the log, by content: what it was last
+    # placed as. A snapshot carries these, so that a member brought up to
+    # date from one has them too.
+    @placed = Hash(String, JSON::Any).new
+    @restore_handlers = [] of Proc(UInt64, JSON::Any, Nil)
+    @restored = false
     # As leader: for each member, the entry to hand it next and how many
     # entries it is known to hold.
     @next_index = Hash(String, UInt64).new
@@ -274,8 +286,19 @@ module AtomSpace
                    @sync_strategy : SyncStrategy = SyncStrategy::MergeUsingTruthValues,
                    adaptive_heartbeat_enabled : Bool = true,
                    @state_path : String? = nil)
-      kept_id, @term, @voted_for, @log = DistributedAtomSpaceCluster.read_state(@state_path)
-      @node_id = kept_id || UUID.random.to_s
+      kept = DistributedAtomSpaceCluster.read_state(@state_path)
+      @term = kept.term
+      @voted_for = kept.voted_for
+      @log = kept.log
+      @node_id = kept.node_id || UUID.random.to_s
+      if snapshot = kept.snapshot
+        @snapshot_index = snapshot.index
+        @snapshot_term = snapshot.term
+        @snapshot_data = snapshot.data
+        snapshot.atoms.each { |data| @placed[atom_key(data)] = data }
+        # What a snapshot covers was committed.
+        @commit_index = @last_applied = @snapshot_index
+      end
       @cluster_nodes = Hash(String, ClusterNodeInfo).new
       @vector_clock = Hash(String, UInt64).new
       @pending_sync_ops = [] of SyncOperation
@@ -306,6 +329,9 @@ module AtomSpace
     def start
       return if @running
 
+      # A kept snapshot is the state to start from; the entries after it
+      # are applied once a leader says they are committed.
+      restore_snapshot unless @restored
       @running = true
       @local_node.status = NodeStatus::Active
       @vector_clock[@node_id] = 0_u64
@@ -447,7 +473,8 @@ module AtomSpace
         "term"                       => JSON::Any.new(@term.to_i64),
         "role"                       => JSON::Any.new(@role.to_s),
         "leader_id"                  => JSON::Any.new(@leader_id),
-        "log_size"                   => JSON::Any.new(@log.size.to_i64),
+        "log_size"                   => JSON::Any.new(last_index.to_i64),
+        "snapshot_index"             => JSON::Any.new(@snapshot_index.to_i64),
         "commit_index"               => JSON::Any.new(@commit_index.to_i64),
         "last_applied"               => JSON::Any.new(@last_applied.to_i64),
       }
@@ -570,6 +597,8 @@ module AtomSpace
         handle_leader_announce(message)
       when "log_append"
         handle_log_append(message, client)
+      when "log_snapshot"
+        handle_log_snapshot(message, client)
       when "log_propose"
         handle_log_propose(message, client)
       when "conflict_resolution"
@@ -1085,8 +1114,8 @@ module AtomSpace
         begin
           socket.read_timeout = @vote_timeout
           socket.puts({"type" => "vote_request", "term" => term.to_i64, "candidate_id" => @node_id,
-                       "last_log_index" => @log.size.to_i64,
-                       "last_log_term" => (@log.last?.try(&.term) || 0_u64).to_i64}.to_json)
+                       "last_log_index" => last_index.to_i64,
+                       "last_log_term" => last_term.to_i64}.to_json)
           if line = socket.gets
             answer = JSON.parse(line)
             theirs = answer["term"].as_i64.to_u64
@@ -1112,8 +1141,8 @@ module AtomSpace
 
       their_last = message["last_log_term"]?.try(&.as_i64.to_u64) || 0_u64
       their_size = message["last_log_index"]?.try(&.as_i64.to_u64) || 0_u64
-      my_last = @log.last?.try(&.term) || 0_u64
-      far_enough = their_last > my_last || (their_last == my_last && their_size >= @log.size)
+      my_last = last_term
+      far_enough = their_last > my_last || (their_last == my_last && their_size >= last_index)
       granted = term == @term && far_enough && (@voted_for.nil? || @voted_for == candidate)
       if granted
         @voted_for = candidate
@@ -1184,19 +1213,47 @@ module AtomSpace
 
     # ------------------------------------------------------ replicated log
 
+    # The number of the last entry, counting those a snapshot covers.
     def log_size : UInt64
-      @log.size.to_u64
+      last_index
     end
 
-    # The term of each log entry, in order.
+    # The term of each entry after the snapshot, in order.
     def log_terms : Array(UInt64)
       @log.map(&.term)
     end
 
-    # The commands the members have agreed on, in the order every member
-    # applies them.
+    # The commands the members have agreed on since the snapshot, in the
+    # order every member applies them.
     def committed : Array(JSON::Any)
-      @log.first(@commit_index).select { |entry| entry.kind == "command" }.map(&.data)
+      @log.first((@commit_index - @snapshot_index).to_i).select { |entry| entry.kind == "command" }.map(&.data)
+    end
+
+    # Called with the entry a snapshot covers and the application's state
+    # in it, when the state is to be rebuilt from a snapshot: at `start`
+    # when one was kept, and when a leader sends one to a member that is
+    # too far behind for its log. The entries after it then reach
+    # `on_commit` as usual.
+    def on_restore(&handler : UInt64, JSON::Any -> Nil)
+      @restore_handlers << handler
+    end
+
+    # Cut the log short behind a snapshot. `state` is the application's
+    # state with every committed command applied, as `on_restore` will be
+    # given it; the atoms placed through the log go in the snapshot as
+    # well. Entries that are applied are dropped, and a member that needs
+    # them is sent the snapshot instead. Returns the last entry the
+    # snapshot covers, or nil when there is nothing new to cover.
+    def compact(state = nil) : UInt64?
+      return nil if @last_applied <= @snapshot_index
+      data = state.is_a?(JSON::Any) ? state : JSON.parse(state.to_json)
+      through = @last_applied
+      @snapshot_term = term_at(through) || @snapshot_term
+      @log = @log[(through - @snapshot_index).to_i..]
+      @snapshot_index = through
+      @snapshot_data = data
+      write_state
+      through
     end
 
     # Called on this node for every committed command, in log order, with
@@ -1270,7 +1327,7 @@ module AtomSpace
       entry = ClusterLogEntry.new(term, kind, data)
       @log << entry
       persist([{"entry" => entry.to_h}.to_json])
-      index = @log.size.to_u64
+      index = last_index
       settle_log
       @term == term && @commit_index >= index ? index : nil
     end
@@ -1330,16 +1387,21 @@ module AtomSpace
       lock.synchronize do
         loop do
           return false unless @running && leader? && @term == term
-          size = @log.size.to_u64
+          size = last_index
           following = Math.min(@next_index[node.id]? || size + 1, size + 1)
           before = following - 1
-          entries = @log[before.to_i..]
+          # What it lacks is behind the snapshot: send that first.
+          if before < @snapshot_index
+            return false unless send_snapshot(node, term)
+            next
+          end
+          entries = @log[(before - @snapshot_index).to_i..]
           message = {
             "type"       => "log_append",
             "term"       => term.to_i64,
             "leader_id"  => @node_id,
             "prev_index" => before.to_i64,
-            "prev_term"  => (before > 0 ? @log[before - 1].term : 0_u64).to_i64,
+            "prev_term"  => (term_at(before) || 0_u64).to_i64,
             "entries"    => entries.map(&.to_h),
             "commit"     => @commit_index.to_i64,
           }
@@ -1371,8 +1433,8 @@ module AtomSpace
       return unless leader?
       needed = @cluster_nodes.size // 2 + 1
       others = other_members
-      at = @log.size.to_u64
-      while at > @commit_index && @log[at - 1].term == @term
+      at = last_index
+      while at > @commit_index && at > @snapshot_index && term_at(at) == @term
         holders = 1 + others.count { |node| (@match_index[node.id]? || 0_u64) >= at }
         if holders >= needed
           @commit_index = at
@@ -1391,7 +1453,7 @@ module AtomSpace
         while @last_applied < @commit_index
           @last_applied += 1
           index = @last_applied
-          entry = @log[index - 1]
+          entry = @log[index - @snapshot_index - 1]
           case entry.kind
           when "command"
             @commit_handlers.each do |handler|
@@ -1416,7 +1478,7 @@ module AtomSpace
     private def handle_log_append(message : JSON::Any, client : TCPSocket?)
       term = message["term"].as_i64.to_u64
       if term < @term
-        client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => @log.size.to_i64}.to_json))
+        client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => last_index.to_i64}.to_json))
         return
       end
       give_way(term) if term > @term
@@ -1425,29 +1487,36 @@ module AtomSpace
       follow(message["leader_id"].as_s)
 
       before = message["prev_index"].as_i64.to_u64
-      fits = before == 0 || (@log.size >= before && @log[before - 1].term == message["prev_term"].as_i64.to_u64)
+      entries = message["entries"].as_a
+      # Entries this member's snapshot already covers were committed, and
+      # so are the leader's too: they are passed over.
+      if before < @snapshot_index
+        skip = Math.min((@snapshot_index - before).to_i, entries.size)
+        entries = entries[skip..]
+        before += skip
+      end
+      fits = before == 0 || term_at(before) == message["prev_term"].as_i64.to_u64
+      fits = true if before == @snapshot_index && before > 0
       unless fits
-        have = Math.min(@log.size.to_u64, before - 1)
+        have = Math.min(last_index, before - 1)
         client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => have.to_i64}.to_json))
         return
       end
-
-      entries = message["entries"].as_a
       # What changes in the log goes to disk in one write, before the
       # leader is told the entries are held.
       changes = [] of String
       entries.each_with_index do |raw, i|
         entry = ClusterLogEntry.from(raw)
         index = before + i + 1
-        if @log.size >= index
-          next if @log[index - 1].term == entry.term
+        if last_index >= index
+          next if term_at(index) == entry.term
           if index <= @commit_index
             CogUtil::Logger.error("Node #{@node_id} was handed another entry #{index} than the one it committed")
             persist(changes)
             client.try(&.puts({"term" => @term.to_i64, "success" => false, "have" => @commit_index.to_i64}.to_json))
             return
           end
-          @log.pop(@log.size - (index - 1).to_i)
+          @log.pop((last_index - (index - 1)).to_i)
           changes << {"truncate" => (index - 1).to_i64}.to_json
         end
         @log << entry
@@ -1462,9 +1531,121 @@ module AtomSpace
         @commit_index = known
         apply_committed
       end
-      client.try(&.puts({"term" => @term.to_i64, "success" => true, "have" => @log.size.to_i64}.to_json))
+      client.try(&.puts({"term" => @term.to_i64, "success" => true, "have" => last_index.to_i64}.to_json))
     rescue ex
       CogUtil::Logger.debug("Log entries not taken: #{ex.message}")
+    end
+
+    # The number of the last entry, and its term.
+    private def last_index : UInt64
+      @snapshot_index + @log.size
+    end
+
+    private def last_term : UInt64
+      @log.last?.try(&.term) || @snapshot_term
+    end
+
+    # The term of an entry, nil where this member does not have it: past
+    # the end of its log, or before its snapshot.
+    private def term_at(index : UInt64) : UInt64?
+      return 0_u64 if index == 0
+      return @snapshot_term if index == @snapshot_index
+      return nil if index < @snapshot_index || index > last_index
+      @log[index - @snapshot_index - 1].term
+    end
+
+    # As leader: hand a member the snapshot. True when it took it.
+    private def send_snapshot(node : ClusterNodeInfo, term : UInt64) : Bool
+      message = {
+        "type"       => "log_snapshot",
+        "term"       => term.to_i64,
+        "leader_id"  => @node_id,
+        "last_index" => @snapshot_index.to_i64,
+        "last_term"  => @snapshot_term.to_i64,
+        "data"       => @snapshot_data,
+        "atoms"      => @placed.values,
+      }
+      answer = request(node, message, @replication_timeout * 4) || return false
+      theirs = answer["term"].as_i64.to_u64
+      if theirs > @term
+        give_way(theirs)
+        return false
+      end
+      return false unless leader? && @term == term && answer["success"].as_bool
+      @match_index[node.id] = Math.max(@match_index[node.id]? || 0_u64, @snapshot_index)
+      @next_index[node.id] = @snapshot_index + 1
+      true
+    end
+
+    # A leader sends its snapshot. This member's state becomes what the
+    # snapshot holds, and its log what follows it; entries it already has
+    # after the snapshot's last one, of the same term, are kept.
+    private def handle_log_snapshot(message : JSON::Any, client : TCPSocket?)
+      term = message["term"].as_i64.to_u64
+      if term < @term
+        client.try(&.puts({"term" => @term.to_i64, "success" => false}.to_json))
+        return
+      end
+      give_way(term) if term > @term
+      @role = ClusterRole::Follower
+      @last_leader_contact = Time.monotonic
+      follow(message["leader_id"].as_s)
+
+      through = message["last_index"].as_i64.to_u64
+      if through > @snapshot_index
+        through_term = message["last_term"].as_i64.to_u64
+        @log = if term_at(through) == through_term
+                 @log[(through - @snapshot_index).to_i..]
+               else
+                 [] of ClusterLogEntry
+               end
+        @snapshot_index = through
+        @snapshot_term = through_term
+        @snapshot_data = message["data"]
+        @commit_index = Math.max(@commit_index, through)
+        if @last_applied < through
+          # The state is rebuilt from the snapshot.
+          @placed.clear
+          message["atoms"].as_a.each { |data| place(data) }
+          @last_applied = through
+          announce_restore
+        end
+        write_state
+        apply_committed
+      end
+      client.try(&.puts({"term" => @term.to_i64, "success" => true, "have" => last_index.to_i64}.to_json))
+    rescue ex
+      CogUtil::Logger.debug("Snapshot not taken: #{ex.message}")
+    end
+
+    # At start: rebuild from a kept snapshot.
+    private def restore_snapshot : Nil
+      @restored = true
+      return if @snapshot_index == 0
+      @placed.values.each { |data| place(data) }
+      announce_restore
+    end
+
+    private def announce_restore : Nil
+      @restore_handlers.each do |handler|
+        begin
+          handler.call(@snapshot_index, @snapshot_data)
+        rescue ex
+          CogUtil::Logger.error("Restore handler failed on snapshot #{@snapshot_index}: #{ex.message}")
+        end
+      end
+    end
+
+    # What makes two placed atoms the same atom: its type and name, or
+    # its type and parts.
+    private def atom_key(data : JSON::Any) : String
+      type = data["type"].as_s
+      if name = data["name"]?
+        "#{type}:#{name.as_s}"
+      else
+        parts = data["outgoing_atoms"]?.try(&.as_a) || [] of JSON::Any
+        "(#{type} #{parts.map { |part| atom_key(part) }.join(" ")})"
+      end
     end
 
     # A member passes on what was proposed to it.
@@ -1478,17 +1659,27 @@ module AtomSpace
 
     # --------------------------------------------------------- kept state
 
-    # What a state file holds: the member's id, its term, its vote and
-    # its log. The file is a journal of JSON lines, each a change: the
-    # id, a term with the vote given in it, an entry added to the log, or
-    # the log cut back to a length. A last line torn by a crash is not a
-    # change that was ever answered for, and is left out.
-    def self.read_state(path : String?) : {String?, UInt64, String?, Array(ClusterLogEntry)}
+    # A snapshot as kept: the last entry it covers, that entry's term,
+    # the application's state and the atoms placed through the log.
+    record KeptSnapshot, index : UInt64, term : UInt64, data : JSON::Any, atoms : Array(JSON::Any)
+
+    # What a state file holds.
+    record KeptState, node_id : String?, term : UInt64, voted_for : String?,
+      log : Array(ClusterLogEntry), snapshot : KeptSnapshot?
+
+    # What a state file holds: the member's id, its term, its vote, its
+    # snapshot and its log. The file is a journal of JSON lines, each a
+    # change: the id, a term with the vote given in it, a snapshot that
+    # the log after it follows, an entry added to the log, or the log cut
+    # back to the entry it ends with. A last line torn by a crash is not
+    # a change that was ever answered for, and is left out.
+    def self.read_state(path : String?) : KeptState
       id = nil
       term = 0_u64
       voted_for = nil
       log = [] of ClusterLogEntry
-      return {id, term, voted_for, log} unless path && File.exists?(path)
+      snapshot = nil
+      return KeptState.new(id, term, voted_for, log, snapshot) unless path && File.exists?(path)
 
       File.each_line(path) do |line|
         record = (JSON.parse(line) rescue nil).try(&.as_h?) || next
@@ -1497,14 +1688,20 @@ module AtomSpace
         elsif kept = record["term"]?
           term = kept.as_i64.to_u64
           voted_for = record["voted_for"]?.try(&.as_s?)
+        elsif kept = record["snapshot"]?
+          snapshot = KeptSnapshot.new(kept["index"].as_i64.to_u64, kept["term"].as_i64.to_u64,
+            kept["data"], kept["atoms"].as_a)
+          log.clear
         elsif kept = record["entry"]?
           log << ClusterLogEntry.from(kept)
         elsif kept = record["truncate"]?
-          length = kept.as_i64.to_i
-          log.pop(log.size - length) if log.size > length
+          through = kept.as_i64.to_u64
+          base = snapshot.try(&.index) || 0_u64
+          held = base + log.size
+          log.pop((held - through).to_i) if held > through && through >= base
         end
       end
-      {id, term, voted_for, log}
+      KeptState.new(id, term, voted_for, log, snapshot)
     end
 
     # Write the whole state afresh, in place of the journal so far.
@@ -1515,6 +1712,10 @@ module AtomSpace
       File.open(fresh, "w") do |file|
         file.puts({"node_id" => @node_id}.to_json)
         file.puts({"term" => @term.to_i64, "voted_for" => @voted_for}.to_json)
+        if @snapshot_index > 0
+          file.puts({"snapshot" => {"index" => @snapshot_index.to_i64, "term" => @snapshot_term.to_i64,
+                                    "data" => @snapshot_data, "atoms" => @placed.values}}.to_json)
+        end
         @log.each { |entry| file.puts({"entry" => entry.to_h}.to_json) }
         file.fsync
       end
@@ -1589,6 +1790,7 @@ module AtomSpace
         existing = link_over(type, parts)
       end
 
+      @placed[atom_key(data)] = data if top
       if existing
         existing.truth_value = truth if top
         return existing

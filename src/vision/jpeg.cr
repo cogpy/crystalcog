@@ -1,11 +1,21 @@
-# Baseline JPEG decoding in pure Crystal.
+# JPEG decoding in pure Crystal.
 #
-# Handles 8-bit Huffman-coded DCT files, sequential (SOF0, SOF1) and
-# progressive (SOF2): grayscale or three components with any sampling
+# Handles Huffman-coded files of three kinds:
+#
+# - DCT, sequential (SOF0, SOF1), 8 or 12 bits per sample;
+# - DCT, progressive (SOF2), 8 bits per sample;
+# - lossless (SOF3), 2 to 16 bits per sample, with any of the seven
+#   predictors and a point transform.
+#
+# Each may be grayscale or have three components with any sampling
 # factors, interleaved or one component per scan, with or without restart
-# markers, and four components (CMYK or YCCK, as print workflows write
-# them), which are converted to RGB without a colour profile. Lossless,
-# arithmetic-coded and 12-bit files are refused with an `ImageError`.
+# markers, or four components (CMYK or YCCK, as print workflows write
+# them), which are converted to RGB without a colour profile. Samples of
+# more than 8 bits are scaled to 8. Arithmetic-coded, hierarchical and
+# 12-bit progressive files are refused with an `ImageError`.
+#
+# A lossless file codes each sample as its difference from a prediction
+# made from the samples to its left, above, and above left.
 #
 # A progressive file sends each block's coefficients over several scans:
 # first by frequency band (spectral selection), and within a band first
@@ -143,6 +153,12 @@ module Vision
       property plane = Bytes.empty
       property plane_width = 0
       property plane_height = 0
+      # Bits per sample.
+      property precision = 8
+      # Lossless files only: the samples as coded, before the point
+      # transform, at full precision; and the point transform.
+      property samples = Slice(UInt16).empty
+      property point_transform = 0
       # Progressive files only: every block's 64 coefficients, in natural
       # (row by row) order, before dequantization.
       property coefficients = Slice(Int16).empty
@@ -170,6 +186,8 @@ module Vision
       adobe = false
       scans = 0
       progressive = false
+      lossless = false
+      precision = 8
 
       position = 2
       loop do
@@ -198,11 +216,21 @@ module Vision
         case marker
         when 0xDB then read_quantization(segment, quantization)
         when 0xC4 then read_huffman(segment, dc_tables, ac_tables)
-        when 0xC0, 0xC1, 0xC2
+        when 0xC0, 0xC1, 0xC2, 0xC3
           progressive = marker == 0xC2
+          lossless = marker == 0xC3
           raise ImageError.new("JPEG has more than one frame") unless components.empty?
           raise ImageError.new("truncated JPEG frame header") if segment.size < 6
-          raise ImageError.new("only 8-bit JPEG is supported (this one has #{segment[0]} bits)") unless segment[0] == 8
+          precision = segment[0].to_i
+          if lossless
+            unless (2..16).includes?(precision)
+              raise ImageError.new("lossless JPEG with #{precision} bits per sample is not valid (2 to 16)")
+            end
+          elsif progressive && precision == 12
+            raise ImageError.new("12-bit progressive JPEG is not supported")
+          elsif precision != 8 && precision != 12
+            raise ImageError.new("JPEG with #{precision} bits per sample is not supported (8 or 12, or 2 to 16 when lossless)")
+          end
           height = (segment[1].to_i << 8) | segment[2].to_i
           width = (segment[3].to_i << 8) | segment[4].to_i
           count = segment[5].to_i
@@ -218,10 +246,13 @@ module Vision
             unless (1..4).includes?(component.horizontal) && (1..4).includes?(component.vertical)
               raise ImageError.new("JPEG sampling factor out of range")
             end
+            component.precision = precision
             components << component
           end
-        when 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF
-          raise ImageError.new("this kind of JPEG (lossless, hierarchical or arithmetic-coded) is not supported")
+        when 0xC5, 0xC6, 0xC7, 0xCD, 0xCE, 0xCF
+          raise ImageError.new("hierarchical JPEG is not supported")
+        when 0xC9, 0xCA, 0xCB
+          raise ImageError.new("arithmetic-coded JPEG is not supported")
         when 0xDD
           raise ImageError.new("truncated JPEG restart interval") if segment.size < 2
           restart_interval = (segment[0].to_i << 8) | segment[1].to_i
@@ -234,14 +265,17 @@ module Vision
         when 0xDA
           raise ImageError.new("JPEG scan comes before its frame header") if components.empty?
           if scans == 0
-            prepare_planes(components, width, height)
+            prepare_planes(components, width, height, lossless)
             if progressive
               components.each do |component|
                 component.coefficients = Slice(Int16).new(component.plane_width * component.plane_height)
               end
             end
           end
-          position = if progressive
+          position = if lossless
+                       decode_lossless_scan(bytes, position, segment, components, dc_tables,
+                         restart_interval, width, height)
+                     elsif progressive
                        decode_progressive_scan(bytes, position, segment, components, dc_tables, ac_tables,
                          restart_interval, width, height)
                      else
@@ -254,6 +288,7 @@ module Vision
 
       raise ImageError.new("JPEG has no image data") if scans == 0
       reconstruct(components, quantization) if progressive
+      settle_samples(components) if lossless
       assemble(components, width, height, adobe_transform, adobe)
     end
 
@@ -294,15 +329,143 @@ module Vision
       end
     end
 
-    private def self.prepare_planes(components : Array(Component), width : Int32, height : Int32) : Nil
+    # A DCT file's planes are whole blocks of 8 by 8; a lossless file's
+    # are whole MCUs, each a sample of every component at its sampling.
+    private def self.prepare_planes(components : Array(Component), width : Int32, height : Int32,
+                                    lossless : Bool = false) : Nil
       h_max = components.max_of(&.horizontal)
       v_max = components.max_of(&.vertical)
-      mcus_wide = (width + 8 * h_max - 1) // (8 * h_max)
-      mcus_high = (height + 8 * v_max - 1) // (8 * v_max)
+      block = lossless ? 1 : 8
+      mcus_wide = (width + block * h_max - 1) // (block * h_max)
+      mcus_high = (height + block * v_max - 1) // (block * v_max)
       components.each do |component|
-        component.plane_width = mcus_wide * component.horizontal * 8
-        component.plane_height = mcus_high * component.vertical * 8
+        component.plane_width = mcus_wide * component.horizontal * block
+        component.plane_height = mcus_high * component.vertical * block
         component.plane = Bytes.new(component.plane_width * component.plane_height)
+        component.samples = Slice(UInt16).new(component.plane_width * component.plane_height) if lossless
+      end
+    end
+
+    # One scan of a lossless file. Returns the position after it.
+    #
+    # The scan header's spectral start is the predictor and its low bit
+    # position the point transform. Each sample is coded as its difference
+    # from a prediction, its size by the component's DC table:
+    #
+    #   1: left   2: above   3: above left   4: left + above - above left
+    #   5: left + (above - above left) / 2   6: above + (left - above left) / 2
+    #   7: (left + above) / 2
+    #
+    # The first sample, and the first after each restart, is predicted as
+    # half the sample range; the rest of that line from the left, and the
+    # first sample of each later line from above.
+    private def self.decode_lossless_scan(bytes : Bytes, position : Int32, header : Bytes, components : Array(Component),
+                                          dc_tables : Hash(Int32, HuffmanTable), restart_interval : Int32,
+                                          width : Int32, height : Int32) : Int32
+      raise ImageError.new("truncated JPEG scan header") if header.size < 1
+      count = header[0].to_i
+      raise ImageError.new("truncated JPEG scan header") if header.size < 1 + count * 2 + 3
+      scan = Array(Component).new(count) do |i|
+        id = header[1 + i * 2].to_i
+        component = components.find { |candidate| candidate.id == id } ||
+                    raise ImageError.new("JPEG scan names component #{id}, which the frame does not have")
+        component.dc_table = header[2 + i * 2].to_i >> 4
+        component
+      end
+      raise ImageError.new("JPEG scan has no components") if scan.empty?
+      predictor = header[1 + count * 2].to_i
+      raise ImageError.new("lossless JPEG predictor #{predictor} is not valid (1 to 7)") unless (1..7).includes?(predictor)
+      point_transform = header[3 + count * 2].to_i & 15
+      tables = scan.map do |component|
+        dc_tables[component.dc_table]? || raise ImageError.new("JPEG scan uses a DC table that was not defined")
+      end
+      scan.each do |component|
+        component.point_transform = point_transform
+        if point_transform >= component.precision
+          raise ImageError.new("lossless JPEG point transform #{point_transform} is too large")
+        end
+      end
+
+      h_max = components.max_of(&.horizontal)
+      v_max = components.max_of(&.vertical)
+      reader = BitReader.new(bytes, position)
+      # Per component: whether the next sample starts afresh, and the line
+      # that counts as the first.
+      fresh = Array(Bool).new(scan.size, true)
+      first_line = Array(Int32).new(scan.size, 0)
+
+      if scan.size == 1
+        component = scan.first
+        units_wide = (width * component.horizontal + h_max - 1) // h_max
+        units_high = (height * component.vertical + v_max - 1) // v_max
+      else
+        units_wide = (width + h_max - 1) // h_max
+        units_high = (height + v_max - 1) // v_max
+      end
+
+      unit = 0
+      units_high.times do |unit_y|
+        units_wide.times do |unit_x|
+          restarting = restart_interval > 0 && unit > 0 && unit % restart_interval == 0
+          reader.restart if restarting
+          unit += 1
+
+          scan.each_with_index do |component, i|
+            across = scan.size == 1 ? 1 : component.horizontal
+            down = scan.size == 1 ? 1 : component.vertical
+            if restarting
+              fresh[i] = true
+              first_line[i] = unit_y * down
+            end
+            down.times do |dy|
+              across.times do |dx|
+                y = unit_y * down + dy
+                x = unit_x * across + dx
+                prediction = lossless_prediction(component, predictor, x, y, fresh[i], y == first_line[i])
+                fresh[i] = false
+                size = tables[i].decode(reader)
+                raise ImageError.new("lossless JPEG difference is too large") if size > 16
+                difference = size == 16 ? 32768 : reader.signed(size)
+                component.samples[y * component.plane_width + x] = ((prediction + difference) & 0xFFFF).to_u16
+              end
+            end
+          end
+        end
+      end
+      reader.position
+    end
+
+    private def self.lossless_prediction(component : Component, predictor : Int32, x : Int32, y : Int32,
+                                         fresh : Bool, first_line : Bool) : Int32
+      return 1 << (component.precision - component.point_transform - 1) if fresh
+      samples = component.samples
+      row = y * component.plane_width
+      return samples[row + x - 1].to_i if first_line
+      above = samples[row - component.plane_width + x].to_i
+      return above if x == 0
+      left = samples[row + x - 1].to_i
+      corner = samples[row - component.plane_width + x - 1].to_i
+      case predictor
+      when 1 then left
+      when 2 then above
+      when 3 then corner
+      when 4 then left + above - corner
+      when 5 then left + ((above - corner) >> 1)
+      when 6 then above + ((left - corner) >> 1)
+      else        (left + above) >> 1
+      end
+    end
+
+    # Lossless files: undo the point transform and bring the samples to
+    # 8 bits.
+    private def self.settle_samples(components : Array(Component)) : Nil
+      components.each do |component|
+        top = (1 << component.precision) - 1
+        plane = component.plane
+        component.samples.each_with_index do |sample, i|
+          value = Math.min(sample.to_i << component.point_transform, top)
+          plane[i] = component.precision == 8 ? value.to_u8 : ((value * 255 + top // 2) // top).to_u8
+        end
       end
     end
 
@@ -379,7 +542,7 @@ module Vision
       64.times { |i| block[i] = 0 }
 
       size = dc.decode(reader)
-      raise ImageError.new("JPEG DC coefficient is too large") if size > 11
+      raise ImageError.new("JPEG DC coefficient is too large") if size > component.precision + 3
       component.predictor &+= reader.signed(size)
       block[0] = component.predictor &* table[0]
 
@@ -622,11 +785,15 @@ module Vision
 
       return if y + 8 > component.plane_height || x + 8 > component.plane_width
       plane = component.plane.to_unsafe
+      # Samples are centred on zero; 12-bit ones are brought to 8 bits.
+      top = (1 << component.precision) - 1
+      center = (1 << (component.precision - 1)).to_f
       8.times do |py|
         8.times do |px|
           sum = 0.0
           8.times { |v| sum += basis[py * 8 + v] * rows[v * 8 + px] }
-          plane[(y + py) * component.plane_width + x + px] = (sum + 128.0).round.clamp(0.0, 255.0).to_u8
+          value = (sum + center).round.clamp(0.0, top.to_f).to_i
+          plane[(y + py) * component.plane_width + x + px] = (component.precision == 8 ? value : (value * 255 + top // 2) // top).to_u8
         end
       end
     end

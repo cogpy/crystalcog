@@ -211,11 +211,26 @@ node.join_cluster(seed_host, seed_port)
 
 - The file keeps the member's id, its term, the vote it gave in that term, and its log. A change is on disk before the member answers for it, so a member cannot vote twice in one term by restarting, and an entry it said it held is still there.
 - The file is a journal of JSON lines. It is written afresh in its shortest form each time it is read, and a last line torn by a crash is passed over.
-- Which entries are committed is not kept. The member learns it again from the leader and applies its log from the first entry, so `on_commit` handlers see every command again after a restart: register them before `start`, and let them rebuild what they build.
+- Which entries are committed is not kept. The member learns it again from the leader and applies its log from the first entry after its snapshot, so `on_commit` handlers see those commands again after a restart: register them before `start`, and let them rebuild what they build.
 - Membership is not kept either: the member joins again through a seed, under its old id. The leader then hands it only what it missed.
 - Without a state path a member keeps all this in memory and is a new member each time.
 
-This is Raft's election and log. What is not there: the log is never cut short by a snapshot, so the file grows with it; and members join and leave outside the log, by the membership messages.
+### Cutting the Log Short
+
+A log, and the file that keeps it, would grow without end. A member cuts its own short behind a snapshot of the application's state:
+
+```crystal
+node.on_restore { |index, state| rebuild(state) }   # before start
+node.compact(current_state)                          # => the last entry it covers, or nil
+```
+
+- `compact` covers every entry the member has applied. `state` is anything that turns into JSON: the application's state with those commands applied, as `on_restore` will be given it. The atoms placed through the log (`add_atom_in_order`) go in the snapshot without being asked for.
+- The entries it covers are dropped, from memory and from the state file, where the snapshot takes their place. Each member compacts when it likes.
+- A leader sends its snapshot to a member that lacks entries the leader has dropped: one that joins late, or comes back after a long time away. The member takes it when it is newer than its own, keeps what it holds after it of the same term, places the snapshot's atoms and calls `on_restore`; the entries after the snapshot then reach `on_commit` as usual.
+- A member restarted from a kept snapshot calls `on_restore` at `start`, before anything after it.
+- `log_size` is the number of the last entry, counting those a snapshot covers; `snapshot_index` the last one it covers. `log_terms` and `committed` are what follows the snapshot. `cluster_stats` has `snapshot_index`.
+
+This is Raft's election, log and snapshots. What is not there: members join and leave outside the log, by the membership messages; and a snapshot travels as one message.
 
 ## Configuration Options
 
