@@ -99,6 +99,12 @@ private def signed_in(p : Platform) : String
   res["accessToken"].as_s
 end
 
+private def signed_in_as(p : Platform, email : String) : String
+  p.rpc("AuthService/SignUp", {"email" => email, "password" => "secret123"})
+  _, res = p.rpc("AuthService/SignIn", {"email" => email, "password" => "secret123"})
+  res["accessToken"].as_s
+end
+
 describe GalateaFrontend::Server do
   it "signs up, signs in and checks the session over Connect JSON" do
     with_platform do |p|
@@ -176,7 +182,9 @@ describe GalateaFrontend::Server do
       _, chat = p.rpc("ChatService/ChatGet", {"id" => chat_id}, token)
       chat["chat"]["messages"].as_a.map(&.["sender"].as_s)
         .should eq(["SENDER_TYPE_BOT", "SENDER_TYPE_USER", "SENDER_TYPE_BOT"])
-      p.galatea.atomspace.not_nil!.size.should be > 0
+      _, grounded = p.rpc("ChatService/ChatSendMessage",
+        {"chatId" => chat_id, "message" => "/list concept"}, token)
+      grounded["message"]["message"].as_s.should contain("utterance:Hello there")
 
       _, all = p.rpc("ChatService/ChatAll", token: token)
       all["chats"].as_a.size.should eq(1)
@@ -205,10 +213,11 @@ describe GalateaFrontend::Server do
       sent["message"]["message"].should eq("error: no engine attached")
 
       p.engine.requests.should be_empty
-      p.galatea.cog_tools.atomspace.get_nodes_by_name("cat").size.should eq(1)
+      _, sent = p.rpc("ChatService/ChatSendMessage", {"chatId" => chat_id, "message" => "/query cat"}, token)
+      sent["message"]["message"].as_s.should contain(%(CONCEPTNODE "cat"))
       _, chat = p.rpc("ChatService/ChatGet", {"id" => chat_id}, token)
       senders = chat["chat"]["messages"].as_a.map(&.["sender"].as_s)
-      senders.count("SENDER_TYPE_USER").should eq(5)
+      senders.count("SENDER_TYPE_USER").should eq(6)
       senders.last.should eq("SENDER_TYPE_BOT")
     end
   end
@@ -229,7 +238,38 @@ describe GalateaFrontend::Server do
       offered.should contain("add_inheritance")
       offered.should contain("pln_reason")
       p.engine.requests.last["messages"].as_a.map(&.["role"].as_s).last(2).should eq(["assistant", "tool"])
-      p.galatea.cog_tools.run("list inheritance").should contain(%(CONCEPTNODE "dog"))
+      _, sent = p.rpc("ChatService/ChatSendMessage", {"chatId" => chat_id, "message" => "/query dog"}, token)
+      sent["message"]["message"].as_s.should contain(%(CONCEPTNODE "dog"))
+    end
+  end
+
+  it "isolates chat AtomSpaces and commands between authenticated accounts" do
+    with_platform do |p|
+      p.galatea.tools_enabled = false
+      ada = signed_in_as(p, "ada-isolated@example.com")
+      grace = signed_in_as(p, "grace-isolated@example.com")
+
+      {ada, grace}.each_with_index do |token, i|
+        p.rpc("BotService/BotCreate", {"bot" => {"name" => "Galatea#{i}",
+                                                 "description" => "A private companion"}}, token)
+        p.rpc("ChatService/ChatCreate", {"botId" => "galatea#{i}"}, token)
+      end
+
+      _, ada_chats = p.rpc("ChatService/ChatAll", token: ada)
+      _, grace_chats = p.rpc("ChatService/ChatAll", token: grace)
+      ada_chat = ada_chats["chats"][0]["id"].as_s
+      grace_chat = grace_chats["chats"][0]["id"].as_s
+
+      p.rpc("ChatService/ChatSendMessage",
+        {"chatId" => ada_chat, "message" => "Ada private message uniquely-indexed"}, ada)
+      _, leaked = p.rpc("ChatService/ChatSendMessage",
+        {"chatId" => grace_chat, "message" => "/list concept"}, grace)
+      leaked["message"]["message"].as_s.should_not contain("Ada private message uniquely-indexed")
+
+      p.rpc("ChatService/ChatSendMessage", {"chatId" => grace_chat, "message" => "/clear"}, grace)
+      _, visible = p.rpc("ChatService/ChatSendMessage",
+        {"chatId" => ada_chat, "message" => "/list concept"}, ada)
+      visible["message"]["message"].as_s.should contain("Ada private message uniquely-indexed")
     end
   end
 

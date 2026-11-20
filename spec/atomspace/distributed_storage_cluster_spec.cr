@@ -94,6 +94,14 @@ describe "AtomWire content addresses" do
     AtomSpace::AtomWire.address(a).should eq("bbbf60bb403ac6eac728968eeb65fbcf")
     AtomSpace::AtomWire.ring_position("node").should eq(6079478208108954607_u64)
   end
+
+  it "handles deeply shared graphs without exponential traversal" do
+    current = AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, "base").as(AtomSpace::Atom)
+    24.times do
+      current = AtomSpace::Link.new(AtomSpace::AtomType::LIST_LINK, [current, current])
+    end
+    AtomSpace::AtomWire.address(current).size.should eq(32)
+  end
 end
 
 describe "DistributedAtomSpaceCluster message delivery" do

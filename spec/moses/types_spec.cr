@@ -150,6 +150,12 @@ describe Moses::Program do
       result.should be_a(Bool)
     end
 
+    it "parses boolean literals before execution" do
+      Moses::Program.new("true").execute(Array(Float64).new, Moses::ProblemType::BooleanClassification).should be_true
+      Moses::Program.new("false").execute(Array(Float64).new, Moses::ProblemType::BooleanClassification).should be_false
+      Moses::Program.new("$0 and true").execute([1.0], Moses::ProblemType::BooleanClassification).should be_true
+    end
+
     it "executes regression expression" do
       prog = Moses::Program.new("$0")
       result = prog.execute([3.14], Moses::ProblemType::Regression)
@@ -414,7 +420,7 @@ describe Moses do
       c.score = Moses::CompositeScore.new(-0.1, 2)
 
       sorted = [a, b, c].sort { |x, y| Moses.compare_candidates(x, y) }
-      sorted.last.program.should eq("c") # best score wins
+      sorted.last.program.should eq("c")  # best score wins
       sorted.first.program.should eq("b") # NaN sorts as worst
     end
   end

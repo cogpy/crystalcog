@@ -290,7 +290,8 @@ module OpenCog
         pattern_obj = PatternMatching::Pattern.new(pattern)
         variables.each do |var|
           next unless allowed = var.type
-          var_atom = atomspace.add_node(AtomSpace::AtomType::VARIABLE_NODE, "$#{var.name}")
+          var_atom = pattern_obj.variables.find { |candidate| candidate.name == "$#{var.name}" }
+          next unless var_atom
           pattern_obj.add_constraint(PatternMatching::TypeConstraint.new(var_atom, allowed))
         end
 

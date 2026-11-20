@@ -288,6 +288,7 @@ describe Robotics::VisionSensor do
     scene = camera.perceive.not_nil!
     bearings = reading.get_array("bearings").not_nil!
     red = scene.detections.index! { |d| d.color == "red" }
+    red_detection = scene.detections[red]
     green = scene.detections.index! { |d| d.color == "green" }
     bearings[red].should be > 0.4
     bearings[green].should be < -0.4
@@ -300,6 +301,8 @@ describe Robotics::VisionSensor do
 
     # A decoded image sets the resolution too; BGR frames are understood.
     camera.set_image(Vision::Image.new(10, 10).fill(0_u8, 0_u8, 0_u8))
+    camera.perceive_into(space)
+    space.get_nodes_by_name("camera:object-#{red_detection.id}").should be_empty
     camera.resolution.should eq({10, 10})
     camera.read.get_float("object_count").should eq(0.0)
     camera.set_image_data(Bytes.new(300) { |i| i % 3 == 0 ? 255_u8 : 0_u8 }, "bgr8")

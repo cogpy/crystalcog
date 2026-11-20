@@ -520,6 +520,9 @@ module Moses
         operand = parse_term(tokens)
         return nil unless operand
         UnaryOpNode.new("not", operand)
+      when "true", "false"
+        tokens.shift
+        ConstantNode.new(token == "true" ? 1.0 : 0.0)
       when "("
         tokens.shift # consume "("
         expr = parse_expression(tokens, 0)

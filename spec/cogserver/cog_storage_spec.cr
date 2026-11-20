@@ -38,6 +38,36 @@ describe AtomSpace::AtomWire do
     copy.outgoing[0].outgoing[0].truth_value.confidence.should eq(0.8)
   end
 
+  it "preserves truth value subtypes and subtype fields" do
+    truth_values = [
+      AtomSpace::CountTruthValue.new(0.7, 0.8, 12.0),
+      AtomSpace::IndefiniteTruthValue.new(0.2, 0.6, 0.9),
+      AtomSpace::FuzzyTruthValue.new(0.4, 0.5, 0.3),
+    ] of AtomSpace::TruthValue
+
+    truth_values.each_with_index do |tv, i|
+      node = AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, "tv-#{i}", tv)
+      copy = AtomSpace::AtomWire.read(JSON.parse(AtomSpace::AtomWire.to_json(node)))
+      copy.truth_value.class.should eq(tv.class)
+      copy.truth_value.to_a.should eq(tv.to_a)
+      copy.truth_value.count.should eq(tv.count) if tv.is_a?(AtomSpace::CountTruthValue)
+      if indefinite = tv.as?(AtomSpace::IndefiniteTruthValue)
+        restored = copy.truth_value.as(AtomSpace::IndefiniteTruthValue)
+        {restored.lower, restored.upper}.should eq({indefinite.lower, indefinite.upper})
+      end
+      if fuzzy = tv.as?(AtomSpace::FuzzyTruthValue)
+        copy.truth_value.as(AtomSpace::FuzzyTruthValue).uncertainty.should eq(fuzzy.uncertainty)
+      end
+    end
+  end
+
+  it "accepts legacy truth values without a subtype" do
+    atom = AtomSpace::AtomWire.read(JSON.parse(
+      %({"type":"CONCEPT_NODE","name":"legacy","truth_value":{"strength":0.3,"confidence":0.4}})))
+    atom.truth_value.should be_a(AtomSpace::SimpleTruthValue)
+    atom.truth_value.to_a.should eq([0.3, 0.4])
+  end
+
   it "interns into an AtomSpace, merging or replacing truth values" do
     space = AtomSpace::AtomSpace.new
     existing = space.add_concept_node("cat", AtomSpace::SimpleTruthValue.new(0.9, 0.9))
