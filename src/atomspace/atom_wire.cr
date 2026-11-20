@@ -26,8 +26,18 @@ module AtomSpace
         end
         json.field "truth_value" do
           json.object do
+            json.field "type", atom.truth_value.type_name
             json.field "strength", atom.truth_value.strength
             json.field "confidence", atom.truth_value.confidence
+            case tv = atom.truth_value
+            when CountTruthValue
+              json.field "count", tv.count
+            when IndefiniteTruthValue
+              json.field "lower", tv.lower
+              json.field "upper", tv.upper
+            when FuzzyTruthValue
+              json.field "uncertainty", tv.uncertainty
+            end
           end
         end
       end
@@ -37,12 +47,20 @@ module AtomSpace
     # process, whatever its handle. A link's address is a hash over its
     # type and its children's addresses (a Merkle hash of the hypergraph).
     def self.address(atom : Atom) : String
+      address(atom, {} of Handle => String)
+    end
+
+    private def self.address(atom : Atom, memo : Hash(Handle, String)) : String
+      if cached = memo[atom.handle]?
+        return cached
+      end
+
       content = if atom.is_a?(Node)
                   "N:#{atom.type}:#{atom.name.bytesize}:#{atom.name}"
                 else
-                  "L:#{atom.type}:#{atom.outgoing.map { |child| address(child) }.join(',')}"
+                  "L:#{atom.type}:#{atom.outgoing.map { |child| address(child, memo) }.join(',')}"
                 end
-      Digest::SHA256.hexdigest(content)[0, 32]
+      memo[atom.handle] = Digest::SHA256.hexdigest(content)[0, 32]
     end
 
     # A position on a 64-bit hash ring that every process computes alike
@@ -84,7 +102,18 @@ module AtomSpace
 
     def self.truth_value(data : JSON::Any?) : TruthValue
       return TruthValue::DEFAULT_TV unless data && data.as_h?
-      SimpleTruthValue.new(number(data["strength"]), number(data["confidence"]))
+      strength = number(data["strength"])
+      confidence = number(data["confidence"])
+      case data["type"]?.try(&.as_s?)
+      when "CountTruthValue"
+        CountTruthValue.new(strength, confidence, number(data["count"]))
+      when "IndefiniteTruthValue"
+        IndefiniteTruthValue.new(number(data["lower"]), number(data["upper"]), confidence)
+      when "FuzzyTruthValue"
+        FuzzyTruthValue.new(strength, confidence, number(data["uncertainty"]))
+      else
+        SimpleTruthValue.new(strength, confidence)
+      end
     end
 
     private def self.number(value : JSON::Any) : Float64

@@ -62,6 +62,9 @@ module GalateaFrontend
     property tools_enabled : Bool = false
     @server : HTTP::Server?
     @cog_tools : CrystalCog::CogTools?
+    @scoped_atomspaces = {} of String => AtomSpace::AtomSpace
+    @scoped_tools = {} of String => CrystalCog::CogTools
+    @scope_mutex = Mutex.new
 
     def initialize(@paphos_url : String, @agent_factory : AgentFactory,
                    @host : String = "127.0.0.1", @requested_port : Int32 = 8080,
@@ -336,7 +339,7 @@ module GalateaFrontend
       history = client.messages(chat_id)
 
       client.post_message(chat_id, text)
-      reply = text.lstrip.starts_with?('/') ? run_command(text) : generate_reply(character, history, text)
+      reply = text.lstrip.starts_with?('/') ? run_command(session, text) : generate_reply(session, character, history, text)
       bot_message = client.post_message(chat_id, reply, "character", slug)
       {"message" => message_json(bot_message)}
     end
@@ -349,8 +352,19 @@ module GalateaFrontend
       end
     end
 
-    private def run_command(text : String) : String
-      CrystalCog::CogChat.command(text, cog_tools, @engine)
+    private def scoped_atomspace(session : Session) : AtomSpace::AtomSpace
+      @scope_mutex.synchronize { @scoped_atomspaces[session.email] ||= AtomSpace::AtomSpace.new }
+    end
+
+    private def scoped_tools(session : Session) : CrystalCog::CogTools
+      @scope_mutex.synchronize do
+        space = @scoped_atomspaces[session.email] ||= AtomSpace::AtomSpace.new
+        @scoped_tools[session.email] ||= CrystalCog::CogTools.new(space)
+      end
+    end
+
+    private def run_command(session : Session, text : String) : String
+      CrystalCog::CogChat.command(text, scoped_tools(session), @engine)
     rescue ex
       "error: #{ex.message}"
     end
@@ -369,10 +383,11 @@ module GalateaFrontend
       end
     end
 
-    private def generate_reply(character : JSON::Any, history : Array(JSON::Any), text : String) : String
+    private def generate_reply(session : Session, character : JSON::Any, history : Array(JSON::Any), text : String) : String
       name = character["name"].as_s
       agent = @agent_factory.call
-      agent.attach_atomspace(@atomspace.not_nil!) if @atomspace
+      atomspace = scoped_atomspace(session)
+      agent.attach_atomspace(atomspace)
       agent.set_character(PygmalionAgent::CharacterConfig.new(
         name: name,
         description: character["description"]?.try(&.as_s?) || "",
@@ -395,7 +410,7 @@ module GalateaFrontend
         reply = if tools
                   agent.chat_with_tools(text, tools) do |call|
                     begin
-                      cog_tools.call(call.function_name, call.function_arguments)
+                      scoped_tools(session).call(call.function_name, call.function_arguments)
                     rescue ex
                       "error: #{ex.message}"
                     end

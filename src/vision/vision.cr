@@ -42,6 +42,7 @@ module Vision
     # Positions are the object's centre as fractions of the image size, and
     # area is its share of the image, so they do not depend on resolution.
     def ground(atomspace : AtomSpace::AtomSpace) : Array(AtomSpace::Atom)
+      clear_previous_grounding(atomspace)
       atoms = [] of AtomSpace::Atom
       scene = atomspace.add_concept_node("scene:#{@name}")
       color = atomspace.add_predicate_node("color")
@@ -70,6 +71,26 @@ module Vision
         atoms << atomspace.add_evaluation_link(predicate, atomspace.add_list_link([subject, object]))
       end
       atoms
+    end
+
+    private def clear_previous_grounding(atomspace : AtomSpace::AtomSpace)
+      scene = atomspace.get_atom_by_name("scene:#{@name}")
+      return unless scene
+
+      atomspace.get_incoming(scene).each do |member|
+        next unless member.type == AtomSpace::AtomType::MEMBER_LINK
+        object = member.outgoing[0]?
+        remove_incoming(atomspace, object) if object
+        atomspace.remove_atom(member) if atomspace.contains?(member)
+        atomspace.remove_atom(object) if object && atomspace.contains?(object)
+      end
+    end
+
+    private def remove_incoming(atomspace : AtomSpace::AtomSpace, atom : AtomSpace::Atom)
+      atomspace.get_incoming(atom).each do |incoming|
+        remove_incoming(atomspace, incoming)
+        atomspace.remove_atom(incoming)
+      end
     end
 
     private def number(atomspace : AtomSpace::AtomSpace, value : Float64) : AtomSpace::Atom

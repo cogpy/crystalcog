@@ -364,9 +364,9 @@ module PatternMatching
         explore_link_structures(pattern, template, results, start_time)
       else
         # Concrete atom - check if it exists and satisfies constraints
-        if @atomspace.contains?(template)
+        if concrete = @atomspace.find_equivalent(template)
           if constraints_satisfied?(pattern, current_state.bindings)
-            new_matched = current_state.matched_atoms + [template]
+            new_matched = current_state.matched_atoms + [concrete]
             results << MatchResult.new(current_state.bindings.dup, new_matched)
           end
         end

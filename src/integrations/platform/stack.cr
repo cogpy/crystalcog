@@ -52,17 +52,26 @@ module PygmalionPlatform
 
     # Start the engine (waiting until it serves), then Paphos, then Galatea.
     def start : self
-      @engine.start
-      @paphos.start
-      @galatea.paphos_url = @paphos.url
-      @galatea.start
+      begin
+        @engine.start
+        @paphos.start
+        @galatea.paphos_url = @paphos.url
+        @galatea.start
+      rescue
+        stop
+        raise
+      end
       self
     end
 
     def stop
-      @galatea.stop
-      @paphos.stop
-      @engine.stop
+      {@galatea, @paphos, @engine}.each do |component|
+        begin
+          component.stop
+        rescue ex
+          CogUtil::Logger.warn("Failed to stop platform component: #{ex.message}")
+        end
+      end
     end
 
     def status : Hash(String, String)
