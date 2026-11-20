@@ -29,4 +29,27 @@ describe OpenCog::Query do
     ])
     results.map { |r| r.bindings["x"].name }.should eq(["Dog"])
   end
+
+  it "uses the pattern's detached variable for type constraints" do
+    space = AtomSpace::AtomSpace.new
+    animal = space.add_concept_node("Animal")
+    space.add_inheritance_link(space.add_concept_node("Dog"), animal)
+    space.add_inheritance_link(space.add_predicate_node("Runs"), animal)
+    x = AtomSpace::VariableNode.new("$x")
+    pattern = AtomSpace::Link.new(AtomSpace::AtomType::INHERITANCE_LINK, [x, animal])
+
+    results = OpenCog::Query.query_pattern(space, pattern,
+      [OpenCog::Query::Variable.new("x", AtomSpace::AtomType::CONCEPT_NODE)])
+    results.map { |r| r.bindings["x"].name }.should eq(["Dog"])
+  end
+
+  it "matches a detached concrete node by content" do
+    space = AtomSpace::AtomSpace.new
+    cat = space.add_concept_node("cat")
+    detached = AtomSpace::ConceptNode.new("cat")
+
+    OpenCog::PatternMatcher.match(space, detached).should eq([{} of String => AtomSpace::Atom])
+    OpenCog::PatternMatcher.match(space, AtomSpace::ConceptNode.new("dog")).should be_empty
+    cat.should_not be(detached)
+  end
 end
