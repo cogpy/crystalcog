@@ -182,7 +182,9 @@ describe GalateaFrontend::Server do
       _, chat = p.rpc("ChatService/ChatGet", {"id" => chat_id}, token)
       chat["chat"]["messages"].as_a.map(&.["sender"].as_s)
         .should eq(["SENDER_TYPE_BOT", "SENDER_TYPE_USER", "SENDER_TYPE_BOT"])
-      p.galatea.atomspace.not_nil!.size.should be > 0
+      _, grounded = p.rpc("ChatService/ChatSendMessage",
+        {"chatId" => chat_id, "message" => "/list concept"}, token)
+      grounded["message"]["message"].as_s.should contain("utterance:Hello there")
 
       _, all = p.rpc("ChatService/ChatAll", token: token)
       all["chats"].as_a.size.should eq(1)
@@ -249,7 +251,7 @@ describe GalateaFrontend::Server do
 
       {ada, grace}.each_with_index do |token, i|
         p.rpc("BotService/BotCreate", {"bot" => {"name" => "Galatea#{i}",
-                                               "description" => "A private companion"}}, token)
+                                                 "description" => "A private companion"}}, token)
         p.rpc("ChatService/ChatCreate", {"botId" => "galatea#{i}"}, token)
       end
 

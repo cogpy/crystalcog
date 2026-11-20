@@ -57,9 +57,9 @@ module PygmalionPlatform
         @paphos.start
         @galatea.paphos_url = @paphos.url
         @galatea.start
-      rescue
+      rescue ex
         stop
-        raise
+        raise ex
       end
       self
     end
