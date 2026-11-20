@@ -3,23 +3,36 @@
 
 # CrystalCog - OpenCog in Crystal Language
 
-CrystalCog is a comprehensive rewrite of the OpenCog artificial intelligence framework in the Crystal programming language. This project provides better performance, memory safety, and maintainability while preserving all the functionality of the original OpenCog system.
+CrystalCog is a Crystal implementation of a symbolic AI stack centered on a
+hypergraph knowledge base. It provides AtomSpace-style atoms and links, truth
+values, probabilistic and rule-based reasoning, pattern matching, persistence
+adapters, language processing, and network interfaces.
+
+The repository is a broad and evolving implementation rather than a proven
+drop-in replacement for every OpenCog project. Its strongest entry points and
+most directly testable behavior are in `atomspace`, `pln`, `ure`, `cogserver`,
+and `nlp`. Other modules provide additional domain, learning, integration, and
+experimental functionality; consult the corresponding specs before relying on
+a specific feature.
 
 ## Quick Start
 
 ### Prerequisites
 
-CrystalCog automatically handles Crystal language installation. No manual setup required!
+Install Crystal 1.10.1 or newer, the Crystal package manager (`shards`), and
+the native libraries required by the storage backends you intend to build.
+`scripts/install-crystal.sh` can install Crystal on supported systems.
 
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/EchoCog/crystalcog.git
+git clone https://github.com/cogpy/crystalcog.git
 cd crystalcog
+shards install
 ```
 
-2. Run tests (Crystal will be installed automatically):
+2. Run the test suite:
 ```bash
 ./scripts/test-runner.sh --all
 ```
@@ -30,7 +43,70 @@ cd crystalcog
 ./scripts/install-crystal.sh  # Auto-install
 ```
 
-## Crystal Language Installation
+## Repository organization
+
+| Path | Purpose |
+| --- | --- |
+| `src/crystalcog.cr` | Main library facade; assembles the major components and dispatches CLI commands. |
+| `src/bin/` | Executable launchers, including `crystalcog`, CogServer, and CogShell. |
+| `src/atomspace/` | Atoms, links, truth values, AtomSpace operations, storage, and distributed cluster support. |
+| `src/pln/`, `src/ure/`, `src/opencog/` | Probabilistic reasoning, forward/backward rule chaining, and higher-level OpenCog-style integration. |
+| `src/cogserver/` | HTTP, Telnet, and WebSocket-facing server implementation. |
+| `src/pattern_matching/`, `src/pattern_mining/` | Pattern queries, matching, and discovery. |
+| `src/nlp/` | Tokenization, text processing, and linguistic/semantic representations. |
+| `src/attention/`, `src/learning/`, `src/moses/` | Attention allocation and symbolic/evolutionary learning components. |
+| `src/robotics/`, `src/spatial/`, `src/temporal/`, `src/behavior/` | Embodied, geometric, temporal, and behavior-oriented modules. |
+| `src/multi_agent/`, `src/agent-zero/`, `src/simulation/` | Multi-agent, Agent-Zero, and simulation facilities. |
+| `src/neural_symbolic/`, `src/ai_integration/`, `src/integrations/` | Neural-symbolic and external-system integration code. |
+| `spec/` | Component and integration specs. |
+| `examples/`, `benchmarks/` | Demos, diagnostics, and performance programs. |
+| `scripts/`, `docs/` | Build/test/deployment automation and detailed documentation. |
+
+`shard.yml` is the authoritative list of executable targets. Some targets
+compile component demonstrations or entry modules and are not full standalone
+applications.
+
+## Main entry points
+
+| Entry point | Role |
+| --- | --- |
+| `src/bin/crystalcog.cr` | Primary `crystalcog` executable wrapper. |
+| `src/crystalcog.cr` | Top-level library composition and command dispatch. |
+| `src/bin/cogserver.cr` | CogServer executable. |
+| `src/bin/cogshell.cr` | CogShell command-line client. |
+| `src/atomspace/atomspace.cr` | AtomSpace library and component entry. |
+| `src/nlp/nlp_main.cr` | NLP component entry. |
+| `src/moses/moses_main.cr` | MOSES component entry. |
+| `src/attention/attention_main.cr` | Attention component entry. |
+| `src/pattern_matching/pattern_matching_main.cr` | Pattern-matching component entry. |
+
+Build and run the main executable with:
+
+```bash
+crystal build src/bin/crystalcog.cr
+./crystalcog --help
+```
+
+`shard.yml` also declares targets for PLN, URE, NLP, MOSES, attention, learning,
+pattern matching/mining, CogServer, CogShell, spatial, temporal, behavior, and
+other modules.
+
+## Suggested reading path
+
+1. Read `shard.yml` to see dependencies and executable targets.
+2. Read `src/crystalcog.cr` to understand how the major modules are composed.
+3. Read `src/atomspace/atomspace.cr` and the specs in `spec/atomspace/` for the
+   core knowledge representation and persistence model.
+4. Follow `src/pln/pln.cr` and `src/ure/ure.cr` with their corresponding specs
+   to understand probabilistic and rule-driven inference.
+5. Read `src/cogserver/cogserver.cr` and `spec/cogserver/` for the server and
+   API boundary.
+6. Branch into `src/nlp/`, `src/pattern_matching/`, `src/attention/`, or another
+   subsystem based on your use case, starting with its `*_main.cr` file.
+7. Use `examples/README.md` and `benchmarks/` for concrete programs after the
+   core architecture is clear.
+
+## Crystal language installation
 
 CrystalCog includes robust Crystal installation methods for environments where standard installation may not work:
 
