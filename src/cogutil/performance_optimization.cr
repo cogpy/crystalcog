@@ -1,3 +1,5 @@
+require "./logger"
+
 # Crystal CogUtil performance optimization module
 # Provides high-performance memory pooling and cache-optimized data structures
 # for Agent-Zero Genesis cognitive operations
