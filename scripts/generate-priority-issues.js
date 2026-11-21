@@ -305,12 +305,36 @@ function parseCrystalSpecLog(text) {
   return failures;
 }
 
+function normalizeFailureEvidence(line) {
+  return line
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}(?= \[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\])/g, '<timestamp>')
+    .replace(/#<TCPSocket:0x[0-9a-fA-F]+>/g, '#<TCPSocket:<address>>')
+    .trim();
+}
+
+function isExplicitTestFailure(line) {
+  const clean = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+  // Explicit shell/runtime records remain failures when their diagnostic embeds
+  // a logger line. A standalone application logger record is different.
+  if (/^(?:FAIL(?:ED)?(?:$|\s*[:!]|\s+(?!to\b|response\b)\S)|(?:ERROR|FATAL)\s*:|Unhandled exception:|[✗❌]\s*\S)/i.test(clean)) return true;
+  const loggerIndex = clean.search(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\]/);
+  const prefix = loggerIndex < 0 ? clean : clean.slice(0, loggerIndex).trim();
+  if (/^(?:integration|e2e|unit)\s+tests?\s+failed\b/i.test(prefix) ||
+      /\b(?:test|tests|assertion)\b.*\b(?:failed(?:\s*:|\s+with\b)|timed out\b)/i.test(prefix) ||
+      /\b(?:cannot find -l\S+|undefined reference to|ld returned \d+ exit status)\b/i.test(prefix)) return true;
+  const specSummary = prefix.match(/^\d+ examples?, (\d+) failures?(?:, (\d+) errors?)?/i);
+  if (specSummary) return Number(specSummary[1]) > 0 || Number(specSummary[2] || 0) > 0;
+  const directorySummary = prefix.match(/^=== Summary: \d+ passed, (\d+) failed ===$/);
+  if (directorySummary) return Number(directorySummary[1]) > 0;
+  // Passing negative-path logger records, descriptions such as Error Handling,
+  // and LLVM symbols such as Spec::AssertionFailed are not failed assertions.
+  return false;
+}
+
 function parseE2EReports(artifactDir) {
   const findings = [];
   const reportFiles = [];
-  const isFailureLine = (line) =>
-    /^\s*(?:FAIL(?:ED)?|ERROR|FATAL)\b/i.test(line) ||
-    /\bfailed\b(?:\s*(?::|$)|\s+(?:with|to|after|during|due to|on)\b)|\btimed out\b|[✗❌]/i.test(line);
 
   function collect(dir, depth = 0) {
     if (!fs.existsSync(dir) || depth > 4) return;
@@ -328,32 +352,35 @@ function parseE2EReports(artifactDir) {
 
   for (const file of reportFiles) {
     const text = fs.readFileSync(file, 'utf8');
-    const lineFails = text.split(/\r?\n/).filter(isFailureLine);
+    const lineFails = text.split(/\r?\n/).filter(isExplicitTestFailure);
+    const stableLines = [...new Set(lineFails.map(normalizeFailureEvidence))].sort();
+    const basename = path.basename(file);
+    const category = /e2e/i.test(basename) ? 'e2e' : /unit/i.test(basename) ? 'unit' : 'integration';
+    const label = { e2e: 'E2E', unit: 'Unit', integration: 'Integration' }[category];
     if (lineFails.length > 0) {
-      const isE2E = /e2e/i.test(file);
       findings.push({
-        type: isE2E ? 'e2e_test_failure' : 'integration_test_failure',
+        type: `${category}_test_failure`,
         priority: 'high',
-        name: path.basename(file),
-        detail: text.slice(0, 1000),
+        name: basename,
+        detail: lineFails.join('\n').slice(0, 1000),
         file: rel(file),
-        component: isE2E ? 'e2e' : 'integration',
-        fingerprint: `${isE2E ? 'e2e' : 'integration'}-report:${path.basename(file)}:${hash(text).slice(0, 8)}`,
-        title: `[${isE2E ? 'E2E' : 'Integration'} Test] Issues in ${path.basename(file)}`,
+        component: category,
+        fingerprint: `${category}-report:${basename}:${hash(stableLines.join('\n'))}`,
+        title: `[${label} Test] Issues in ${basename}`,
       });
     }
 
     // Parse explicit failure lines from e2e shell output patterns
     for (const lf of lineFails.slice(0, 20)) {
-      const isE2E = /e2e/i.test(file) || /CogServer|API tests|persistence/i.test(lf);
+      const stableLine = normalizeFailureEvidence(lf);
       findings.push({
-        type: isE2E ? 'e2e_test_failure' : 'integration_test_failure',
+        type: `${category}_test_failure`,
         priority: 'high',
         name: lf.trim().slice(0, 120),
         detail: lf.trim(),
-        component: isE2E ? 'e2e' : 'integration',
-        fingerprint: `line-fail:${hash(lf.trim()).slice(0, 12)}`,
-        title: `[${isE2E ? 'E2E' : 'Integration'} Test] ${lf.trim()}`.slice(0, 200),
+        component: category,
+        fingerprint: `line-fail:${category}:${basename}:${hash(stableLine)}`,
+        title: `[${label} Test] ${lf.trim()}`.slice(0, 200),
       });
     }
   }
@@ -363,6 +390,8 @@ function parseE2EReports(artifactDir) {
 
 function addJobLevelFindings(findings, jobResults) {
   const hasType = (type) => findings.some((f) => f.type === type);
+  // Repeated failures in one source workflow should update one actionable issue.
+  const workflow = process.env.SOURCE_WORKFLOW || process.env.GITHUB_WORKFLOW || 'unknown';
 
   if (jobResults.unit === 'failure' && !hasType('unit_test_failure')) {
     findings.push({
@@ -371,7 +400,7 @@ function addJobLevelFindings(findings, jobResults) {
       name: 'Unit test job failed',
       detail: 'The unit test job reported failure. See workflow logs for details.',
       component: 'ci',
-      fingerprint: `unit-job:${process.env.GITHUB_RUN_ID || 'local'}`,
+      fingerprint: `unit-job:${hash(workflow)}`,
       title: '[Unit Test] Unit test job failed',
     });
   }
@@ -382,7 +411,7 @@ function addJobLevelFindings(findings, jobResults) {
       name: 'E2E test job failed',
       detail: 'The end-to-end test job reported failure. See workflow logs for details.',
       component: 'e2e',
-      fingerprint: `e2e-job:${process.env.GITHUB_RUN_ID || 'local'}`,
+      fingerprint: `e2e-job:${hash(workflow)}`,
       title: '[E2E Test] E2E test job failed',
     });
   }
@@ -393,7 +422,7 @@ function addJobLevelFindings(findings, jobResults) {
       name: 'Integration test job failed',
       detail: 'The integration test job reported failure. See workflow logs for details.',
       component: 'integration',
-      fingerprint: `integration-job:${process.env.GITHUB_RUN_ID || 'local'}`,
+      fingerprint: `integration-job:${hash(workflow)}`,
       title: '[Integration Test] Integration test job failed',
     });
   }

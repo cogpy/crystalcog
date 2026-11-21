@@ -42,3 +42,21 @@ jobs:
         run: |
           chmod +x scripts/validation/validate-demo-profiling-tools.sh
           bash scripts/validation/validate-demo-profiling-tools.sh
+
+  validate-priority-detector:
+    name: Validate Priority Issue Detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check syntax and failure-evidence regressions
+        run: |
+          node --check scripts/generate-priority-issues.js
+          node --test scripts/generate-priority-issues.test.js
