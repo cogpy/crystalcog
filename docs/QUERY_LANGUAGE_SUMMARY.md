@@ -56,6 +56,9 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 # Optional part: results without a match keep $food unbound
 "SELECT $pet $food WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food } }"
 
+# Optional enrichment: every clause and local condition must qualify together
+"SELECT $pet $food WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food . $food ISA Edible . FILTER($food = Bone) } }"
+
 # Conditions on what was matched
 "SELECT $x WHERE { $x ISA Animal . FILTER($x != Dog AND CONTAINS($x, \"a\")) }"
 "SELECT $x WHERE { $x legs $n . FILTER($n >= 4) }"
@@ -124,7 +127,7 @@ block     := "{" clause { ( "." | newline ) clause } "}"
 clause    := term ( ISA | inherits_from | "->" ) term
            | term term term
            | term path term
-           | OPTIONAL "{" clauses "}"
+           | OPTIONAL "{" optional_item { ( "." | newline ) optional_item } "}"
            | FILTER "(" condition ")"
            | BIND "(" value AS "$" name ")"
            | block { UNION block }
@@ -132,6 +135,8 @@ clause    := term ( ISA | inherits_from | "->" ) term
            | MINUS block
            | VALUES "$" name "{" { term | UNDEF } "}"
            | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
+optional_item := term ( ISA | inherits_from | "->" ) term
+               | term term term | term path term | FILTER "(" condition ")"
 path      := sequence { "|" sequence }
 sequence  := step { "/" step }
 step      := [ "^" ] ( relation | "(" path ")" | negated ) [ "+" | "*" | "?" ]
@@ -159,12 +164,22 @@ key       := value [ ASC | DESC ]
 - Running a query does not change the AtomSpace. Its patterns are built beside it, so a name the AtomSpace does not know simply matches nothing.
 - Only SELECT, DISTINCT, WHERE, ISA, OPTIONAL and LIMIT are reserved. FILTER, UNION, ORDER and the rest are keywords only where the grammar expects them, so they can still name atoms.
 
+### OPTIONAL enrichment
+
+- Each parsed `OPTIONAL { ... }` is one left-joined unit. All its inheritance, triple and path clauses must match together, agreeing on shared variables. A partial match contributes neither new bindings nor matched-atom evidence.
+- Local `FILTER(condition)` conditions run after the unit's complete join, against the merged outer and inner bindings, wherever the FILTER is written inside that unit. Several local FILTERs must all hold. If no complete candidate qualifies, the original outer row and its evidence are retained exactly once. Multiple complete qualifying candidates expand the row normally.
+- Separate OPTIONAL blocks are evaluated independently, in their written order. An outer `FILTER(BOUND($food))` runs after enrichment and can remove rows left unbound.
+- For example, with Dog liking Bone and Ball, Cat liking Fish, and Blue Whale liking nothing, if only Bone is Edible, `OPTIONAL { $pet likes $food . $food ISA Edible }` binds Dog/Bone only; Cat and Blue Whale remain with `$food` unbound. A local `FILTER($food = Ball)` rejects Dog's enrichment but does not remove Dog itself.
+- Each unit requires at least one matching clause. Empty or FILTER-only units, nested OPTIONAL, BIND, VALUES, MINUS, subqueries and groups (including UNION groups) inside OPTIONAL remain explicitly rejected. This is bounded OQL enrichment, not general SPARQL support.
+- For parsed queries, `ParsedQuery#optional_clauses` and `QueryBlock#optional_clauses` still expose the flattened clause array for inspection. `QueryBlock#optional_blocks` retains each unit's `clauses` and local `filters`; the outer `filters` getter does not include those local filters. Parsed entries are not evaluated again through the flattened array. Explicit programmatic units added directly to `optional_blocks` are inspected there; adding them does not populate the legacy flat array automatically.
+- Legacy `ParsedQuery.new(variables, clauses, optional_clauses: ...)` still treats each supplied flat clause object as an independent single-clause left join. No block boundary was supplied, so these objects are not silently reinterpreted as one conjunction. Distinct flat clause objects added alongside explicit units are likewise independent legacy units, evaluated after the explicit units. Use `optional_blocks` to construct an explicit `QueryOptionalBlock` when conjunction and local filtering are intended; the flattened getter is an inspection API, not an editor for parsed unit boundaries.
+
 ### FILTER, UNION and ORDER BY
 
-- **FILTER** keeps the results its condition holds for. It applies to its whole block wherever it stands, after the OPTIONAL parts. Several FILTERs all have to hold.
+- **FILTER** keeps the results its condition holds for. An outer FILTER applies to its whole block wherever it stands, after the OPTIONAL parts. A FILTER inside an OPTIONAL applies only to that optional unit after its complete join; rejection preserves the outer row. Several FILTERs in the same scope all have to hold.
 - A variable compares by the name of its atom. Against a number the name is read as a number, so `$n >= 4` holds for a node named `10`; a name that is not a number is only unequal to it. Two names compare as text.
 - `NAME($x)`, `TYPE($x)`, `STRENGTH($x)` and `CONFIDENCE($x)` read the atom a variable stands for. `CONTAINS(a, b)` tells whether text `a` has `b` in it. `BOUND($x)` tells whether an OPTIONAL part gave `$x` a value.
-- A comparison with an unbound variable is false, and so is its opposite: `$n = 4` and `$n != 4` both drop a result without `$n`. Use `NOT BOUND($n)` to keep those.
+- A comparison with an unbound variable is false, and so is its opposite: `$n = 4` and `$n != 4` both reject a candidate without `$n`. An outer FILTER drops that result; a local OPTIONAL FILTER rejects only enrichment. Use `NOT BOUND($n)` to accept unbound candidates.
 - **UNION** adds the results of another block. A block need not bind every selected variable; a result leaves the others out. Add DISTINCT to drop repeats.
 - **ORDER BY** sorts by one or more keys, each ascending unless followed by DESC. Numbers sort before text and unbound values last. Without ORDER BY results come by falling confidence, as before. A key may be a variable that is not selected.
 
@@ -192,7 +207,7 @@ key       := value [ ASC | DESC ]
 - A BIND applies to its block after the clauses and OPTIONAL parts and before the FILTERs, wherever it is written. A later BIND can use an earlier one. A variable the block's clauses match, or an earlier BIND set, cannot be bound again.
 - The bound variable can be selected, filtered, sorted and grouped on. A number made by BIND or an aggregate sorts and compares as a number.
 - A block can hold groups: `{ $x price $p . { $x ISA Fruit } UNION { $x ISA Vegetable } }`. A group is one block or several joined by UNION. Its results are joined with the rest of the block on the variables they share. UNION may stand on a later line.
-- A FILTER or BIND sees only what its own block matches. In the example above a `FILTER($p > 3)` inside `{ $x ISA Fruit }` would find `$p` without a value; write it in the outer block, or match the price inside the group.
+- A FILTER or BIND in a regular group sees only what its own block matches. In the example above a `FILTER($p > 3)` inside `{ $x ISA Fruit }` would find `$p` without a value; write it in the outer block, or match the price inside the group. OPTIONAL-local FILTERs instead see the merged outer and inner bindings described above; BIND is not allowed inside OPTIONAL.
 - `BIND` is not a reserved word.
 
 ### MINUS, VALUES and subqueries
@@ -304,6 +319,7 @@ results = query_interface.query(query_string)
 - Complex multi-clause queries
 - Error scenarios and edge cases
 - Integration with existing Query module methods
+- `spec/opencog/query_optional_block_spec.cr` covers all-or-nothing OPTIONAL conjunctions, local-filter scope and placement, rejected/partial evidence, independent units, multiple complete matches, shared/type constraints, paths, outer BOUND filtering, legacy construction, and AtomSpace identity/truth-value non-mutation. This increment follows the roadmap's integration-testing priority before application work; it does not change storage durability or claim full SPARQL support.
 
 ## Documentation Updates
 
