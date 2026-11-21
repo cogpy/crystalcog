@@ -1,0 +1,75 @@
+name: Benchmark CI Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/crystal-comprehensive-ci.yml'
+      - '.github/workflows/benchmark-ci-validation.yml'
+      - 'scripts/validation/test_benchmark_ci.py'
+      - 'shard.yml'
+      - 'shard.lock'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/crystal-comprehensive-ci.yml'
+      - '.github/workflows/benchmark-ci-validation.yml'
+      - 'scripts/validation/test_benchmark_ci.py'
+      - 'shard.yml'
+      - 'shard.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  benchmark-regressions:
+    name: Benchmark failure propagation and native linking
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install workflow test dependency
+        run: python3 -m pip install 'PyYAML==6.0.3'
+
+      - name: Test benchmark workflow failure propagation
+        run: python3 scripts/validation/test_benchmark_ci.py
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: 1.20.1
+
+      - name: Install native benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librocksdb-dev libsqlite3-dev libpq-dev libevent-dev libssl-dev libyaml-dev
+
+      - name: Install shards
+        run: shards install --verbose
+
+      # Execute the same generation and run blocks as the scheduled job, so the
+      # scheduled-only benchmark receives real PR coverage without drifting.
+      - name: Run real RocksDB-enabled benchmark
+        run: python3 scripts/validation/test_benchmark_ci.py --run-benchmark
+
+      - name: Upload benchmark diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-ci-validation-results
+          path: benchmark-results.txt
+          retention-days: 7

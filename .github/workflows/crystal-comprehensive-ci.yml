@@ -261,6 +261,12 @@ jobs:
       with:
         crystal: 1.20.1
 
+    - name: Install benchmark system dependencies
+      # Jobs run on separate machines; test-matrix's native libraries are not shared.
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y librocksdb-dev libsqlite3-dev libpq-dev libevent-dev libssl-dev libyaml-dev
+
     - name: Install dependencies
       run: shards install --verbose
 
@@ -306,16 +312,19 @@ jobs:
 
     - name: Run benchmarks
       run: |
+        set -euo pipefail
         echo "Running performance benchmarks..."
-        if [ -f "benchmarks/atomspace_benchmark.cr" ]; then
-          crystal run --release benchmarks/atomspace_benchmark.cr > benchmark-results.txt 2>&1 || true
+        : > benchmark-results.txt
+        if [ ! -f "benchmarks/atomspace_benchmark.cr" ]; then
+          echo "ERROR: Missing benchmarks/atomspace_benchmark.cr" | tee benchmark-results.txt
+          exit 1
         fi
-        
-        echo "Benchmark Results:"
-        cat benchmark-results.txt || echo "No benchmark results available"
+        # Keep compiler/runtime diagnostics without hiding a failure behind tee.
+        crystal run --release benchmarks/atomspace_benchmark.cr 2>&1 | tee benchmark-results.txt
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: benchmark-results
         path: benchmark-results.txt
@@ -456,6 +465,15 @@ jobs:
           echo "✅ All core tests passed"
         fi
         
+        # Benchmarks are deliberately skipped outside scheduled/opt-in runs.
+        case "${{ needs.benchmarks.result }}" in
+          success|skipped) ;;
+          *)
+            echo "ERROR: Performance benchmarks did not succeed"
+            exit 1
+            ;;
+        esac
+
         echo ""
         echo "Crystal CI/CD Pipeline completed successfully! 🚀"
 
