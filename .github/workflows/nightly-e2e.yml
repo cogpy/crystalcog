@@ -114,48 +114,8 @@ jobs:
 
     - name: Run AtomSpace persistence tests
       run: |
-        cat > ./atomspace_persistence_test.cr << 'EOF'
-        require "./src/atomspace/atomspace"
-        require "./src/atomspace/storage"
-        
-        puts "AtomSpace Persistence Test"
-        puts "=========================="
-        
-        # Test SQLite persistence
-        puts "\nTest 1: SQLite persistence..."
-        atomspace = AtomSpace::AtomSpace.new
-        storage = AtomSpace::SQLiteStorage.new("test_atomspace.db")
-        
-        # Create test data
-        concept1 = atomspace.add_concept_node("persistent_concept_1")
-        concept2 = atomspace.add_concept_node("persistent_concept_2")
-        link = atomspace.add_inheritance_link(concept1, concept2)
-        
-        # Store atoms
-        storage.store_atom(concept1)
-        storage.store_atom(concept2)
-        storage.store_atom(link)
-        
-        puts "✓ Stored 3 atoms to SQLite"
-        
-        # Load atoms
-        loaded_concept = storage.load_atom(concept1.handle)
-        if loaded_concept
-          puts "✓ Successfully loaded atom from SQLite"
-        else
-          puts "✗ Failed to load atom"
-          exit 1
-        end
-        
-        # Clean up
-        File.delete("test_atomspace.db") if File.exists?("test_atomspace.db")
-        
-        puts "\n✓ Persistence tests passed!"
-        EOF
-        
-        # Require paths are relative to the source file, so the script must live in the repo.
-        timeout 300 crystal run --error-trace ./atomspace_persistence_test.cr || echo "Persistence test skipped (implementation pending)"
-        rm -f ./atomspace_persistence_test.cr
+        bash scripts/e2e/run_logged.sh atomspace-persistence.log 300 \
+          crystal run --error-trace scripts/e2e/atomspace_persistence_test.cr
 
     - name: Upload AtomSpace test results
       uses: actions/upload-artifact@v4
@@ -386,12 +346,8 @@ jobs:
 
     - name: Run WebSocket monitoring test
       run: |
-        if [ -f "examples/tests/test_websocket_monitoring.cr" ]; then
-          echo "Running WebSocket monitoring E2E test..."
-          timeout 180 crystal run --error-trace examples/tests/test_websocket_monitoring.cr || echo "WebSocket test completed with warnings"
-        else
-          echo "WebSocket monitoring test not found"
-        fi
+        bash scripts/e2e/run_logged.sh websocket-monitoring.log 180 \
+          crystal run --error-trace examples/tests/test_websocket_monitoring.cr
 
     - name: Upload WebSocket test results
       uses: actions/upload-artifact@v4
