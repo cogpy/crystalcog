@@ -24,7 +24,7 @@
 #   clause    := term ( ISA | inherits_from | "->" ) term
 #              | term term term                    (subject predicate object)
 #              | term path term
-#              | OPTIONAL "{" clauses "}"
+#              | OPTIONAL "{" optional_item { ( "." | newline ) optional_item } "}"
 #              | FILTER "(" condition ")"
 #              | BIND "(" value AS "$" name ")"
 #              | block { UNION block }             (a group inside the block)
@@ -32,6 +32,9 @@
 #              | MINUS block
 #              | VALUES "$" name "{" { term | UNDEF } "}"
 #              | VALUES "(" { "$" name } ")" "{" { "(" { term | UNDEF } ")" } "}"
+#   optional_item := term ( ISA | inherits_from | "->" ) term
+#                  | term term term | term path term | FILTER "(" condition ")"
+#                    (at least one matching clause; no nested constructs)
 #   path      := sequence { "|" sequence }         (one or the other)
 #   sequence  := step { "/" step }                 (one after the other)
 #   step      := [ "^" ] ( relation | "(" path ")" | negated ) [ "+" | "*" | "?" ]
@@ -666,9 +669,23 @@ module OpenCog
     # BIND(value AS $name): a variable given a computed value.
     record QueryBind, value : QueryOperand, name : String
 
+    # One OPTIONAL unit: all clauses must join before its local filters
+    # decide whether it can enrich an outer solution.
+    class QueryOptionalBlock
+      getter clauses : Array(QueryClause)
+      getter filters : Array(QueryCondition)
+
+      def initialize(@clauses : Array(QueryClause), @filters : Array(QueryCondition) = [] of QueryCondition)
+        raise QueryExecutionException.new("OPTIONAL needs at least one clause") if @clauses.empty?
+      end
+    end
+
     class QueryBlock
       getter clauses = [] of QueryClause
+      # Flattened inspection/legacy construction API. Parsed units also
+      # appear here, but are executed only through optional_blocks.
       getter optional_clauses = [] of QueryClause
+      getter optional_blocks = [] of QueryOptionalBlock
       getter filters = [] of QueryCondition
       getter binds = [] of QueryBind
       # Groups inside the block. Each is one block or several joined by
@@ -684,6 +701,17 @@ module OpenCog
       # True when the block has something to start from.
       def matches_something? : Bool
         !(clauses.empty? && groups.empty? && subqueries.empty? && values.empty?)
+      end
+
+      # Flat clause objects have no block boundaries: preserve their old
+      # independent left joins rather than treating them as a conjunction.
+      # Identity distinguishes the parsed inspection entries from legacy
+      # clauses, so parsed units never run a second time.
+      def optional_units : Array(QueryOptionalBlock)
+        legacy = optional_clauses.reject do |clause|
+          optional_blocks.any? { |unit| unit.clauses.any? { |inner| inner.same?(clause) } }
+        end
+        optional_blocks + legacy.map { |clause| QueryOptionalBlock.new([clause]) }
       end
     end
 
@@ -1345,12 +1373,10 @@ module OpenCog
       end
 
       # "{" clause { separator clause } "}"
-      private def parse_block(used : Array(String), into : QueryBlock? = nil) : QueryBlock
-        block = into || QueryBlock.new
-        nested = !into.nil?
+      private def parse_block(used : Array(String), nested : Bool = false) : QueryBlock
+        block = QueryBlock.new
         fail("expected '{', found #{current.describe}") unless punctuation?("{")
         opening = advance
-        clauses_before = nested ? block.optional_clauses.size : block.clauses.size
         bound_here = [] of Token
 
         loop do
@@ -1364,9 +1390,10 @@ module OpenCog
             fail("OPTIONAL cannot be nested") if nested
             advance
             skip_newlines
-            parse_block(used, block)
+            inner = parse_block(used, nested: true)
+            block.optional_blocks << QueryOptionalBlock.new(inner.clauses, inner.filters)
+            block.optional_clauses.concat(inner.clauses)
           elsif word?("FILTER") && next_is?("(")
-            fail("FILTER belongs to the block around the OPTIONAL") if nested
             advance
             advance
             block.filters << parse_condition(used)
@@ -1419,7 +1446,7 @@ module OpenCog
             end
             block.groups << alternatives
           else
-            (nested ? block.optional_clauses : block.clauses) << parse_clause(used)
+            block.clauses << parse_clause(used)
           end
 
           # A clause ends at a separator or at the closing brace.
@@ -1431,7 +1458,7 @@ module OpenCog
         closing = advance # the closing brace
 
         if nested
-          fail("OPTIONAL needs at least one clause", closing) if block.optional_clauses.size == clauses_before
+          fail("OPTIONAL needs at least one clause", closing) if block.clauses.empty?
         elsif !block.matches_something?
           fail("WHERE needs at least one clause", closing)
         end
@@ -2113,7 +2140,7 @@ module OpenCog
       end
 
       # The solutions of one block: every clause matched and joined on
-      # shared variables, OPTIONAL clauses joined where they match, and the
+      # shared variables, OPTIONAL units joined where they match, and the
       # FILTER conditions applied.
       private def solve_block(block : QueryBlock, variables : Array(QueryVariable)) : Array({Hash(String, AtomSpace::Atom), Array(AtomSpace::Atom)})
         var_map = Hash(String, AtomSpace::Atom).new
@@ -2162,17 +2189,10 @@ module OpenCog
           return empty if solutions.empty?
         end
 
-        # OPTIONAL clauses add bindings where they match and leave a
-        # solution as it is where they do not (a left join).
-        block.optional_clauses.each do |clause|
-          optional_solutions = clause_solutions(clause, var_map, type_constraints, solutions)
-          solutions = solutions.flat_map do |(bound, matched)|
-            extended = optional_solutions.compact_map do |(clause_bound, clause_matched)|
-              next unless clause_bound.all? { |name, atom| (existing = bound[name]?).nil? || existing == atom }
-              {bound.merge(clause_bound), matched + clause_matched}
-            end
-            extended.empty? ? [{bound, matched}] : extended
-          end
+        # An OPTIONAL enriches only with complete qualifying candidates.
+        # Failure keeps each original outer row, with its evidence, once.
+        block.optional_units.each do |unit|
+          solutions = left_join_optional(solutions, unit, var_map, type_constraints)
         end
 
         # BIND gives a variable a computed value, where the value exists.
@@ -2205,6 +2225,24 @@ module OpenCog
           solutions.select! { |(bound, _)| condition.holds?(bound) }
         end
         solutions
+      end
+
+      private def left_join_optional(outer : Array(Solution), unit : QueryOptionalBlock,
+                                     var_map : Hash(String, AtomSpace::Atom),
+                                     type_constraints : Array(PatternMatching::TypeConstraint)) : Array(Solution)
+        outer.flat_map do |row|
+          candidates = [row]
+          unit.clauses.each do |clause|
+            candidates = join(candidates, clause_solutions(clause, var_map, type_constraints, candidates))
+            break if candidates.empty?
+          end
+          # Conditions see both the original outer bindings and everything
+          # the unit joined, regardless of where FILTER was written.
+          unit.filters.each do |condition|
+            candidates.select! { |(bound, _)| condition.holds?(bound) }
+          end
+          candidates.empty? ? [row] : candidates
+        end
       end
 
       # Every way one clause matches. `known` is what the block has matched

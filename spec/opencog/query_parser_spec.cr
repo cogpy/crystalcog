@@ -84,6 +84,24 @@ describe OpenCog::QueryLanguage::QueryParser do
     everything.limit.should be_nil
   end
 
+  it "retains OPTIONAL block boundaries and local filters alongside the flat inspection API" do
+    query = parse("SELECT * WHERE { $x ISA Animal . OPTIONAL { FILTER($food = Bone) . " \
+                  "$x likes $food . $food ISA Edible } . OPTIONAL { $x likes $toy } . FILTER(BOUND($food)) }")
+    query.variables.map(&.name).should eq(["x", "food", "toy"])
+    query.clauses.map(&.to_s).should eq(["InheritanceClause($x -> Animal)"])
+    query.optional_clauses.map(&.to_s).should eq([
+      "TripleClause($x likes $food)", "InheritanceClause($food -> Edible)", "TripleClause($x likes $toy)",
+    ])
+    units = query.blocks.first.optional_blocks
+    units.map(&.clauses.size).should eq([2, 1])
+    units.map(&.filters.size).should eq([1, 0])
+    query.filters.size.should eq(1)
+    units.first.clauses.first.should be(query.optional_clauses.first)
+    query.blocks.first.optional_units.size.should eq(2)
+    parse_error("SELECT $z WHERE { $x ISA Animal . OPTIONAL { $x likes $food . FILTER($z = Bone) } }")
+      .should eq("$z is selected but does not appear in WHERE")
+  end
+
   it "says what it expected, what it found and where" do
     parse_error("GET $x WHERE { $x }").should eq(%(Query must start with SELECT, ASK or CONSTRUCT, found "GET" at line 1, column 1))
     parse_error("SELECT $x").should eq("Missing WHERE clause: expected WHERE, found the end of the query at line 1, column 10")
@@ -236,7 +254,7 @@ describe "OpenCog query FILTER, UNION and ORDER BY" do
     parse_error("SELECT $x WHERE { $x ISA y } ORDER BY").should eq("expected a value, found the end of the query at line 1, column 38")
     parse_error("SELECT $x WHERE { $x ISA y } UNION $x").should eq("expected '{', found $x at line 1, column 36")
     parse_error("SELECT $x WHERE { $x ISA y } UNION { }").should eq("WHERE needs at least one clause at line 1, column 38")
-    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { FILTER($x = y) } }").should eq("FILTER belongs to the block around the OPTIONAL at line 1, column 41")
+    parse_error("SELECT $x WHERE { $x ISA y . OPTIONAL { FILTER($x = y) } }").should eq("OPTIONAL needs at least one clause at line 1, column 56")
     # A variable used only in a FILTER has no clause to give it a value.
     parse_error("SELECT $z WHERE { $x ISA y . FILTER($z = y) }").should eq("$z is selected but does not appear in WHERE")
   end
