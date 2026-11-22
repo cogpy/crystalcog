@@ -59,6 +59,9 @@ Successfully implemented a basic query language for the OpenCog AtomSpace as req
 # Optional enrichment: every clause and local condition must qualify together
 "SELECT $pet $food WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food . $food ISA Edible . FILTER($food = Bone) } }"
 
+# Fallback values after optional enrichment
+"SELECT $pet $label WHERE { $pet ISA Animal . OPTIONAL { $pet likes $food . $food ISA Edible } . BIND(COALESCE($food, \"no edible food\") AS $label) }"
+
 # Conditions on what was matched
 "SELECT $x WHERE { $x ISA Animal . FILTER($x != Dog AND CONTAINS($x, \"a\")) }"
 "SELECT $x WHERE { $x legs $n . FILTER($n >= 4) }"
@@ -150,6 +153,7 @@ condition := condition OR condition | condition AND condition
            | CONTAINS "(" value "," value ")" | BOUND "(" "$" name ")"
 value     := value ( "+" | "-" | "*" | "/" ) value | "-" value
            | "(" value ")"
+           | COALESCE "(" value { "," value } ")"
            | "$" name | name | "quoted text" | number
            | ( NAME | TYPE | STRENGTH | CONFIDENCE ) "(" "$" name ")"
 key       := value [ ASC | DESC ]
@@ -189,6 +193,14 @@ key       := value [ ASC | DESC ]
 - A value that is not a number, or a division by zero, leaves the result without a value: a comparison with it is false, as with an unbound variable.
 - A minus needs a blank on at least one side, because `a-b` is one name. `$p -1` is read as `$p - 1`.
 - `OFFSET n` leaves out the first n results, after sorting and DISTINCT and before LIMIT counts. LIMIT and OFFSET can come in either order.
+
+### Fallback values with COALESCE
+
+- `COALESCE(value, ...)` returns the first available value, reading one or more operands from left to right and not evaluating later operands after one succeeds. Operands may be variables, literals, atom properties, arithmetic or another COALESCE. Zero and empty text are available values, not reasons to take the fallback.
+- An unbound variable or invalid arithmetic (for example division by zero or arithmetic on nonnumeric text) has no value. If every operand has no value, COALESCE has no value too: BIND leaves its target unbound, comparisons reject the row, and existing sorting/aggregate rules for unavailable values apply. This does not add general exception recovery or boolean operands; it uses OQL's existing value rules.
+- COALESCE works wherever a value is accepted: BIND, FILTER, ORDER BY, aggregate arguments and HAVING. It does not introduce a variable merely by referring to it. `coalesce` remains an atom name unless followed by an opening bracket in a value expression.
+- BIND with COALESCE preserves the original atom's identity and type if the selected operand is a plain variable, including through nested COALESCE. A selected computed number or text creates the usual NumberNode or ConceptNode beside the AtomSpace. MIN/MAX preserve atom identity only for a plain-variable aggregate argument, as before.
+- OPTIONAL joins and local filters still run before the outer block's BINDs. A fallback does not make a partial or rejected OPTIONAL candidate qualify, change matched evidence or confidence, or add atoms to storage. With the pet example above, a pet without a complete edible-food match receives the fallback label while `$food` stays unbound. This is a bounded OQL expression extension, not a claim of SPARQL compatibility.
 
 ### Aggregates
 
@@ -320,6 +332,7 @@ results = query_interface.query(query_string)
 - Error scenarios and edge cases
 - Integration with existing Query module methods
 - `spec/opencog/query_optional_block_spec.cr` covers all-or-nothing OPTIONAL conjunctions, local-filter scope and placement, rejected/partial evidence, independent units, multiple complete matches, shared/type constraints, paths, outer BOUND filtering, legacy construction, and AtomSpace identity/truth-value non-mutation. This increment follows the roadmap's integration-testing priority before application work; it does not change storage durability or claim full SPARQL support.
+- `spec/opencog/query_coalesce_spec.cr` covers nested and multiline fallback expressions, first-value and unavailable-value behavior, short-circuiting, atom-preserving BIND, positive and rejected OPTIONAL enrichment, expression contexts, variable scope, malformed input, nonreserved names and AtomSpace non-mutation. COALESCE is a selected incremental query improvement; the roadmap recommends integration testing and documentation but does not specifically prioritize this operator.
 
 ## Documentation Updates
 
