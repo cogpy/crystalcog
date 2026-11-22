@@ -48,6 +48,7 @@
 #              | CONTAINS "(" value "," value ")" | BOUND "(" "$" name ")"
 #   value     := value ( "+" | "-" | "*" | "/" ) value | "-" value
 #              | "(" value ")"
+#              | COALESCE "(" value { "," value } ")"
 #              | "$" name | name | "quoted text" | number
 #              | ( NAME | TYPE | STRENGTH | CONFIDENCE ) "(" "$" name ")"
 #   key       := value [ ASC | DESC ]
@@ -536,7 +537,33 @@ module OpenCog
       end
     end
 
-    alias QueryOperand = QueryValue | QueryArithmetic
+    # The first available value, evaluated left to right. Unbound variables
+    # and invalid arithmetic have no value; zero and empty text do.
+    class QueryCoalesce
+      getter arguments : Array(QueryOperand)
+
+      def initialize(@arguments : Array(QueryOperand))
+        raise QueryExecutionException.new("COALESCE needs at least one value") if @arguments.empty?
+      end
+
+      def evaluate(bindings : Hash(String, AtomSpace::Atom)) : String | Float64 | Nil
+        @arguments.each do |argument|
+          value = argument.evaluate(bindings)
+          return value unless value.nil?
+        end
+        nil
+      end
+
+      def variable? : String?
+        nil
+      end
+
+      def to_s(io : IO)
+        io << "COALESCE(" << @arguments.join(", ") << ')'
+      end
+    end
+
+    alias QueryOperand = QueryValue | QueryArithmetic | QueryCoalesce
 
     # A value as a number: a number itself, or text that reads as one.
     def self.number(value : String | Float64 | Nil) : Float64?
@@ -1705,7 +1732,9 @@ module OpenCog
           advance
           QueryValue.new(:number, token.text, token.text.to_f)
         when :name
-          if (property = PROPERTIES[token.text.upcase]?) && next_is?("(")
+          if word?("COALESCE") && next_is?("(")
+            parse_coalesce(used)
+          elsif (property = PROPERTIES[token.text.upcase]?) && next_is?("(")
             advance
             advance
             fail("#{token.text.upcase} takes a variable, found #{current.describe}") unless current.kind == :variable
@@ -1720,6 +1749,24 @@ module OpenCog
         else
           fail("expected a value, found #{token.describe}")
         end
+      end
+
+      # COALESCE(value, ...): one or more operands, not declarations.
+      private def parse_coalesce(used : Array(String)) : QueryCoalesce
+        advance # COALESCE
+        advance # opening bracket
+        skip_newlines
+        fail("COALESCE needs at least one value") if punctuation?(")")
+        arguments = [parse_value(used, declare: false)]
+        loop do
+          skip_newlines
+          break if punctuation?(")")
+          fail("expected ',' or ')' in COALESCE, found #{current.describe}") unless punctuation?(",")
+          advance
+          arguments << parse_value(used, declare: false)
+        end
+        advance # closing bracket
+        QueryCoalesce.new(arguments)
       end
 
       private def parse_clause(used : Array(String), paths : Bool = true) : QueryClause
@@ -2439,6 +2486,13 @@ module OpenCog
       # A computed value as an atom a result can carry: the atom itself
       # for a plain variable, else a number or a name beside the AtomSpace.
       private def value_atom(value : QueryOperand, bindings : Hash(String, AtomSpace::Atom)) : AtomSpace::Atom?
+        if value.is_a?(QueryCoalesce)
+          value.arguments.each do |argument|
+            atom = value_atom(argument, bindings)
+            return atom unless atom.nil?
+          end
+          return nil
+        end
         if variable = value.variable?
           return bindings[variable]?
         end
