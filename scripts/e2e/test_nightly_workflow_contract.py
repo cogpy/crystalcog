@@ -14,6 +14,12 @@ for job, step_name, command, artifact in (
     ('websocket-e2e', 'Run WebSocket monitoring test',
      'bash scripts/e2e/run_logged.sh websocket-monitoring.log 180 \\\n  crystal run --error-trace examples/tests/test_websocket_monitoring.cr',
      'websocket-e2e-results'),
+    ('distributed-e2e', 'Run distributed cache tests',
+     'bash scripts/e2e/run_logged.sh distributed-test-results.txt 600 \\\n  crystal run --release benchmarks/distributed_storage_benchmark.cr',
+     'distributed-e2e-results'),
+    ('cogserver-e2e', 'Build CogServer',
+     'bash scripts/e2e/run_logged.sh cogserver-build.log 600 \\\n  crystal build --verbose --stats --error-trace src/bin/cogserver.cr -o cogserver_bin',
+     'cogserver-e2e-results'),
 ):
     steps = jobs[job]['steps']
     step = next(s for s in steps if s.get('name') == step_name)

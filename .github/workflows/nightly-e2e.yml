@@ -153,7 +153,8 @@ jobs:
 
     - name: Build CogServer
       run: |
-        crystal build --verbose --stats --error-trace src/bin/cogserver.cr -o cogserver_bin || echo "CogServer build skipped"
+        bash scripts/e2e/run_logged.sh cogserver-build.log 600 \
+          crystal build --verbose --stats --error-trace src/bin/cogserver.cr -o cogserver_bin
 
     - name: Run CogServer load tests
       timeout-minutes: 5
@@ -197,13 +198,8 @@ jobs:
 
     - name: Run distributed cache tests
       run: |
-        if [ -f "benchmarks/distributed_storage_benchmark.cr" ]; then
-          echo "Running distributed storage benchmark..."
-          timeout 600 crystal run --release benchmarks/distributed_storage_benchmark.cr > distributed-test-results.txt 2>&1
-          cat distributed-test-results.txt
-        else
-          echo "Distributed storage benchmark not found"
-        fi
+        bash scripts/e2e/run_logged.sh distributed-test-results.txt 600 \
+          crystal run --release benchmarks/distributed_storage_benchmark.cr
 
     - name: Run multi-node simulation
       run: |
