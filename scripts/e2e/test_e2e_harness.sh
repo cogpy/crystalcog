@@ -39,8 +39,11 @@ trap cleanup_stub EXIT
 
 cat > "$STUB" << 'PY'
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 
 class Handler(BaseHTTPRequestHandler):
+    names = set()
+
     def _send(self, code, body):
         data = body.encode()
         self.send_response(code)
@@ -50,13 +53,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        self._send(200, '{"status":"ok","running":true}')
+        self._send(200, json.dumps({"status": "ok", "running": True,
+                                   "atomspace": {"nodes": len(self.names)}}))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        if length:
-            self.rfile.read(length)
-        self._send(201, '{"success":true}')
+        name = json.loads(self.rfile.read(length))["name"]
+        self.names.add(name)
+        self._send(201, json.dumps({"success": True,
+                                   "atom": {"handle": 1, "name": name}}))
 
     def log_message(self, fmt, *args):
         return
