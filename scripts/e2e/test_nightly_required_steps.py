@@ -118,8 +118,18 @@ def test_required_workflow_commands(work):
 
 def test_cogserver(work):
     # Never connect to or kill an unrelated listener: fail before starting fixtures.
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 18080))
+    import errno
+
+    for family, host in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
+        try:
+            with socket.socket(family) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind((host, 18080))
+        except OSError as error:
+            if family != socket.AF_INET6 or error.errno not in (
+                errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, errno.EADDRNOTAVAIL
+            ):
+                raise
     harness = ROOT / 'scripts/e2e/cogserver_load_test.sh'
     wrapper = work / 'server'
     pid_file = work / 'server.pid'
