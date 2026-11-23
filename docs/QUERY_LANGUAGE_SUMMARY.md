@@ -202,6 +202,34 @@ key       := value [ ASC | DESC ]
 - BIND with COALESCE preserves the original atom's identity and type if the selected operand is a plain variable, including through nested COALESCE. A selected computed number or text creates the usual NumberNode or ConceptNode beside the AtomSpace. MIN/MAX preserve atom identity only for a plain-variable aggregate argument, as before.
 - OPTIONAL joins and local filters still run before the outer block's BINDs. A fallback does not make a partial or rejected OPTIONAL candidate qualify, change matched evidence or confidence, or add atoms to storage. With the pet example above, a pet without a complete edible-food match receives the fallback label while `$food` stays unbound. This is a bounded OQL expression extension, not a claim of SPARQL compatibility.
 
+### Application example: catalog price display
+
+Run [query_catalog.cr](../examples/integration_examples/query_catalog.cr) from the repository root:
+
+```bash
+crystal run examples/integration_examples/query_catalog.cr
+# If RocksDB is unavailable:
+DISABLE_ROCKSDB=1 crystal run examples/integration_examples/query_catalog.cr
+```
+
+The example creates an in-memory catalog and runs the shared [query_catalog.oql](../examples/integration_examples/query_catalog.oql) through `OpenCog::Query.create_query_interface(space).query(query)`. A price qualifies only when its relationship, `ApprovedPrice` classification and nonnegative local filter all match. `BIND(COALESCE($price, "Contact us") AS $display_price)` then supplies a display value without inventing a numeric price. The application consumes projected `QueryResult.bindings` directly and writes one JSON array to stdout; query errors propagate rather than being printed as successful results.
+
+```json
+[
+  {"product":"Apple","price":3.5,"display_price":"3.5"},
+  {"product":"Free sample","price":0.0,"display_price":"0"},
+  {"product":"Kale","price":null,"display_price":"Contact us"},
+  {"product":"Pear","price":null,"display_price":"Contact us"},
+  {"product":"Plum","price":null,"display_price":"Contact us"}
+]
+```
+
+Kale has no price fact, Pear's negative price fails the filter, and Plum's price lacks approval. Each product remains visible, but its `price` binding stays absent and becomes JSON null. Zero is a valid price, not a missing-value sentinel. The display fallback is a result-only ConceptNode; it is not stored in the AtomSpace. This fixture models price display, not currency formatting, billing or production catalog validation. Multiple qualifying prices can yield multiple rows per product.
+
+`spec/integration/query_catalog_spec.cr` tests this application boundary, including valid and zero-price atom identity, all three fallback cases, exclusion of non-products, empty-graph behavior, delegation through `OpenCog::Query.execute_query`, malformed-query errors, and stored identity/truth-value preservation. Run it with `crystal spec spec/integration/query_catalog_spec.cr`.
+
+This is an executable usage example and integration-coverage increment, **not a new query-language feature**. It uses the existing in-process API because CogServer's `query <name>` shell command is a name lookup, and the separate TypeScript SDK HTTP `/query` endpoint searches atom names/types rather than returning OQL variable bindings. No HTTP or shell contract is changed. The roadmap recommends integration testing, performance work, documentation and applications in that order; the catalog is a bounded choice within that guidance, not a specifically mandated feature.
+
 ### Aggregates
 
 - `COUNT(*)` counts the matches. `COUNT($x)` counts those where `$x` has a value. `SUM`, `AVG`, `MIN` and `MAX` take any value, such as `$p`, `$p * 2` or `STRENGTH($x)`. `DISTINCT` inside the brackets takes each value once.

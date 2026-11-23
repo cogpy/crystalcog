@@ -1,0 +1,9 @@
+SELECT $product $price $display_price WHERE {
+  $product ISA Product .
+  OPTIONAL {
+    $product price $price .
+    $price ISA ApprovedPrice .
+    FILTER($price >= 0)
+  } .
+  BIND(COALESCE($price, "Contact us") AS $display_price)
+} ORDER BY $product
