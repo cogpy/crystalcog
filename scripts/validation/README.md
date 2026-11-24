@@ -200,6 +200,16 @@ Validates production environment setup.
 #### `validate_integration_test.sh`
 General integration test validation.
 
+#### `test_comprehensive_test_gates.py`
+Checks that `.github/workflows/comprehensive-tests.yml` fails closed. The workflow shell uses
+`errexit` and `pipefail`; component, integration and full-suite spec steps return the real
+Crystal status, the full suite keeps its log and summary on failure, binary verification
+fails on any missing or failed target, and the aggregate status rejects failed, skipped or
+cancelled jobs. A stub `crystal` returns statuses 0, 1 and 42, so this tests workflow wiring,
+not Crystal compilation or spec behavior. Run with `python3 -m pip install PyYAML==6.0.2`
+and `python3 scripts/validation/test_comprehensive_test_gates.py`. Validate Scripts runs it
+when this workflow changes.
+
 ## Test Requirements
 
 ### System Dependencies

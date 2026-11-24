@@ -7,6 +7,7 @@ on:
       - 'docs/**'
       - 'tools/**'
       - '.github/workflows/nightly-e2e.yml'
+      - '.github/workflows/comprehensive-tests.yml'
       - '.github/workflows/validate-scripts.yml'
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - 'docs/**'
       - 'tools/**'
       - '.github/workflows/nightly-e2e.yml'
+      - '.github/workflows/comprehensive-tests.yml'
       - '.github/workflows/validate-scripts.yml'
   workflow_dispatch:
 
@@ -63,6 +65,21 @@ jobs:
           node --check scripts/generate-priority-issues.js
           node --test scripts/generate-priority-issues.test.js
 
+  validate-comprehensive-test-gates:
+    name: Validate Comprehensive Test Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install workflow parser
+        run: python3 -m pip install 'PyYAML==6.0.2'
+      - name: Check unit, integration, build and status failure propagation
+        run: python3 scripts/validation/test_comprehensive_test_gates.py
   validate-nightly-required-gates:
     name: Validate Required Nightly Gates
     runs-on: ubuntu-latest

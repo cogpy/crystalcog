@@ -40,9 +40,10 @@ permissions:
   contents: read
 
 # Trace every command so CI logs show exactly what ran and what it printed.
+# pipefail keeps a failing command visible when its output is piped to tee.
 defaults:
   run:
-    shell: bash -ex {0}
+    shell: bash -ex -o pipefail {0}
 
 jobs:
   # Matrix test for different Crystal versions
@@ -132,82 +133,82 @@ jobs:
     - name: Test CogUtil Component
       run: |
         echo "=== Testing CogUtil Component ==="
-        crystal spec --stats -v spec/cogutil/ --error-trace --verbose || echo "CogUtil tests completed"
+        crystal spec --stats -v spec/cogutil/ --error-trace --verbose
 
     - name: Test AtomSpace Component
       run: |
         echo "=== Testing AtomSpace Component ==="
-        crystal spec --stats -v spec/atomspace/ --error-trace --verbose || echo "AtomSpace tests completed"
+        crystal spec --stats -v spec/atomspace/ --error-trace --verbose
 
     - name: Test PLN Component
       run: |
         echo "=== Testing PLN Component ==="
-        crystal spec --stats -v spec/pln/ --error-trace --verbose || echo "PLN tests completed"
+        crystal spec --stats -v spec/pln/ --error-trace --verbose
 
     - name: Test URE Component
       run: |
         echo "=== Testing URE Component ==="
-        crystal spec --stats -v spec/ure/ --error-trace --verbose || echo "URE tests completed"
+        crystal spec --stats -v spec/ure/ --error-trace --verbose
 
     - name: Test OpenCog Component
       run: |
         echo "=== Testing OpenCog Component ==="
-        crystal spec --stats -v spec/opencog/ --error-trace --verbose || echo "OpenCog tests completed"
+        crystal spec --stats -v spec/opencog/ --error-trace --verbose
 
     - name: Test MOSES Component
       run: |
         echo "=== Testing MOSES Component ==="
-        crystal spec --stats -v spec/moses/ --error-trace --verbose || echo "MOSES tests completed"
+        crystal spec --stats -v spec/moses/ --error-trace --verbose
 
     - name: Test Attention Component
       run: |
         echo "=== Testing Attention Component ==="
-        crystal spec --stats -v spec/attention/ --error-trace --verbose || echo "Attention tests completed"
+        crystal spec --stats -v spec/attention/ --error-trace --verbose
 
     - name: Test NLP Component
       run: |
         echo "=== Testing NLP Component ==="
-        crystal spec --stats -v spec/nlp/ --error-trace --verbose || echo "NLP tests completed"
+        crystal spec --stats -v spec/nlp/ --error-trace --verbose
 
     - name: Test Pattern Matching Component
       run: |
         echo "=== Testing Pattern Matching Component ==="
-        crystal spec --stats -v spec/pattern_matching/ --error-trace --verbose || echo "Pattern Matching tests completed"
+        crystal spec --stats -v spec/pattern_matching/ --error-trace --verbose
 
     - name: Test Pattern Mining Component
       run: |
         echo "=== Testing Pattern Mining Component ==="
-        crystal spec --stats -v spec/pattern_mining/ --error-trace --verbose || echo "Pattern Mining tests completed"
+        crystal spec --stats -v spec/pattern_mining/ --error-trace --verbose
 
     - name: Test CogServer Component
       run: |
         echo "=== Testing CogServer Component ==="
-        crystal spec --stats -v spec/cogserver/ --error-trace --verbose || echo "CogServer tests completed"
+        crystal spec --stats -v spec/cogserver/ --error-trace --verbose
 
     - name: Test Agent-Zero Component
       run: |
         echo "=== Testing Agent-Zero Component ==="
-        crystal spec --stats -v spec/agent-zero/ --error-trace --verbose || echo "Agent-Zero tests completed"
+        crystal spec --stats -v spec/agent-zero/ --error-trace --verbose
 
     - name: Test Spatial Component
       run: |
         echo "=== Testing Spatial Component ==="
-        crystal spec --stats -v spec/spatial/ --error-trace --verbose || echo "Spatial tests completed"
+        crystal spec --stats -v spec/spatial/ --error-trace --verbose
 
     - name: Test Temporal Component
       run: |
         echo "=== Testing Temporal Component ==="
-        crystal spec --stats -v spec/temporal/ --error-trace --verbose || echo "Temporal tests completed"
+        crystal spec --stats -v spec/temporal/ --error-trace --verbose
 
     - name: Test Behavior Component
       run: |
         echo "=== Testing Behavior Component ==="
-        crystal spec --stats -v spec/behavior/ --error-trace --verbose || echo "Behavior tests completed"
+        crystal spec --stats -v spec/behavior/ --error-trace --verbose
 
     - name: Test Performance Suite
       run: |
         echo "=== Testing Performance Suite ==="
-        crystal spec --stats -v spec/performance/ --error-trace --verbose || echo "Performance tests completed"
+        crystal spec --stats -v spec/performance/ --error-trace --verbose
 
     - name: Generate test summary
       run: |
@@ -255,11 +256,26 @@ jobs:
     - name: Run full test suite
       run: |
         echo "Running full test suite..."
+        # Keep the summary even when specs fail, then return the real status.
+        set +e
         crystal spec --stats -v --error-trace --junit_output=test-results.xml 2>&1 | tee test-output.log
+        statuses=("${PIPESTATUS[@]}")
+        set -e
+        spec_status=${statuses[0]}
+        tee_status=${statuses[1]}
 
         # Extract summary
         echo "=== Test Summary ===" >> test-summary.txt
         grep -E "^(Finished|[0-9]+ examples)" test-output.log >> test-summary.txt || true
+        echo "crystal spec exit status: $spec_status" >> test-summary.txt
+        if [ "$spec_status" -ne 0 ]; then
+          echo "::error::Full test suite failed with exit status $spec_status"
+          exit "$spec_status"
+        fi
+        if [ "$tee_status" -ne 0 ]; then
+          echo "::error::Could not write test-output.log (tee exit status $tee_status)"
+          exit "$tee_status"
+        fi
 
     - name: Parse test results
       if: always()
@@ -268,9 +284,13 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         if [ -f test-results.xml ]; then
           # Extract test counts from JUnit XML
-          tests=$(grep -oP 'tests="\K[^"]+' test-results.xml | head -1 || echo "N/A")
-          failures=$(grep -oP 'failures="\K[^"]+' test-results.xml | head -1 || echo "N/A")
-          errors=$(grep -oP 'errors="\K[^"]+' test-results.xml | head -1 || echo "N/A")
+          # First exact attribute only; no pipe that pipefail could turn into extra output.
+          junit_count() {
+            awk -v key="$1" 'match($0, "[[:space:]]" key "=\"[^\"]*\"") { print substr($0, RSTART + length(key) + 3, RLENGTH - length(key) - 4); exit }' test-results.xml
+          }
+          tests=$(junit_count tests); tests=${tests:-N/A}
+          failures=$(junit_count failures); failures=${failures:-N/A}
+          errors=$(junit_count errors); errors=${errors:-N/A}
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Tests | $tests |" >> $GITHUB_STEP_SUMMARY
@@ -318,17 +338,17 @@ jobs:
     - name: Run integration tests
       run: |
         echo "Running integration tests..."
-        crystal spec --stats -v spec/integration/ --error-trace --verbose || true
+        crystal spec --stats -v spec/integration/ --error-trace --verbose
 
     - name: Run cross-component tests
       run: |
         echo "Testing cross-component functionality..."
-        crystal spec --stats -v spec/crystalcog_spec.cr --error-trace --verbose || true
+        crystal spec --stats -v spec/crystalcog_spec.cr --error-trace --verbose
 
     - name: Run spec_helper integration
       run: |
         echo "Testing main spec_helper integration..."
-        crystal spec --stats -v spec/spec_helper.cr --error-trace --verbose || true
+        crystal spec --stats -v spec/spec_helper.cr --error-trace --verbose
 
   # Binary build verification
   binary-build-test:
@@ -412,6 +432,10 @@ jobs:
         echo ""
         echo "Built binaries:"
         ls -lh bin/ 2>/dev/null || echo "No binaries in bin/"
+        if [ "$FAIL_COUNT" -ne 0 ]; then
+          echo "::error::$FAIL_COUNT binary target(s) failed to build or were missing"
+          exit 1
+        fi
 
     - name: Verify binaries
       run: |
@@ -450,11 +474,17 @@ jobs:
         echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Binary Build | ${{ needs.binary-build-test.result }} |" >> $GITHUB_STEP_SUMMARY
 
-        # Determine overall status
-        if [ "${{ needs.component-tests.result }}" != "success" ] || [ "${{ needs.full-test-suite.result }}" != "success" ]; then
-          echo "" >> $GITHUB_STEP_SUMMARY
+        # Every required job must succeed; skipped, cancelled or failed is not a pass.
+        failed=0
+        for result in "${{ needs.version-matrix.result }}" "${{ needs.component-tests.result }}" "${{ needs.full-test-suite.result }}" "${{ needs.integration-tests.result }}" "${{ needs.binary-build-test.result }}"; do
+          if [ "$result" != "success" ]; then
+            failed=1
+          fi
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "$failed" -ne 0 ]; then
           echo "**Status: Tests require attention**" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status: All tests passed**" >> $GITHUB_STEP_SUMMARY
+          echo "::error::One or more required test jobs did not succeed"
+          exit 1
         fi
+        echo "**Status: All tests passed**" >> $GITHUB_STEP_SUMMARY
