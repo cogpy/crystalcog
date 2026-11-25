@@ -131,81 +131,97 @@ jobs:
       run: shards install --verbose
 
     - name: Test CogUtil Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing CogUtil Component ==="
         crystal spec --stats -v spec/cogutil/ --error-trace --verbose
 
     - name: Test AtomSpace Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing AtomSpace Component ==="
         crystal spec --stats -v spec/atomspace/ --error-trace --verbose
 
     - name: Test PLN Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing PLN Component ==="
         crystal spec --stats -v spec/pln/ --error-trace --verbose
 
     - name: Test URE Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing URE Component ==="
         crystal spec --stats -v spec/ure/ --error-trace --verbose
 
     - name: Test OpenCog Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing OpenCog Component ==="
         crystal spec --stats -v spec/opencog/ --error-trace --verbose
 
     - name: Test MOSES Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing MOSES Component ==="
         crystal spec --stats -v spec/moses/ --error-trace --verbose
 
     - name: Test Attention Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Attention Component ==="
         crystal spec --stats -v spec/attention/ --error-trace --verbose
 
     - name: Test NLP Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing NLP Component ==="
         crystal spec --stats -v spec/nlp/ --error-trace --verbose
 
     - name: Test Pattern Matching Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Pattern Matching Component ==="
         crystal spec --stats -v spec/pattern_matching/ --error-trace --verbose
 
     - name: Test Pattern Mining Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Pattern Mining Component ==="
         crystal spec --stats -v spec/pattern_mining/ --error-trace --verbose
 
     - name: Test CogServer Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing CogServer Component ==="
         crystal spec --stats -v spec/cogserver/ --error-trace --verbose
 
     - name: Test Agent-Zero Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Agent-Zero Component ==="
         crystal spec --stats -v spec/agent-zero/ --error-trace --verbose
 
     - name: Test Spatial Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Spatial Component ==="
         crystal spec --stats -v spec/spatial/ --error-trace --verbose
 
     - name: Test Temporal Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Temporal Component ==="
         crystal spec --stats -v spec/temporal/ --error-trace --verbose
 
     - name: Test Behavior Component
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Behavior Component ==="
         crystal spec --stats -v spec/behavior/ --error-trace --verbose
 
     - name: Test Performance Suite
+      if: ${{ !cancelled() }}
       run: |
         echo "=== Testing Performance Suite ==="
         crystal spec --stats -v spec/performance/ --error-trace --verbose
@@ -336,16 +352,19 @@ jobs:
       run: shards install --verbose
 
     - name: Run integration tests
+      if: ${{ !cancelled() }}
       run: |
         echo "Running integration tests..."
         crystal spec --stats -v spec/integration/ --error-trace --verbose
 
     - name: Run cross-component tests
+      if: ${{ !cancelled() }}
       run: |
         echo "Testing cross-component functionality..."
         crystal spec --stats -v spec/crystalcog_spec.cr --error-trace --verbose
 
     - name: Run spec_helper integration
+      if: ${{ !cancelled() }}
       run: |
         echo "Testing main spec_helper integration..."
         crystal spec --stats -v spec/spec_helper.cr --error-trace --verbose

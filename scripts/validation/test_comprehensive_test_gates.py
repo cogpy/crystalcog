@@ -52,6 +52,20 @@ sys.exit(status)
 
 def load_workflow():
     return yaml.safe_load(WORKFLOW.read_text())
+REQUIRED_SPEC_TARGETS = [
+    "spec/cogutil/", "spec/atomspace/", "spec/pln/", "spec/ure/", "spec/opencog/",
+    "spec/moses/", "spec/attention/", "spec/nlp/", "spec/pattern_matching/",
+    "spec/pattern_mining/", "spec/cogserver/", "spec/agent-zero/", "spec/spatial/",
+    "spec/temporal/", "spec/behavior/", "spec/performance/",
+    "spec/integration/", "spec/crystalcog_spec.cr", "spec/spec_helper.cr",
+]
+RUN_AFTER_EARLIER_FAILURE = "${{ !cancelled() }}"
+def spec_target(step):
+    lines = SPEC_LINE.findall(step["run"])
+    assert len(lines) == 1, (step.get("name"), lines)
+    targets = [arg for arg in shlex.split(lines[0]) if arg.startswith("spec/")]
+    assert len(targets) == 1, (step.get("name"), targets)
+    return targets[0]
 
 
 class ComprehensiveTestGates(unittest.TestCase):
@@ -100,15 +114,30 @@ class ComprehensiveTestGates(unittest.TestCase):
         steps = self.spec_steps("component-tests") + self.spec_steps("integration-tests")
         self.assertEqual(len(steps), 19)
         for step in steps:
-            target = SPEC_LINE.search(step["run"]).group(0).split()[3]
+            target = spec_target(step)
             for status in (0, 1, 42):
                 with self.subTest(step=step["name"], status=status):
                     result = self.run_block(step["run"], STUB_STATUS=str(status))
                     self.assertEqual(result.returncode, status, result.stdout)
-                    self.assertIn(target, self.record.read_text())
+                    recorded = [shlex.split(line) for line in self.record.read_text().splitlines()]
+                    self.assertEqual(len(recorded), 1, recorded)
+                    self.assertEqual([a for a in recorded[0] if a.startswith("spec/")], [target])
                     self.assertIn("stub spec stderr marker", result.stdout)
                     self.assertNotIn("tests completed", result.stdout.replace("echo", ""))
 
+    def test_required_suites_are_present_and_not_skippable(self):
+        steps = self.spec_steps("component-tests") + self.spec_steps("integration-tests")
+        self.assertEqual([spec_target(s) for s in steps], REQUIRED_SPEC_TARGETS)
+        for job in ("component-tests", "integration-tests", "full-test-suite"):
+            self.assertNotIn("if", self.jobs[job], job)
+        for step in steps:
+            with self.subTest(step=step["name"]):
+                # Later suites still run after an earlier suite fails, so every
+                # failure is reported; the failed step still fails the job.
+                self.assertEqual(step.get("if"), RUN_AFTER_EARLIER_FAILURE)
+                self.assertFalse(step.get("continue-on-error", False))
+        full = self.full_suite_step()
+        self.assertNotIn("if", full)
     def full_suite_step(self):
         return next(s for s in self.jobs["full-test-suite"]["steps"] if s.get("name") == "Run full test suite")
 
