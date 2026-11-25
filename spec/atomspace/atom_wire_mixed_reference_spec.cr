@@ -96,6 +96,17 @@ describe "AtomWire mixed receiver references" do
       atom.truth_value.should be(before_truth_values[index][0])
       atom.truth_value.to_a.should eq(before_truth_values[index][1])
     end
+
+    # Reverse lookups: every receiver-owned reference gains exactly the two
+    # new links, and the interned inline atoms are indexed by their parents.
+    new_links = [interned.handle, stored_nested.handle]
+    before_atoms.each_with_index do |atom, index|
+      receiver.get_incoming(atom).map(&.handle).sort.should eq((before_incoming[index] + new_links).sort)
+    end
+    receiver.get_incoming(stored_outer).map(&.handle).should eq([interned.handle])
+    receiver.get_incoming(stored_inner).map(&.handle).should eq([stored_nested.handle])
+    receiver.get_incoming(stored_nested).map(&.handle).should eq([interned.handle])
+    receiver.get_incoming(interned).should be_empty
   end
 
   it "rejects an unknown nested handle after valid resolution without mutating the receiver" do
