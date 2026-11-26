@@ -612,8 +612,15 @@ describe "CrystalCog Performance Tests" do
       OpenCog.initialize
       pln_engine = PLN.create_engine(atomspace)
       ure_engine = URE.create_engine(atomspace)
-      
-      initial_memory = GC.stats.heap_size.to_i64
+
+      # Measure allocation volume: GC.stats.total_bytes counts allocated bytes
+      # monotonically. GC heap_size grows in large chunks and depends on free
+      # space left by earlier specs, so its delta was usually 0 and sometimes
+      # one whole heap expansion; it never measured the atoms built here.
+      rng = Random.new(42)
+      GC.collect
+      allocated_before = GC.stats.total_bytes
+      atoms_initial = atomspace.size
 
       # Create substantial knowledge base
       num_concepts = 1000
@@ -627,51 +634,49 @@ describe "CrystalCog Performance Tests" do
 
       tv = AtomSpace::SimpleTruthValue.new(0.8, 0.9)
 
-      # Add many relationships
+      # Add many relationships (seeded so the atom count is reproducible)
       2000.times do
-        c1, c2 = concepts.sample(2)
+        c1, c2 = concepts.sample(2, rng)
         atomspace.add_inheritance_link(c1, c2, tv)
       end
 
       1000.times do
-        pred = predicates.sample
-        c1, c2 = concepts.sample(2)
+        pred = predicates.sample(rng)
+        c1, c2 = concepts.sample(2, rng)
         atomspace.add_evaluation_link(pred, atomspace.add_list_link([c1, c2]), tv)
       end
 
-      before_reasoning_memory = GC.stats.heap_size.to_i64
+      allocated_after_build = GC.stats.total_bytes
       atoms_before = atomspace.size
+      built_atoms = atoms_before - atoms_initial
 
       # Run reasoning
       pln_atoms = pln_engine.reason(3)
       ure_atoms = ure_engine.forward_chain(2)
 
-      GC.collect # Force cleanup
-
-      after_reasoning_memory = GC.stats.heap_size.to_i64
+      allocated_after_reasoning = GC.stats.total_bytes
       atoms_after = atomspace.size
 
-      # Calculate memory metrics (use Int64 to avoid UInt64 underflow when GC reclaims memory)
-      memory_used_before = (before_reasoning_memory.to_i64 - initial_memory.to_i64).abs
-      memory_per_atom_before = if atoms_before > 0
-                                  memory_used_before // atoms_before
-                                else
-                                  0_i64
-                                end
-      total_memory_increase = (after_reasoning_memory.to_i64 - before_reasoning_memory.to_i64)
+      build_allocation = (allocated_after_build - allocated_before).to_i64
+      reasoning_allocation = (allocated_after_reasoning - allocated_after_build).to_i64
       new_atoms = atoms_after - atoms_before
 
-      puts "Memory efficiency test:"
-      puts "  Initial memory usage: #{memory_used_before} bytes for #{atoms_before} atoms"
-      puts "  Memory per atom (before reasoning): #{memory_per_atom_before} bytes"
-      puts "  Memory increase after reasoning: #{total_memory_increase} bytes for #{new_atoms} new atoms"
+      built_atoms.should be > 0
+      memory_per_atom_before = build_allocation // built_atoms
 
-      # Memory usage should be reasonable (heap estimates are noisy on CI)
-      memory_per_atom_before.should be < 4096 # bytes per atom (CI-compatible)
+      puts "Memory efficiency test:"
+      puts "  Allocated while building: #{build_allocation} bytes for #{built_atoms} atoms"
+      puts "  Memory per atom (before reasoning): #{memory_per_atom_before} bytes allocated"
+      puts "  Allocated during reasoning: #{reasoning_allocation} bytes for #{new_atoms} new atoms"
+
+      # A real measurement is never zero. The budget covers each atom with its
+      # indexes, name and outgoing array (about 0.9 KB on Crystal 1.20).
+      memory_per_atom_before.should be > 0
+      memory_per_atom_before.should be < 4096 # allocated bytes per atom
 
       if new_atoms > 0
-        memory_per_new_atom = total_memory_increase // new_atoms
-        puts "  Memory per new atom: #{memory_per_new_atom} bytes"
+        memory_per_new_atom = reasoning_allocation // new_atoms
+        puts "  Memory per new atom: #{memory_per_new_atom} bytes allocated"
       end
     end
   end
