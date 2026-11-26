@@ -390,9 +390,9 @@ RemainAfterExit=yes
 User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/local/bin/docker-compose -f docker-compose.production.yml up -d
-ExecStop=/usr/local/bin/docker-compose -f docker-compose.production.yml down
-ExecReload=/usr/local/bin/docker-compose -f docker-compose.production.yml restart
+ExecStart=/usr/bin/env docker compose --env-file .env.production -f docker-compose.production.yml up -d
+ExecStop=/usr/bin/env docker compose --env-file .env.production -f docker-compose.production.yml down
+ExecReload=/usr/bin/env docker compose --env-file .env.production -f docker-compose.production.yml restart
 TimeoutStartSec=0
 
 [Install]
@@ -409,6 +409,7 @@ EOF
 generate_env_file() {
     print_status "Generating environment file template..."
     
+    umask 077
     cat > "$INSTALL_DIR/.env.production.template" << EOF
 # CrystalCog Production Environment Configuration
 # Copy this file to .env.production and update with your values
@@ -428,6 +429,7 @@ GALATEA_PORT=8080
 EOF
     
     chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env.production.template"
+    chmod 0600 "$INSTALL_DIR/.env.production.template"
     
     print_success "Environment file template generated"
 }

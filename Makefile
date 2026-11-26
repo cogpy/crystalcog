@@ -465,9 +465,9 @@ production-health:
 # Production deployment with Docker Compose
 production-up:
 	@echo "$(BLUE)[INFO]$(NC) Starting production services with Docker Compose..."
-	@docker compose -f docker-compose.production.yml up -d
+	@docker compose $(if $(wildcard .env.production),--env-file .env.production,) -f docker-compose.production.yml up -d
 
 # Stop production services
 production-down:
 	@echo "$(BLUE)[INFO]$(NC) Stopping production services..."
-	@docker compose -f docker-compose.production.yml down
+	@docker compose $(if $(wildcard .env.production),--env-file .env.production,) -f docker-compose.production.yml down
