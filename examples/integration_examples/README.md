@@ -14,6 +14,17 @@ The integration framework provides bridges to the following systems:
 
 ## Examples
 
+### Query-backed catalog price display
+
+`query_catalog.cr` uses the existing `OpenCog::Query` application interface to render approved prices and a "Contact us" fallback from real OPTIONAL/COALESCE bindings. It needs no external service and emits a JSON array, preserving zero prices and keeping missing or rejected numeric prices null. The query lives in `query_catalog.oql`.
+
+```bash
+crystal run examples/integration_examples/query_catalog.cr
+crystal spec spec/integration/query_catalog_spec.cr
+```
+
+Use `DISABLE_ROCKSDB=1` for either command if RocksDB is unavailable. See the [query application example](../../docs/QUERY_LANGUAGE_SUMMARY.md#application-example-catalog-price-display) for expected output, integration coverage and limitations. This demonstrates existing language behavior; it does not extend HTTP or shell protocols.
+
 ### Complete Integration Demo
 
 **File:** `complete_integration_demo.cr`
