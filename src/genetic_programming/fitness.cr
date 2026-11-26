@@ -8,7 +8,7 @@
 # - OpenCog behavioral scoring
 
 require "./program_tree"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module GeneticProgramming
   # Base fitness function interface

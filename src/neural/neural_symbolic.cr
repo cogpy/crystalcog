@@ -14,7 +14,7 @@
 # - Neural Theorem Provers: Rocktäschel & Riedel 2017
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pln/pln"
 
 module Neural
@@ -510,7 +510,7 @@ module Neural
     # Predict missing tail: (head, relation, ?)
     def predict_tail(head : String, relation : String, k : Int32 = 5) : Array(Tuple(String, Float64))
       @entity_embeddings.embeddings.keys.map do |entity|
-        {entity, -score(head, relation, entity)}  # Negate for descending sort
+        {entity, -score(head, relation, entity)} # Negate for descending sort
       end.sort_by { |_, s| -s }.first(k)
     end
 
@@ -632,7 +632,7 @@ module Neural
     # Check if a triple is likely true
     def is_likely_true?(head : String, relation : String, tail : String) : Bool
       score = @kg_embedding.score(head, relation, tail)
-      score < 2.0  # Lower TransE score = more likely
+      score < 2.0 # Lower TransE score = more likely
     end
 
     # Add neural predictions to atomspace
@@ -722,7 +722,7 @@ module Neural
           tail = arg_list[1].as(AtomSpace::Node).name
 
           score = @kg_embedding.score(head, relation, tail)
-          confidence = 1.0 / (1.0 + score)  # Convert score to confidence
+          confidence = 1.0 / (1.0 + score) # Convert score to confidence
 
           if confidence >= @neural_threshold
             results << InferenceResult.new(

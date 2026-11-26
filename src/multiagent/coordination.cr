@@ -14,7 +14,7 @@
 # - BDI Agents: Rao & Georgeff 1995
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../temporal/temporal"
 require "../behavior/behavior"
 
@@ -58,17 +58,17 @@ module MultiAgent
 
   # Message types for agent communication
   enum MessageType
-    INFORM        # Share information
-    REQUEST       # Request action
-    QUERY         # Ask for information
-    PROPOSE       # Make a proposal
-    ACCEPT        # Accept proposal
-    REJECT        # Reject proposal
-    CONFIRM       # Confirm receipt/action
-    CANCEL        # Cancel previous message
-    CALL_FOR_PROPOSAL  # CFP in Contract Net
-    BID           # Response to CFP
-    AWARD         # Award contract
+    INFORM            # Share information
+    REQUEST           # Request action
+    QUERY             # Ask for information
+    PROPOSE           # Make a proposal
+    ACCEPT            # Accept proposal
+    REJECT            # Reject proposal
+    CONFIRM           # Confirm receipt/action
+    CANCEL            # Cancel previous message
+    CALL_FOR_PROPOSAL # CFP in Contract Net
+    BID               # Response to CFP
+    AWARD             # Award contract
   end
 
   # Agent message
@@ -559,7 +559,7 @@ module MultiAgent
       if can_handle && !is_busy?
         # Calculate bid cost based on estimated effort
         effort = message.content["estimated_effort"]?.as?(Float64) || 1.0
-        cost = effort * (1.0 + Random.rand * 0.2)  # Add some variance
+        cost = effort * (1.0 + Random.rand * 0.2) # Add some variance
 
         bid = message.reply(
           MessageType::BID,
@@ -1040,7 +1040,7 @@ module MultiAgent
       # Check if values are close enough
       max_deviation = @values.values.max_of { |v| (v - avg).abs }
 
-      if max_deviation < 0.1  # Threshold for agreement
+      if max_deviation < 0.1 # Threshold for agreement
         @consensus_value = avg
         CogUtil::Logger.info("Consensus reached: #{avg}")
       end

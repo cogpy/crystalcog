@@ -3,8 +3,7 @@ name: Test Monitoring and Reporting
 on:
   workflow_run:
     workflows: 
-      - "Crystal Build and Test"
-      - "Comprehensive Crystal CI/CD"
+      - "CrystalCog Verify"
     types:
       - completed
   schedule:
@@ -58,21 +57,12 @@ jobs:
           const workflows = await github.rest.actions.listWorkflowRuns({
             owner,
             repo,
-            workflow_id: 'crystal-build.yml',
+            workflow_id: 'ci-e2e.yml',
             per_page: 20
           });
-          
-          const comprehensiveRuns = await github.rest.actions.listWorkflowRuns({
-            owner,
-            repo,
-            workflow_id: 'crystal-comprehensive-ci.yml',
-            per_page: 20
-          }).catch(() => ({ data: { workflow_runs: [] } }));
-          
-          const allRuns = [
-            ...workflows.data.workflow_runs,
-            ...comprehensiveRuns.data.workflow_runs
-          ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+          const allRuns = workflows.data.workflow_runs
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
           
           // Analyze success/failure rates
           const recent = allRuns.slice(0, 10);

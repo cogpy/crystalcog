@@ -10,7 +10,7 @@
 #   anything else, with  the knowledge model: answers from the AtomSpace
 #   ModelType::CUSTOM    itself, with no neural network involved
 
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pln/pln"
 require "../ure/ure"
 require "../tools/cog_chat"

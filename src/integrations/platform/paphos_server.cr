@@ -11,6 +11,7 @@ require "json"
 require "uuid"
 require "crypto/bcrypt/password"
 require "./jwt"
+require "../../production/hardening"
 require "../../cogutil/logger"
 
 module PaphosBackend
@@ -178,10 +179,18 @@ module PaphosBackend
     @users = {} of Int64 => User
     @mutex = Mutex.new
     @server : HTTP::Server?
+    @request_guard : Production::RequestGuard
+    @secret : String
 
     def initialize(@host : String = "127.0.0.1", @requested_port : Int32 = 3000,
-                   @secret : String = ENV["SECRET_KEY_BASE"]? || Random::Secure.hex(32),
+                   secret : String? = nil,
                    @data_file : String? = nil)
+      @secret = secret || Production.secret_from_env("SECRET_KEY_BASE")
+      @request_guard = Production::RequestGuard.new(
+        max_body_bytes: ENV["PAPHOS_MAX_BODY_BYTES"]?.try(&.to_i64?) || 1_048_576_i64,
+        capacity: ENV["PAPHOS_RATE_CAPACITY"]?.try(&.to_f64?) || 300.0,
+        refill: ENV["PAPHOS_RATE_REFILL"]?.try(&.to_f64?) || 60.0
+      )
       @store = load_store
       load_journal
       @store.users.each do |u|
@@ -283,6 +292,15 @@ module PaphosBackend
 
     def handle(ctx : HTTP::Server::Context)
       ctx.response.content_type = "application/json"
+      if @request_guard.body_too_large?(
+           ctx.request.headers["Content-Length"]?,
+           ctx.request.headers["Transfer-Encoding"]?
+         )
+        raise ApiError.new(413, "Request too large", nil, "body exceeds #{@request_guard.max_body_bytes} bytes")
+      end
+      unless @request_guard.allow?("preauth:#{client_address(ctx)}")
+        raise ApiError.new(429, "Too many requests", nil, "retry in a moment")
+      end
       path = ctx.request.path
       unless path == API_PREFIX || path.starts_with?("#{API_PREFIX}/")
         raise ApiError.new(404, "Not found", nil, "No route for #{path}")
@@ -395,9 +413,24 @@ module PaphosBackend
       raise ApiError.new(401, "Not authenticated.", nil, "missing auth token") if token.nil? || token.empty?
       claims = PygmalionPlatform::JWT.decode(token, @secret)
       user_id = claims["user_id"]?.try(&.as_i64?)
-      @users[user_id]? || raise ApiError.new(401, "Not authenticated.", nil, "unknown user")
+      user = @users[user_id]? || raise ApiError.new(401, "Not authenticated.", nil, "unknown user")
+      unless @request_guard.allow?("user:#{user.id}")
+        raise ApiError.new(429, "Too many requests", nil, "retry in a moment")
+      end
+      user
     rescue ex : PygmalionPlatform::JWT::Error
       raise ApiError.new(401, "Not authenticated.", nil, ex.message)
+    end
+
+    private def client_address(ctx : HTTP::Server::Context) : String
+      case address = ctx.request.remote_address
+      when Socket::IPAddress
+        address.address
+      when nil
+        "unknown"
+      else
+        address.to_s
+      end
     end
 
     # ---------------------------------------------------------- characters

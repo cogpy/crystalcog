@@ -14,7 +14,7 @@
 # - Counterfactual Explanations: Wachter et al. 2017
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pln/pln"
 require "../nlp/nlp_main"
 
@@ -33,12 +33,12 @@ module Explanation
 
   # Explanation types
   enum ExplanationType
-    CAUSAL           # Why did X cause Y?
-    CONTRASTIVE      # Why X instead of Y?
-    COUNTERFACTUAL   # What if X were different?
-    TRACE            # How was conclusion reached?
-    RULE_BASED       # Which rules were applied?
-    FEATURE_BASED    # Which features contributed?
+    CAUSAL         # Why did X cause Y?
+    CONTRASTIVE    # Why X instead of Y?
+    COUNTERFACTUAL # What if X were different?
+    TRACE          # How was conclusion reached?
+    RULE_BASED     # Which rules were applied?
+    FEATURE_BASED  # Which features contributed?
   end
 
   # Reasoning step in a trace

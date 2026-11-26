@@ -12,7 +12,7 @@
 # - Behavior Trees: Colledanchise & Ögren, 2017
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../spatial/spatial"
 
 module Behavior

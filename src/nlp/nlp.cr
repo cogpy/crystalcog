@@ -5,7 +5,7 @@
 # storing linguistic knowledge.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module NLP
   VERSION = "0.1.0"

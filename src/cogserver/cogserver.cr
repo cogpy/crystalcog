@@ -12,6 +12,59 @@ require "base64"
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 require "../opencog/opencog"
+require "../production/hardening"
+
+class HTTP::WebSocket
+  def run_bounded(max_message_bytes : Int64, &on_message : String ->) : Nil
+    loop do
+      info = begin
+        @ws.receive(@buffer)
+      rescue
+        @on_close.try &.call(CloseCode::AbnormalClosure, "")
+        @closed = true
+        break
+      end
+
+      case info.opcode
+      in .ping?
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          do_ping(@current_message.to_s)
+          @current_message.clear
+        end
+      in .pong?
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          @on_pong.try &.call(@current_message.to_s)
+          @current_message.clear
+        end
+      in .text?
+        if @current_message.size.to_i64 + info.size > max_message_bytes
+          close(CloseCode::MessageTooBig, "message exceeds #{max_message_bytes} bytes")
+          @current_message.clear
+          break
+        end
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          on_message.call(@current_message.to_s)
+          @current_message.clear
+        end
+      in .binary?
+        close(CloseCode::UnsupportedData, "binary messages are not supported")
+        @current_message.clear
+        break
+      in .close?
+        do_close(CloseCode::NormalClosure, "")
+        @current_message.clear
+        break
+      in .continuation?
+        close(CloseCode::PolicyViolation, "unexpected continuation frame")
+        @current_message.clear
+        break
+      end
+    end
+  end
+end
 
 module CogServer
   VERSION = "0.1.0"
@@ -20,6 +73,7 @@ module CogServer
   DEFAULT_PORT    = 17001
   DEFAULT_WS_PORT = 18080
   DEFAULT_HOST    = "localhost"
+  WS_TICKET_TTL   = 5.minutes
 
   # CogServer main class
   class Server
@@ -51,22 +105,40 @@ module CogServer
     @metrics : MetricsCollector
     @observer : AtomSpace::AtomSpaceSignal?
     @telnet_http : HTTP::Server::RequestProcessor?
+    @request_guard : Production::RequestGuard
+    @ws_tickets = Hash(String, Time).new
+    @ws_ticket_mutex = Mutex.new
 
-    def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT)
+    def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT,
+                   auth_token : String? = ENV["COGSERVER_AUTH_TOKEN"]?)
       @atomspace = AtomSpace::AtomSpace.new
       @sessions = Hash(String, Session).new
       @shell = Server.shell_factory.try(&.call(@atomspace))
       @broadcaster = EventBroadcaster.new
       @metrics = MetricsCollector.new
+      token = auth_token.try(&.strip).presence
+      @request_guard = Production::RequestGuard.new(
+        token,
+        (ENV["COGSERVER_MAX_BODY_BYTES"]?.try(&.to_i64?) || 1_048_576_i64),
+        (ENV["COGSERVER_RATE_CAPACITY"]?.try(&.to_f64?) || 120.0),
+        (ENV["COGSERVER_RATE_REFILL"]?.try(&.to_f64?) || 30.0)
+      )
 
       CogUtil::Logger.info("CogServer #{VERSION} initializing")
       CogUtil::Logger.info("Telnet server will listen on #{@host}:#{@port}")
       CogUtil::Logger.info("WebSocket server will listen on #{@host}:#{@ws_port}")
     end
 
+    private def loopback_host? : Bool
+      {"localhost", "127.0.0.1", "::1"}.includes?(@host)
+    end
+
     # Start the server
     def start
       return if @running
+      if (!loopback_host? || Production.production_environment?) && !@request_guard.authentication_required?
+        raise ArgumentError.new("COGSERVER_AUTH_TOKEN is required when binding CogServer to #{@host}")
+      end
 
       @running = true
       CogUtil::Logger.info("Starting CogServer...")
@@ -187,11 +259,15 @@ module CogServer
     end
 
     private def run_telnet_session(socket : TCPSocket)
-      session = open_session(:telnet)
+      session = open_session(:telnet, !@request_guard.authentication_required?)
       socket << "Welcome to CogServer #{VERSION}\r\n"
       socket << "Session ID: #{session.id}\r\n"
       socket << "AtomSpace contains #{@atomspace.size} atoms\r\n"
-      socket << "Type 'help' for available commands\r\n"
+      if @request_guard.authentication_required?
+        socket << "Authentication required. Use 'auth <token>'.\r\n"
+      else
+        socket << "Type 'help' for available commands\r\n"
+      end
       until session.closed? || !@running
         socket << "cog> "
         socket.flush
@@ -227,8 +303,8 @@ module CogServer
       String.new(clean.to_slice[0, clean.pos]).scrub.strip
     end
 
-    private def open_session(type : Symbol) : Session
-      session = Session.new(generate_session_id, @atomspace, type)
+    private def open_session(type : Symbol, authenticated : Bool = !@request_guard.authentication_required?) : Session
+      session = Session.new(generate_session_id, @atomspace, type, authenticated)
       @sessions_mutex.synchronize { @sessions[session.id] = session }
       session
     end
@@ -261,7 +337,8 @@ module CogServer
     end
 
     private def handle_telnet_request(context)
-      session = open_session(:telnet)
+      return unless admit_request(context)
+      session = open_session(:telnet, @request_guard.authenticate(context.request.headers["Authorization"]?))
       session_id = session.id
 
       context.response.content_type = "text/plain"
@@ -291,6 +368,25 @@ module CogServer
     end
 
     private def process_telnet_command(command : String, session : Session) : String
+      bucket = session.authenticated? ? "telnet-commands" : "telnet-authentication"
+      return "Rate limit exceeded." unless @request_guard.allow?(bucket)
+
+      stripped = command.strip
+      if stripped.starts_with?("auth ")
+        if @request_guard.authenticate(stripped.lchop("auth ").strip)
+          session.authenticate
+          "Authentication successful."
+        else
+          "Authentication failed."
+        end
+      elsif !session.authenticated?
+        "Authentication required. Use 'auth <token>'."
+      else
+        process_authenticated_telnet_command(stripped, session)
+      end
+    end
+
+    private def process_authenticated_telnet_command(command : String, session : Session) : String
       case command.strip.downcase
       when "help"
         <<-HELP
@@ -348,10 +444,42 @@ module CogServer
     end
 
     private def handle_websocket_request(context)
-      if context.request.headers["Upgrade"]? == "websocket"
+      if context.request.headers["Upgrade"]?.try(&.downcase) == "websocket"
+        if @request_guard.body_too_large?(
+             context.request.headers["Content-Length"]?,
+             context.request.headers["Transfer-Encoding"]?
+           )
+          return websocket_reject(context, 413, "Request body too large")
+        end
+        unless @request_guard.allow?("websocket-handshakes")
+          return websocket_reject(context, 429, "Rate limit exceeded")
+        end
+        unless @request_guard.authenticate(context.request.headers["Authorization"]?) ||
+               consume_websocket_ticket(context.request.query_params["ticket"]?)
+          websocket_reject(context, 401, "Authentication required")
+          return
+        end
         handle_websocket_upgrade(context)
       else
+        return unless admit_request(context)
         handle_http_api(context)
+      end
+    end
+
+    private def issue_websocket_ticket : String
+      ticket = Random::Secure.urlsafe_base64(32)
+      @ws_ticket_mutex.synchronize do
+        @ws_tickets.reject! { |_, expires| expires <= Time.utc }
+        @ws_tickets[ticket] = Time.utc + WS_TICKET_TTL
+      end
+      ticket
+    end
+
+    private def consume_websocket_ticket(ticket : String?) : Bool
+      return false unless ticket
+      @ws_ticket_mutex.synchronize do
+        expires = @ws_tickets.delete(ticket)
+        !expires.nil? && expires > Time.utc
       end
     end
 
@@ -425,8 +553,9 @@ module CogServer
 
       monitor.reply({"type" => "welcome", "session" => session.id, "version" => VERSION,
                      "events" => MonitorEventType.names}.to_json)
-      socket.on_message { |message| handle_websocket_message(message, monitor) }
-      socket.run
+      socket.run_bounded(@request_guard.max_body_bytes) do |message|
+        handle_websocket_message(message, monitor)
+      end
     rescue ex : IO::Error
       CogUtil::Logger.debug("WebSocket closed: #{ex.message}")
     ensure
@@ -444,6 +573,11 @@ module CogServer
 
     private def handle_websocket_message(message : String, monitor : WebSocketMonitor)
       monitor.touch
+      unless @request_guard.allow?("websocket-messages")
+        monitor.reply({"type" => "error", "message" => "rate limit exceeded"}.to_json)
+        return
+      end
+
       request = begin
         JSON.parse(message).as_h?
       rescue JSON::ParseException
@@ -511,6 +645,8 @@ module CogServer
         handle_ping_request(context)
       when "/version"
         handle_version_request(context)
+      when "/monitor-ticket"
+        handle_monitor_ticket_request(context)
       when "/storage"
         handle_storage_request(context)
       when "/storage/save"
@@ -531,6 +667,62 @@ module CogServer
       context.response.status_code = 500
       context.response.content_type = "application/json"
       context.response.print({"error" => "Internal server error"}.to_json)
+    end
+
+    private def admit_request(context) : Bool
+      if @request_guard.body_too_large?(
+           context.request.headers["Content-Length"]?,
+           context.request.headers["Transfer-Encoding"]?
+         )
+        context.response.status_code = 413
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Request body too large"}.to_json)
+        return false
+      end
+
+      unless @request_guard.allow?("http-preauth")
+        rate_limit_response(context)
+        return false
+      end
+
+      token = context.request.headers["Authorization"]?
+      unless @request_guard.authenticate(token)
+        context.response.status_code = 401
+        context.response.headers["WWW-Authenticate"] = "Bearer"
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Authentication required"}.to_json)
+        return false
+      end
+
+      bucket = @request_guard.authentication_required? ? "http-authenticated" : "http-anonymous"
+      unless @request_guard.allow?(bucket)
+        rate_limit_response(context)
+        return false
+      end
+      true
+    end
+
+    private def rate_limit_response(context) : Nil
+      context.response.status_code = 429
+      context.response.headers["Retry-After"] = "1"
+      context.response.content_type = "application/json"
+      context.response.print({"error" => "Rate limit exceeded"}.to_json)
+    end
+
+    private def handle_monitor_ticket_request(context)
+      context.response.content_type = "application/json"
+      unless context.request.method == "POST"
+        context.response.status_code = 405
+        context.response.print({"error" => "Method not allowed"}.to_json)
+        return
+      end
+
+      ticket = issue_websocket_ticket
+      context.response.status_code = 201
+      context.response.print({
+        "ticket"     => ticket,
+        "expires_in" => WS_TICKET_TTL.total_seconds.to_i,
+      }.to_json)
     end
 
     private def handle_status_request(context)
@@ -903,25 +1095,23 @@ module CogServer
           storage = case storage_type.downcase
                     when "file"
                       file_path = data["path"].as_s
-                      file_storage = AtomSpace::FileStorageNode.new(storage_name, file_path)
-                      file_storage.open if file_storage
-                      file_storage
+                      AtomSpace::FileStorageNode.new(storage_name, file_path)
                     when "sqlite"
                       db_path = data["path"].as_s
-                      sqlite_storage = AtomSpace::SQLiteStorageNode.new(storage_name, db_path)
-                      sqlite_storage.open if sqlite_storage
-                      sqlite_storage
+                      AtomSpace::SQLiteStorageNode.new(storage_name, db_path)
                     when "cog", "network"
                       host = data["host"].as_s
                       port = data["port"].as_i
-                      cog_storage = AtomSpace::CogStorageNode.new(storage_name, host, port)
-                      cog_storage.open if cog_storage
-                      cog_storage
+                      token = data["auth_token"]?.try(&.as_s?)
+                      AtomSpace::CogStorageNode.new(storage_name, host, port, token)
                     else
                       nil
                     end
 
-          if storage
+          if storage && !storage.open
+            response = {"error" => "Storage failed to connect", "storage" => storage.name}
+            context.response.status_code = 502
+          elsif storage
             @atomspace.attach_storage(storage)
             @broadcaster.broadcast_storage(MonitorEventType::StorageAttached, storage.name, storage_type)
             response = {
@@ -1009,9 +1199,18 @@ module CogServer
 
     @closed : Bool = false
 
-    def initialize(@id : String, @atomspace : AtomSpace::AtomSpace, @session_type : Symbol)
+    def initialize(@id : String, @atomspace : AtomSpace::AtomSpace, @session_type : Symbol,
+                   @authenticated : Bool = true)
       @created_at = Time.utc
       CogUtil::Logger.info("Session #{@id} created (#{@session_type})")
+    end
+
+    def authenticated? : Bool
+      @authenticated
+    end
+
+    def authenticate
+      @authenticated = true
     end
 
     def close

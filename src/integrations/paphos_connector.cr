@@ -54,7 +54,7 @@ module PaphosBackend
       @event_streaming_enabled = true,
       @batch_operations = true,
       @email = ENV["PAPHOS_EMAIL"]?,
-      @password = ENV["PAPHOS_PASSWORD"]?
+      @password = ENV["PAPHOS_PASSWORD"]?,
     )
     end
 
@@ -858,7 +858,7 @@ module PaphosBackend
   def self.create_cognitive_agency_connector(
     backend_url : String = "http://localhost:3000",
     coordination_mode : Symbol = :peer,
-    sync_interval : Int32 = 5
+    sync_interval : Int32 = 5,
   ) : Connector
     config = Config.new(
       backend_url: backend_url,

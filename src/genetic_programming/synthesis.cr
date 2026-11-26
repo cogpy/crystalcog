@@ -12,7 +12,7 @@ require "./program_tree"
 require "./operators"
 require "./fitness"
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module GeneticProgramming
   # Problem specification for synthesis
@@ -28,7 +28,7 @@ module GeneticProgramming
       @output_type : ReturnType = ReturnType::Any,
       @examples : Array(Tuple(Array(Float64 | Bool), Float64 | Bool)) = [] of Tuple(Array(Float64 | Bool), Float64 | Bool),
       @constraints : Array(String) = [] of String,
-      @target_complexity : Int32? = nil
+      @target_complexity : Int32? = nil,
     )
     end
 
@@ -333,13 +333,11 @@ module GeneticProgramming
 
           new_population << child1 if new_population.size < @config.population_size
           new_population << child2 if new_population.size < @config.population_size
-
         elsif op < @config.crossover_rate + @config.mutation_rate
           # Mutation
           parent = selection.tournament_select(@population)
           child = mutation.mutate(parent)
           new_population << child
-
         else
           # Reproduction (copy)
           parent = selection.tournament_select(@population)

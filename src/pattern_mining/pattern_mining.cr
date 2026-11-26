@@ -6,7 +6,7 @@
 # abstract patterns and specializing them while maintaining minimum support.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pattern_matching/pattern_matching"
 
 module PatternMining

@@ -8,7 +8,7 @@
 # - SimpleNLG: https://github.com/simplenlg/simplenlg
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./nlp"
 
 module NLP

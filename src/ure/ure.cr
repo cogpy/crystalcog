@@ -1,7 +1,7 @@
 # Crystal implementation of URE (Unified Rule Engine)
 # Converted from ure/opencog/ure/
 
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../cogutil/cogutil"
 
 module URE

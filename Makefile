@@ -3,6 +3,7 @@
 
 # Configuration
 BUILD_TYPE ?= Release
+RELEASE_FLAGS ?= $(if $(filter Release RelWithDebInfo,$(BUILD_TYPE)),--release,)
 JOBS ?= $(shell nproc)
 INSTALL_PREFIX ?= /usr/local
 BUILD_DIR ?= build
@@ -71,8 +72,6 @@ help:
 	@echo "  production-logs  - View production logs"
 	@echo "  production-up    - Start production services (Docker Compose)"
 	@echo "  production-down  - Stop production services (Docker Compose)"
-	@echo "  production-k8s-deploy - Deploy to Kubernetes production"
-	@echo "  production-k8s-remove - Remove Kubernetes production deployment"
 	@echo ""
 	@echo "  help             - Show this help message"
 	@echo ""
@@ -98,7 +97,8 @@ help:
 .PHONY: setup
 setup:
 	@echo "$(BLUE)[INFO]$(NC) Setting up dependencies..."
-	@./scripts/build-monorepo.sh --setup-only
+	@shards install --frozen
+	@shards check
 
 # Setup development environment
 .PHONY: dev-env
@@ -109,35 +109,28 @@ dev-env:
 # Configure CMake
 .PHONY: configure
 configure:
-	@echo "$(BLUE)[INFO]$(NC) Configuring CMake..."
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake .. \
-		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DBUILD_SHARED_LIBS=ON \
-		-DCMAKE_CXX_STANDARD=17 \
-		-DCMAKE_CXX_STANDARD_REQUIRED=ON
+	@echo "$(BLUE)[INFO]$(NC) Crystal targets are configured by shard.yml"
+	@shards check
 
 # Build all components
 .PHONY: build
 build: configure
 	@echo "$(BLUE)[INFO]$(NC) Building all components..."
-	@cd $(BUILD_DIR) && make -j$(JOBS)
+	@shards build $(RELEASE_FLAGS) --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Build complete"
 
 # Build core components only
 .PHONY: core
 core: configure
 	@echo "$(BLUE)[INFO]$(NC) Building core components..."
-	@cd $(BUILD_DIR) && make cogutil atomspace attention ure pln link-grammar cogserver -j$(JOBS)
+	@shards build $(RELEASE_FLAGS) crystalcog cogserver cogshell atomspace_bin opencog_bin pln_bin ure_bin attention_bin
 	@echo "$(GREEN)[SUCCESS]$(NC) Core build complete"
 
 # Build extended components
 .PHONY: extended
 extended: core
 	@echo "$(BLUE)[INFO]$(NC) Building extended components..."
-	@cd $(BUILD_DIR) && make -j$(JOBS)
+	@shards build $(RELEASE_FLAGS) --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Extended build complete"
 
 # Run tests
@@ -147,9 +140,13 @@ ifeq ($(SKIP_TESTS),true)
 	@echo "$(YELLOW)[WARNING]$(NC) Skipping tests as requested"
 else
 	@echo "$(BLUE)[INFO]$(NC) Running tests..."
-	@cd $(BUILD_DIR) && ctest --output-on-failure -j$(JOBS)
+	@crystal spec --stats -v --error-trace --no-color
 	@echo "$(GREEN)[SUCCESS]$(NC) Tests complete"
 endif
+
+.PHONY: verify
+verify:
+	@./scripts/verify.sh all
 
 # Install components
 .PHONY: install
@@ -158,7 +155,8 @@ ifeq ($(SKIP_INSTALL),true)
 	@echo "$(YELLOW)[WARNING]$(NC) Skipping installation as requested"
 else
 	@echo "$(BLUE)[INFO]$(NC) Installing components..."
-	@cd $(BUILD_DIR) && make install
+	@install -d $(DESTDIR)$(INSTALL_PREFIX)/bin
+	@install -m 0755 bin/* $(DESTDIR)$(INSTALL_PREFIX)/bin/
 	@echo "$(GREEN)[SUCCESS]$(NC) Installation complete"
 	@echo "$(BLUE)[INFO]$(NC) You may need to run: sudo ldconfig"
 endif
@@ -167,14 +165,14 @@ endif
 .PHONY: doc
 doc: build
 	@echo "$(BLUE)[INFO]$(NC) Generating documentation..."
-	@cd $(BUILD_DIR) && make doc
+	@crystal docs
 	@echo "$(GREEN)[SUCCESS]$(NC) Documentation generated"
 
 # Create package
 .PHONY: package
 package: build
 	@echo "$(BLUE)[INFO]$(NC) Creating package..."
-	@cd $(BUILD_DIR) && checkinstall --pkgname=opencog-central --pkgversion=1.0.0 --backup=no --fstrans=no --default
+	@tar -czf crystalcog-0.1.0-bin.tar.gz -C bin .
 	@echo "$(GREEN)[SUCCESS]$(NC) Package created"
 
 # Clean build directory
@@ -249,19 +247,20 @@ rust-env:
 .PHONY: test-%
 test-%: build
 	@echo "$(BLUE)[INFO]$(NC) Running tests for $*..."
-	@cd $(BUILD_DIR) && ctest --output-on-failure -R $*
+	@crystal spec --error-trace "spec/$*/"
 
 # Build specific component
 .PHONY: build-%
 build-%: configure
 	@echo "$(BLUE)[INFO]$(NC) Building $*..."
-	@cd $(BUILD_DIR) && make $* -j$(JOBS)
+	@shards build $(RELEASE_FLAGS) "$*"
 
 # Install specific component
 .PHONY: install-%
 install-%: build-%
 	@echo "$(BLUE)[INFO]$(NC) Installing $*..."
-	@cd $(BUILD_DIR) && make install
+	@install -d $(DESTDIR)$(INSTALL_PREFIX)/bin
+	@install -m 0755 "bin/$*" $(DESTDIR)$(INSTALL_PREFIX)/bin/
 
 # Show build status
 .PHONY: status
@@ -274,10 +273,10 @@ status:
 	@echo "  Skip Tests: $(SKIP_TESTS)"
 	@echo "  Skip Install: $(SKIP_INSTALL)"
 	@echo "  Clean Build: $(CLEAN_BUILD)"
-	@if [ -d "$(BUILD_DIR)" ]; then \
-		echo "  Build Directory: $(GREEN)Exists$(NC)"; \
+	@if [ -d "bin" ]; then \
+		echo "  Build Output: $(GREEN)Exists$(NC)"; \
 	else \
-		echo "  Build Directory: $(RED)Missing$(NC)"; \
+		echo "  Build Output: $(RED)Missing$(NC)"; \
 	fi
 
 # Show component list
@@ -441,7 +440,7 @@ production-status:
 # Backup production data
 production-backup:
 	@echo "$(BLUE)[INFO]$(NC) Creating production backup..."
-	@./scripts/production/backup.sh
+	@./scripts/production/deploy.sh --action backup
 
 # Rollback production deployment
 production-rollback:
@@ -466,19 +465,9 @@ production-health:
 # Production deployment with Docker Compose
 production-up:
 	@echo "$(BLUE)[INFO]$(NC) Starting production services with Docker Compose..."
-	@docker-compose -f docker-compose.production.yml up -d
+	@docker compose $(if $(wildcard .env.production),--env-file .env.production,) -f docker-compose.production.yml up -d
 
 # Stop production services
 production-down:
 	@echo "$(BLUE)[INFO]$(NC) Stopping production services..."
-	@docker-compose -f docker-compose.production.yml down
-
-# Production deployment to Kubernetes
-production-k8s-deploy:
-	@echo "$(BLUE)[INFO]$(NC) Deploying to Kubernetes production..."
-	@kubectl apply -f deployments/k8s/production/
-
-# Remove Kubernetes production deployment
-production-k8s-remove:
-	@echo "$(BLUE)[INFO]$(NC) Removing Kubernetes production deployment..."
-	@kubectl delete -f deployments/k8s/production/
+	@docker compose $(if $(wildcard .env.production),--env-file .env.production,) -f docker-compose.production.yml down

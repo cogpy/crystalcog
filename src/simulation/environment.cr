@@ -4,7 +4,7 @@
 # Supports both local simulation and external simulators.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Simulation
   # 3D Vector for positions, velocities, etc.
@@ -224,7 +224,7 @@ module Simulation
     def initialize(
       @position : Vector3 = Vector3.zero,
       @rotation : Quaternion = Quaternion.identity,
-      @scale : Vector3 = Vector3.one
+      @scale : Vector3 = Vector3.one,
     )
     end
 

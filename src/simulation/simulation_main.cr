@@ -13,7 +13,7 @@
 # - Simulation time management
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./environment"
 require "./physics"
 require "./agent"
@@ -59,7 +59,7 @@ module Simulation
   def self.create_agent(
     name : String,
     environment : SimulationEnvironment,
-    position : Vector3 = Vector3.zero
+    position : Vector3 = Vector3.zero,
   ) : Agent
     agent = Agent.new(name, environment)
     agent.position = position
@@ -75,7 +75,7 @@ module Simulation
   def self.run(
     environment : SimulationEnvironment,
     duration : Float64,
-    timestep : Float64 = default_timestep
+    timestep : Float64 = default_timestep,
   )
     steps = (duration / timestep).to_i
     steps.times do
@@ -86,7 +86,7 @@ module Simulation
   # Utility to convert simulation state to AtomSpace representation
   def self.state_to_atomspace(
     environment : SimulationEnvironment,
-    atomspace : AtomSpace::AtomSpace
+    atomspace : AtomSpace::AtomSpace,
   ) : AtomSpace::Atom
     # Create environment concept
     env_node = atomspace.add_node(AtomSpace::AtomType::CONCEPT_NODE, "simulation:#{environment.name}")

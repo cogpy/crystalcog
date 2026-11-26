@@ -8,7 +8,7 @@
 # - CogPrime: https://goertzel.org/CogPrime_Overview.pdf
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../ml/ml_main"
 
 module NeuralSymbolic

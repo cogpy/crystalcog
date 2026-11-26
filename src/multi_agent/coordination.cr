@@ -4,7 +4,7 @@
 # including task allocation, negotiation, and distributed reasoning.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./communication"
 
 module MultiAgent
@@ -308,7 +308,7 @@ module MultiAgent
 
     # Shared mental model: common beliefs across agents with consensus tracking
     class SharedMentalModel
-      getter beliefs : Hash(String, Float64) # proposition -> confidence
+      getter beliefs : Hash(String, Float64)          # proposition -> confidence
       getter endorsements : Hash(String, Set(String)) # proposition -> agent ids
 
       def initialize

@@ -1,261 +1,32 @@
-version: '3.8'
-
 services:
   crystalcog-app:
     build:
       context: .
       dockerfile: Dockerfile.production
-      target: production
+      target: runtime
     image: crystalcog/app:production
-    container_name: crystalcog-app-prod
-    restart: always
+    restart: unless-stopped
     environment:
-      - NODE_ENV=production
-      - RAILS_ENV=production
-      - CRYSTAL_ENV=production
-      - DATABASE_URL=postgresql://crystalcog_user:${POSTGRES_PASSWORD}@postgres:5432/crystalcog_prod
-      - REDIS_URL=redis://redis:6379/0
-      - ATOMSPACE_HOST=atomspace-service
-      - ATOMSPACE_PORT=17001
-      - COGSERVER_PORT=17001
-      - API_PORT=5000
-      - LOG_LEVEL=info
-      - MONITORING_ENABLED=true
+      CRYSTALCOG_ENV: production
+      PLATFORM_HOST: 0.0.0.0
+      PAPHOS_DATA_FILE: /app/data/paphos.json
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE to at least 32 bytes}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to at least 32 bytes}
+      APHRODITE_BACKEND: external
+      APHRODITE_URL: ${APHRODITE_URL:?set APHRODITE_URL to an OpenAI-compatible endpoint}
+      PLATFORM_MAX_TOKENS: ${PLATFORM_MAX_TOKENS:-160}
+      GALATEA_STATIC_DIR: /app/web
     ports:
-      - "5000:5000"    # Main API
-      - "17001:17001"  # CogServer
-      - "18001:18001"  # AtomSpace
-      - "8080:8080"    # Web interface
+      - "127.0.0.1:${GALATEA_PORT:-8080}:8080"
     volumes:
       - app-data:/app/data
-      - app-logs:/app/logs
-      - ./config/production:/app/config:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '2'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.crystalcog.rule=Host(`crystalcog.example.com`)"
-      - "traefik.http.services.crystalcog.loadbalancer.server.port=5000"
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: crystalcog-postgres-prod
-    restart: always
-    environment:
-      - POSTGRES_DB=crystalcog_prod
-      - POSTGRES_USER=crystalcog_user
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./config/production/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ./config/production/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-    ports:
-      - "5432:5432"
-    networks:
-      - crystalcog-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crystalcog_user -d crystalcog_prod"]
+      test: ["CMD-SHELL", "bash -c ': >/dev/tcp/127.0.0.1/8080'"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1'
-
-  redis:
-    image: redis:7-alpine
-    container_name: crystalcog-redis-prod
-    restart: always
-    command: redis-server /etc/redis/redis.conf
-    volumes:
-      - redis-data:/data
-      - ./config/production/redis/redis.conf:/etc/redis/redis.conf:ro
-    ports:
-      - "6379:6379"
-    networks:
-      - crystalcog-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-
-  nginx:
-    image: nginx:alpine
-    container_name: crystalcog-nginx-prod
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./config/production/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./config/production/nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./config/production/ssl:/etc/ssl/certs:ro
-      - nginx-logs:/var/log/nginx
-    depends_on:
-      - crystalcog-app
-    networks:
-      - crystalcog-net
-    labels:
-      - "traefik.enable=false"
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: crystalcog-prometheus-prod
-    restart: always
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./config/production/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: crystalcog-grafana-prod
-    restart: always
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_DOMAIN=grafana.example.com
-      - GF_SMTP_ENABLED=true
-      - GF_SMTP_HOST=${SMTP_HOST}
-      - GF_SMTP_USER=${SMTP_USER}
-      - GF_SMTP_PASSWORD=${SMTP_PASSWORD}
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./config/production/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on:
-      - prometheus
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.3'
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
-    container_name: crystalcog-elasticsearch-prod
-    restart: always
-    environment:
-      - node.name=crystalcog-es-node
-      - cluster.name=crystalcog-cluster
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1'
-
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.8.0
-    container_name: crystalcog-logstash-prod
-    restart: always
-    volumes:
-      - ./config/production/logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
-      - app-logs:/app/logs:ro
-      - nginx-logs:/var/log/nginx:ro
-    depends_on:
-      - elasticsearch
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.8.0
-    container_name: crystalcog-kibana-prod
-    restart: always
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      - SERVER_NAME=kibana.example.com
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-    networks:
-      - crystalcog-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
+      start_period: 15s
 
 volumes:
   app-data:
-    driver: local
-  app-logs:
-    driver: local
-  postgres-data:
-    driver: local
-  redis-data:
-    driver: local
-  nginx-logs:
-    driver: local
-  prometheus-data:
-    driver: local
-  grafana-data:
-    driver: local
-  elasticsearch-data:
-    driver: local
-
-networks:
-  crystalcog-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+    name: crystalcog_app-data

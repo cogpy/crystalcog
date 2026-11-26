@@ -7,13 +7,124 @@ describe "CogServer command-line options" do
   it "uses defaults when no options are provided" do
     options = CogServer.parse_options([] of String)
 
-    options.should eq({host: CogServer::DEFAULT_HOST, port: CogServer::DEFAULT_PORT, ws_port: CogServer::DEFAULT_WS_PORT})
+    options.should eq({
+      host:       CogServer::DEFAULT_HOST,
+      port:       CogServer::DEFAULT_PORT,
+      ws_port:    CogServer::DEFAULT_WS_PORT,
+      auth_token: ENV["COGSERVER_AUTH_TOKEN"]?,
+    })
   end
 
   it "accepts validated custom host and ports" do
     options = CogServer.parse_options(["--host", "127.0.0.1", "--port", "19080", "--ws-port", "19081"])
 
-    options.should eq({host: "127.0.0.1", port: 19080, ws_port: 19081})
+    options.should eq({
+      host:       "127.0.0.1",
+      port:       19080,
+      ws_port:    19081,
+      auth_token: ENV["COGSERVER_AUTH_TOKEN"]?,
+    })
+  end
+
+  describe "CogServer request hardening" do
+    it "requires a token for non-loopback bindings" do
+      expect_raises(ArgumentError, /COGSERVER_AUTH_TOKEN/) do
+        CogServer::Server.new("0.0.0.0", 19180, 19181).start
+      end
+    end
+
+    it "protects HTTP endpoints when a token is configured" do
+      server = CogServer::Server.new("127.0.0.1", 19182, 19183, "server-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19183/status"
+        HTTP::Client.get(url).status_code.should eq(401)
+
+        headers = HTTP::Headers{"Authorization" => "Bearer server-token"}
+        HTTP::Client.get(url, headers).status_code.should eq(200)
+      ensure
+        server.stop
+      end
+    end
+
+    it "uses one-time tickets for browser WebSocket authentication" do
+      server = CogServer::Server.new("127.0.0.1", 19184, 19185, "monitor-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19185"
+        headers = HTTP::Headers{"Authorization" => "Bearer monitor-token"}
+        issued = HTTP::Client.post("#{url}/monitor-ticket", headers)
+        issued.status_code.should eq(201)
+        ticket = JSON.parse(issued.body)["ticket"].as_s
+
+        socket = TCPSocket.new("127.0.0.1", 19185)
+        socket.read_timeout = 2.seconds
+        socket << "GET /?ticket=#{ticket} HTTP/1.1\r\n"
+        socket << "Host: 127.0.0.1:19185\r\n"
+        socket << "Upgrade: websocket\r\n"
+        socket << "Connection: Upgrade\r\n"
+        socket << "Sec-WebSocket-Version: 13\r\n"
+        socket << "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        lines = [] of String
+        while line = socket.gets
+          lines << line
+          break if line.strip.empty?
+        end
+        response = lines.join
+        socket.close
+        response.should contain("101 Switching Protocols")
+        response.should contain("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+      ensure
+        server.stop
+      end
+    end
+
+    it "limits authentication attempts before validating credentials" do
+      previous = ENV["COGSERVER_RATE_CAPACITY"]?
+      ENV["COGSERVER_RATE_CAPACITY"] = "1"
+      server = CogServer::Server.new("127.0.0.1", 19186, 19187, "correct-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19187/status"
+        headers = HTTP::Headers{"Authorization" => "Bearer wrong-token"}
+        HTTP::Client.get(url, headers).status_code.should eq(401)
+        HTTP::Client.get(url, headers).status_code.should eq(429)
+      ensure
+        server.stop
+        if previous
+          ENV["COGSERVER_RATE_CAPACITY"] = previous
+        else
+          ENV.delete("COGSERVER_RATE_CAPACITY")
+        end
+      end
+    end
+
+    it "does not use unauthenticated caller headers as limiter keys" do
+      previous = ENV["COGSERVER_RATE_CAPACITY"]?
+      ENV["COGSERVER_RATE_CAPACITY"] = "1"
+      server = CogServer::Server.new("127.0.0.1", 19188, 19189)
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19189/status"
+        HTTP::Client.get(url, HTTP::Headers{"Authorization" => "Bearer arbitrary-a"}).status_code.should eq(200)
+        HTTP::Client.get(url, HTTP::Headers{"Authorization" => "Bearer arbitrary-b"}).status_code.should eq(429)
+      ensure
+        server.stop
+        if previous
+          ENV["COGSERVER_RATE_CAPACITY"] = previous
+        else
+          ENV.delete("COGSERVER_RATE_CAPACITY")
+        end
+      end
+    end
   end
 
   it "rejects invalid, missing, and colliding ports before starting a server" do

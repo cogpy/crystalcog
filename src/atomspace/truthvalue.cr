@@ -3,7 +3,7 @@
 #
 # Truth values represent degrees of belief and confidence in atomic propositions.
 
-require "../cogutil/cogutil"
+require "../cogutil/logger"
 
 module AtomSpace
   # Type aliases for truth value components

@@ -137,7 +137,7 @@ bash -x ./healthcheck.sh
 Check system logs for detailed error information:
 ```bash
 # Docker logs
-docker-compose logs
+docker compose -f ../../docker-compose.production.yml logs crystalcog-app
 
 # System logs
 journalctl -u crystalcog

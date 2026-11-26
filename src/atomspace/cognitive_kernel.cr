@@ -12,6 +12,7 @@
 
 require "./atomspace"
 require "./storage"
+require "./persistence"
 require "../cogutil/cogutil"
 require "../cogutil/performance_optimization"
 

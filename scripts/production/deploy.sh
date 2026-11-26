@@ -24,6 +24,14 @@ BACKUP_BEFORE_DEPLOY="true"
 HEALTH_CHECK_TIMEOUT=300
 ROLLBACK_ON_FAILURE="true"
 
+compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose --env-file "$ENV_FILE" "$@"
+    else
+        docker-compose --env-file "$ENV_FILE" "$@"
+    fi
+}
+
 print_status() {
     echo -e "${BLUE}[Deploy]${NC} $1"
 }
@@ -45,7 +53,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  -e, --environment ENV    Deployment environment (default: production)"
-    echo "  -a, --action ACTION      Action to perform: deploy|rollback|stop|status|logs (default: deploy)"
+    echo "  -a, --action ACTION      Action to perform: deploy|rollback|backup|stop|status|logs (default: deploy)"
     echo "  --no-backup             Skip backup before deployment"
     echo "  --no-rollback           Don't rollback on failure"
     echo "  --timeout SECONDS       Health check timeout (default: 300)"
@@ -102,7 +110,7 @@ check_prerequisites() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
         print_error "Docker Compose is not installed"
         exit 1
     fi
@@ -126,20 +134,12 @@ create_default_env_file() {
     cat > "$ENV_FILE" << EOF
 # CrystalCog Production Environment Configuration
 
-# Database Configuration
-POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+# Required signing secrets
+SECRET_KEY_BASE=$(openssl rand -hex 32)
+JWT_SECRET=$(openssl rand -hex 32)
 
-# Monitoring Configuration  
-GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-
-# Email Configuration (configure for your SMTP server)
-SMTP_HOST=smtp.example.com
-SMTP_USER=noreply@example.com
-SMTP_PASSWORD=your_smtp_password
-
-# SSL Configuration
-SSL_CERT_PATH=/etc/ssl/certs/crystalcog.crt
-SSL_KEY_PATH=/etc/ssl/certs/crystalcog.key
+# External OpenAI-compatible inference endpoint
+APHRODITE_URL=http://inference.example:8000
 
 # Backup Configuration
 BACKUP_ENABLED=true
@@ -161,20 +161,10 @@ backup_deployment() {
     
     mkdir -p "$BACKUP_DIR"
     
-    # Backup database
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" ps | grep -q postgres; then
-        print_status "Backing up PostgreSQL database..."
-        docker-compose -f "$DOCKER_COMPOSE_FILE" exec -T postgres \
-            pg_dump -U crystalcog_user crystalcog_prod > "$BACKUP_DIR/database.sql"
-    fi
-    
-    # Backup volumes
-    print_status "Backing up data volumes..."
+    # Backup the active Paphos data store and event journal.
+    print_status "Backing up application data volume..."
     docker run --rm -v crystalcog_app-data:/data -v "$BACKUP_DIR":/backup alpine \
         tar czf /backup/app-data.tar.gz -C /data .
-    
-    docker run --rm -v crystalcog_redis-data:/data -v "$BACKUP_DIR":/backup alpine \
-        tar czf /backup/redis-data.tar.gz -C /data .
     
     # Backup configuration
     cp -r "$PROJECT_ROOT/config" "$BACKUP_DIR/"
@@ -190,15 +180,15 @@ deploy() {
     
     # Pull latest images
     print_status "Pulling latest images..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" pull
+    compose -f "$DOCKER_COMPOSE_FILE" pull
     
     # Build application
     print_status "Building application..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" build --no-cache crystalcog-app
+    compose -f "$DOCKER_COMPOSE_FILE" build --no-cache crystalcog-app
     
     # Deploy services
     print_status "Deploying services..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+    compose -f "$DOCKER_COMPOSE_FILE" up -d
     
     # Wait for services to be ready
     print_status "Waiting for services to be ready..."
@@ -226,7 +216,7 @@ wait_for_services() {
     local interval=10
     
     while [ $elapsed -lt $timeout ]; do
-        if docker-compose -f "$DOCKER_COMPOSE_FILE" ps | grep -q "Up"; then
+        if compose -f "$DOCKER_COMPOSE_FILE" ps | grep -q "Up"; then
             print_status "Services are starting... ($elapsed/${timeout}s)"
             sleep $interval
             elapsed=$((elapsed + interval))
@@ -236,7 +226,8 @@ wait_for_services() {
         fi
         
         # Check if main application is responding
-        if docker-compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app curl -s -f http://localhost:5000/health >/dev/null 2>&1; then
+        if compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app \
+            /usr/local/bin/healthcheck.sh >/dev/null 2>&1; then
             print_success "Services are ready!"
             return 0
         fi
@@ -250,7 +241,7 @@ wait_for_services() {
 run_health_check() {
     print_status "Running comprehensive health check..."
     
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app /usr/local/bin/healthcheck.sh; then
+    if compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app /usr/local/bin/healthcheck.sh; then
         return 0
     else
         return 1
@@ -262,7 +253,7 @@ rollback() {
     print_status "Rolling back deployment..."
     
     # Stop current services
-    docker-compose -f "$DOCKER_COMPOSE_FILE" down
+    compose -f "$DOCKER_COMPOSE_FILE" down
     
     # Find most recent backup
     local latest_backup=$(ls -t /backup/crystalcog/ | head -n 1)
@@ -274,15 +265,6 @@ rollback() {
     local backup_path="/backup/crystalcog/$latest_backup"
     print_status "Rolling back to backup: $backup_path"
     
-    # Restore database
-    if [ -f "$backup_path/database.sql" ]; then
-        print_status "Restoring database..."
-        docker-compose -f "$DOCKER_COMPOSE_FILE" up -d postgres
-        sleep 30
-        cat "$backup_path/database.sql" | docker-compose -f "$DOCKER_COMPOSE_FILE" exec -T postgres \
-            psql -U crystalcog_user -d crystalcog_prod
-    fi
-    
     # Restore data volumes
     print_status "Restoring data volumes..."
     if [ -f "$backup_path/app-data.tar.gz" ]; then
@@ -290,13 +272,8 @@ rollback() {
             sh -c "rm -rf /data/* && tar xzf /backup/app-data.tar.gz -C /data"
     fi
     
-    if [ -f "$backup_path/redis-data.tar.gz" ]; then
-        docker run --rm -v crystalcog_redis-data:/data -v "$backup_path":/backup alpine \
-            sh -c "rm -rf /data/* && tar xzf /backup/redis-data.tar.gz -C /data"
-    fi
-    
     # Start services
-    docker-compose -f "$DOCKER_COMPOSE_FILE" up -d
+    compose -f "$DOCKER_COMPOSE_FILE" up -d
     
     print_success "Rollback completed"
 }
@@ -304,11 +281,11 @@ rollback() {
 # Show deployment status
 show_status() {
     print_status "Deployment Status:"
-    docker-compose -f "$DOCKER_COMPOSE_FILE" ps
+    compose -f "$DOCKER_COMPOSE_FILE" ps
     echo ""
     
     print_status "Service Health:"
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app /usr/local/bin/healthcheck.sh; then
+    if compose -f "$DOCKER_COMPOSE_FILE" exec -T crystalcog-app /usr/local/bin/healthcheck.sh; then
         print_success "All services are healthy"
     else
         print_warning "Some services may have issues"
@@ -317,13 +294,13 @@ show_status() {
 
 # Show logs
 show_logs() {
-    docker-compose -f "$DOCKER_COMPOSE_FILE" logs -f --tail=100
+    compose -f "$DOCKER_COMPOSE_FILE" logs -f --tail=100
 }
 
 # Stop deployment
 stop_deployment() {
     print_status "Stopping deployment..."
-    docker-compose -f "$DOCKER_COMPOSE_FILE" down
+    compose -f "$DOCKER_COMPOSE_FILE" down
     print_success "Deployment stopped"
 }
 
@@ -350,6 +327,9 @@ main() {
             ;;
         rollback)
             rollback
+            ;;
+        backup)
+            backup_deployment
             ;;
         status)
             show_status

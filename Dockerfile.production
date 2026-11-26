@@ -1,129 +1,63 @@
-# Multi-stage production Dockerfile for CrystalCog
-# This provides optimized production builds with minimal attack surface
+FROM crystallang/crystal:1.20.1 AS builder
 
-# Stage 1: Build dependencies and tools
-FROM ubuntu:22.04 AS builder
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    curl \
-    git \
-    libssl-dev \
-    libevent-dev \
-    libpcre3-dev \
-    libyaml-dev \
-    zlib1g-dev \
-    pkg-config \
-    wget \
-    ca-certificates \
-    libboost-all-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Crystal compiler
-RUN curl -fsSL https://crystal-lang.org/install.sh | bash
-
-# Stage 2: Build Crystal applications
-FROM builder AS crystal-builder
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libevent-dev libpq-dev librocksdb-dev libsqlite3-dev libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY shard.yml shard.lock ./
-RUN shards install --production
+RUN shards install --frozen
 
 COPY src/ src/
-COPY *.cr ./
-COPY spec/ spec/
+RUN mkdir -p bin && \
+    crystal build --release --no-debug src/bin/crystalcog.cr -o bin/crystalcog && \
+    crystal build --release --no-debug src/bin/cogserver.cr -o bin/cogserver && \
+    crystal build --release --no-debug src/bin/cogshell.cr -o bin/cogshell && \
+    crystal build --release --no-debug src/bin/aphrodite_jax_server.cr -o bin/aphrodite_jax_server
 
-# Build Crystal applications for production
-RUN crystal build --release --static --no-debug demo.cr -o bin/demo
-RUN crystal build --release --static --no-debug demo_cogserver.cr -o bin/demo_cogserver
-RUN crystal build --release --static --no-debug demo_ai_integration.cr -o bin/demo_ai_integration
+FROM ubuntu:24.04 AS runtime
 
-# Stage 3: Build C++ components
-FROM builder AS cpp-builder
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates libevent-2.1-7 libgc1 libpcre2-8-0 libpq5 \
+      librocksdb8.9 libsqlite3-0 libssl3t64 libyaml-0-2 zlib1g && \
+    rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
-COPY CMakeLists.txt ./
-COPY src/ src/
-COPY cogutil/ cogutil/
-COPY atomspace/ atomspace/
-COPY opencog/ opencog/
+RUN groupadd --system crystalcog && \
+    useradd --system --gid crystalcog --home-dir /app crystalcog
 
-# Build C++ components
-RUN mkdir -p build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INSTALL_PREFIX=/usr/local \
-          -DENABLE_GUILE=ON \
-          .. && \
-    make -j$(nproc) && \
-    make install DESTDIR=/build/install
+WORKDIR /app
+COPY --from=builder /build/bin/ /usr/local/bin/
 
-# Stage 4: Python dependencies
-FROM python:3.11-slim AS python-builder
-
-WORKDIR /build
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --user -r requirements.txt
-
-# Stage 5: Final production image
-FROM ubuntu:22.04 AS production
-
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libevent-2.1-7 \
-    libpcre3 \
-    libyaml-0-2 \
-    zlib1g \
-    libssl3 \
-    ca-certificates \
-    curl \
-    python3 \
-    python3-pip \
-    guile-3.0 \
-    postgresql-client \
-    redis-tools \
-    supervisor \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Create non-root user for security
-RUN groupadd -r crystalcog && useradd -r -g crystalcog -s /bin/false crystalcog
-
-# Copy built artifacts
-COPY --from=crystal-builder /build/bin/ /usr/local/bin/
-COPY --from=cpp-builder /build/install/ /
-COPY --from=python-builder /root/.local /home/crystalcog/.local
-COPY --chown=crystalcog:crystalcog python_cognitive_kernel.py /app/
-COPY --chown=crystalcog:crystalcog app.py /app/
-
-# Copy configuration files
-COPY config/ /app/config/
-COPY scripts/production/ /app/scripts/
-
-# Set up directories and permissions
-RUN mkdir -p /app/data /app/logs /var/log/crystalcog && \
-    chown -R crystalcog:crystalcog /app /var/log/crystalcog
-
-# Add health check script
-COPY scripts/production/healthcheck.sh /usr/local/bin/healthcheck.sh
-RUN chmod +x /usr/local/bin/healthcheck.sh
-
-# Expose ports
-EXPOSE 5000 17001 18001 8080 8888
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD /usr/local/bin/healthcheck.sh
-
-# Use supervisor to manage services
-COPY config/production/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
-# Switch to non-root user
+RUN mkdir -p /app/data && chown -R crystalcog:crystalcog /app
+COPY <<'HTML' /app/web/index.html
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CrystalCog</title></head>
+<body><main><h1>CrystalCog platform</h1><p>The Pygmalion API is running. Health: <a href="/api/health">/api/health</a></p></main></body>
+</html>
+HTML
+COPY <<'SCRIPT' /usr/local/bin/healthcheck.sh
+#!/usr/bin/env bash
+set -eu
+exec 3<>/dev/tcp/127.0.0.1/8080
+printf 'GET /api/health HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+IFS= read -r status <&3
+[[ "$status" == *"200"* ]]
+SCRIPT
+RUN chown -R crystalcog:crystalcog /app && \
+    chmod 0755 /usr/local/bin/healthcheck.sh
 USER crystalcog
 
-# Set working directory
-WORKDIR /app
+ENV PLATFORM_HOST=0.0.0.0 \
+    PAPHOS_DATA_FILE=/app/data/paphos.json \
+    GALATEA_STATIC_DIR=/app/web \
+    CRYSTALCOG_ENV=production
 
-# Start supervisor
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+EXPOSE 3000 8080 17001 18080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD bash -c ': >/dev/tcp/127.0.0.1/8080'
+
+CMD ["/usr/local/bin/crystalcog", "platform"]

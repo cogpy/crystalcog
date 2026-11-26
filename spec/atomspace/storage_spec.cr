@@ -1,6 +1,6 @@
 require "spec"
 require "file_utils"
-require "../../src/atomspace/atomspace"
+require "../../src/atomspace/storage"
 
 describe AtomSpace::MemoryStorageNode do
   it "opens and closes, tracking connected state" do
@@ -236,41 +236,41 @@ describe AtomSpace::HypergraphStateStorageNode do
 end
 
 {% unless env("DISABLE_SQLITE3") == "1" %}
-describe AtomSpace::SQLiteStorageNode do
-  it "stores and loads atoms with SQLite" do
-    dir = File.join(Dir.tempdir, "crystalcog_sqlite_#{Random::Secure.hex(6)}")
-    path = File.join(dir, "atoms.db")
-    FileUtils.mkdir_p(dir)
+  describe AtomSpace::SQLiteStorageNode do
+    it "stores and loads atoms with SQLite" do
+      dir = File.join(Dir.tempdir, "crystalcog_sqlite_#{Random::Secure.hex(6)}")
+      path = File.join(dir, "atoms.db")
+      FileUtils.mkdir_p(dir)
 
-    begin
-      storage = AtomSpace::SQLiteStorageNode.new("sqlite", path, use_pool: false)
-      storage.open.should be_true
+      begin
+        storage = AtomSpace::SQLiteStorageNode.new("sqlite", path, use_pool: false)
+        storage.open.should be_true
 
-      dog = AtomSpace::ConceptNode.new("dog")
-      storage.store_atom(dog).should be_true
+        dog = AtomSpace::ConceptNode.new("dog")
+        storage.store_atom(dog).should be_true
 
-      fetched = storage.fetch_atom(dog.handle)
-      fetched.should_not be_nil
-      fetched.not_nil!.is_a?(AtomSpace::Node).should be_true
-      fetched.not_nil!.as(AtomSpace::Node).name.should eq("dog")
+        fetched = storage.fetch_atom(dog.handle)
+        fetched.should_not be_nil
+        fetched.not_nil!.is_a?(AtomSpace::Node).should be_true
+        fetched.not_nil!.as(AtomSpace::Node).name.should eq("dog")
 
-      source = AtomSpace::AtomSpace.new
-      source.add_concept_node("one")
-      source.add_concept_node("two")
-      storage.store_atomspace(source).should be_true
+        source = AtomSpace::AtomSpace.new
+        source.add_concept_node("one")
+        source.add_concept_node("two")
+        storage.store_atomspace(source).should be_true
 
-      target = AtomSpace::AtomSpace.new
-      storage.load_atomspace(target).should be_true
-      target.size.should be >= 2
+        target = AtomSpace::AtomSpace.new
+        storage.load_atomspace(target).should be_true
+        target.size.should be >= 2
 
-      stats = storage.get_stats
-      stats["type"].should eq("SQLiteStorage")
-      stats["connected"].should eq("true")
+        stats = storage.get_stats
+        stats["type"].should eq("SQLiteStorage")
+        stats["connected"].should eq("true")
 
-      storage.close.should be_true
-    ensure
-      FileUtils.rm_rf(dir) if Dir.exists?(dir)
+        storage.close.should be_true
+      ensure
+        FileUtils.rm_rf(dir) if Dir.exists?(dir)
+      end
     end
   end
-end
 {% end %}

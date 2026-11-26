@@ -13,7 +13,7 @@
 #   (Evaluation (Predicate "position") (List (Concept "kitchen:object-1") (Number 0.25) (Number 0.5)))
 #   (Evaluation (Predicate "left-of") (List (Concept "kitchen:object-1") (Concept "kitchen:object-2")))
 
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./perception"
 
 module Vision

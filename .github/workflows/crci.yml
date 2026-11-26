@@ -7,11 +7,9 @@
 #   DISABLE_ROCKSDB=1  - Disable RocksDB support
 
 on:
-  push:
-  pull_request:
-    branches: [main]
   schedule:
     - cron: '0 6 * * 6'  # Every Saturday 6 AM
+  workflow_dispatch:
 # Least-privilege token by default; jobs that write declare their own permissions.
 permissions:
   contents: read

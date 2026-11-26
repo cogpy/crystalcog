@@ -8,7 +8,7 @@
 # - lg-atomese: https://github.com/opencog/lg-atomese
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./nlp"
 
 module NLP
@@ -204,7 +204,7 @@ module NLP
 
         # Common nouns: D- from determiner, S+ as subject, O- as object, J- from prep
         %w[cat dog fox animal animals dogs cats mat floor room house man woman boy girl
-           book table car city world system agent mind memory time day night food water].each do |w|
+          book table car city world system agent mind memory time day night food water].each do |w|
           add(w, [Connector.new("D", "-"), Connector.new("S", "+")])
           add(w, [Connector.new("D", "-"), Connector.new("O", "-")])
           add(w, [Connector.new("S", "+")])
@@ -214,8 +214,8 @@ module NLP
 
         # Common verbs: S- subject, O+ object, MV+ for modifiers
         %w[sits sat sit runs run ran jumps jump jumped sleeps sleep sleeps
-           sees see saw likes like likes eats eat ate goes go went
-           makes make made thinks think thought knows know knew].each do |w|
+          sees see saw likes like likes eats eat ate goes go went
+          makes make made thinks think thought knows know knew].each do |w|
           add(w, [Connector.new("S", "-")])
           add(w, [Connector.new("S", "-"), Connector.new("O", "+")])
           add(w, [Connector.new("S", "-"), Connector.new("MV", "+")])

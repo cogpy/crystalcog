@@ -5,8 +5,7 @@
 
 require "./truthvalue"
 require "./atom"
-require "./storage"
-require "../cogutil/cogutil"
+require "../cogutil/logger"
 require "deque"
 
 module AtomSpace
@@ -411,31 +410,6 @@ module AtomSpace
       add_atom(link)
     end
 
-    # Storage backend factory methods
-    def create_file_storage(name : String, path : String) : FileStorageNode
-      FileStorageNode.new(name, path)
-    end
-
-    def create_sqlite_storage(name : String, path : String) : SQLiteStorageNode
-      SQLiteStorageNode.new(name, path)
-    end
-
-    def create_postgres_storage(name : String, connection_string : String) : PostgresStorageNode
-      PostgresStorageNode.new(name, connection_string)
-    end
-
-    def create_rocksdb_storage(name : String, path : String) : RocksDBStorageNode
-      RocksDBStorageNode.new(name, path)
-    end
-
-    def create_cog_storage(name : String, host : String, port : Int32) : CogStorageNode
-      CogStorageNode.new(name, host, port)
-    end
-
-    def create_hypergraph_storage(name : String, path : String, backend_type : String = "file") : HypergraphStateStorageNode
-      HypergraphStateStorageNode.new(name, path, backend_type)
-    end
-
     # Event system
     def add_observer(observer : AtomSpaceSignal)
       @mutex.synchronize { @observers << observer }
@@ -512,127 +486,6 @@ module AtomSpace
         puts "  Unique names: #{@atoms_by_name.size}"
         puts "  Link patterns: #{@atoms_by_outgoing.size}"
       end
-    end
-
-    # Persistence methods - attach storage backends
-    def attach_storage(storage : StorageNode)
-      @attached_storages ||= [] of StorageNode
-      @attached_storages.not_nil! << storage
-      CogUtil::Logger.info("Attached storage: #{storage.name}")
-    end
-
-    def detach_storage(storage : StorageNode)
-      @attached_storages.try(&.delete(storage))
-      CogUtil::Logger.info("Detached storage: #{storage.name}")
-    end
-
-    def get_attached_storages : Array(StorageNode)
-      @attached_storages || [] of StorageNode
-    end
-
-    # Store AtomSpace to all attached storages
-    def store_all : Bool
-      success = true
-      get_attached_storages.each do |storage|
-        success = false unless storage.store_atomspace(self)
-      end
-      success
-    end
-
-    # Load from all attached storages
-    def load_all : Bool
-      success = true
-      get_attached_storages.each do |storage|
-        success = false unless storage.load_atomspace(self)
-      end
-      success
-    end
-
-    # Store to specific storage
-    def store_to(storage : StorageNode) : Bool
-      storage.store_atomspace(self)
-    end
-
-    # Load from specific storage
-    def load_from(storage : StorageNode) : Bool
-      storage.load_atomspace(self)
-    end
-
-    # Convenience methods for creating storage nodes
-    def create_file_storage(name : String, file_path : String) : FileStorageNode
-      storage = FileStorageNode.new(name, file_path)
-      attach_storage(storage)
-      storage
-    end
-
-    def create_sqlite_storage(name : String, db_path : String) : SQLiteStorageNode
-      storage = SQLiteStorageNode.new(name, db_path)
-      attach_storage(storage)
-      storage
-    end
-
-    def create_cog_storage(name : String, host : String, port : Int32) : CogStorageNode
-      storage = CogStorageNode.new(name, host, port)
-      attach_storage(storage)
-      storage
-    end
-
-    # Hypergraph state persistence methods
-    def create_hypergraph_storage(name : String, storage_path : String, backend_type : String = "file") : HypergraphStateStorageNode
-      storage = HypergraphStateStorageNode.new(name, storage_path, backend_type)
-      attach_storage(storage)
-      storage
-    end
-
-    # Extract hypergraph state from current AtomSpace
-    def extract_hypergraph_state(tensor_shape : Array(Int32), attention : Float64,
-                                 meta_level : Int32 = 0, cognitive_operation : String? = nil) : HypergraphState
-      HypergraphState.new(
-        atomspace: self,
-        tensor_shape: tensor_shape,
-        attention: attention,
-        meta_level: meta_level,
-        cognitive_operation: cognitive_operation,
-        timestamp: Time.utc
-      )
-    end
-
-    # Store hypergraph state to all attached hypergraph storages
-    def store_hypergraph_state(tensor_shape : Array(Int32), attention : Float64,
-                               meta_level : Int32 = 0, cognitive_operation : String? = nil) : Bool
-      state = extract_hypergraph_state(tensor_shape, attention, meta_level, cognitive_operation)
-
-      success = true
-      get_attached_storages.each do |storage|
-        if storage.is_a?(HypergraphStateStorageNode)
-          success = false unless storage.store_hypergraph_state(state)
-        end
-      end
-      success
-    end
-
-    # Load hypergraph state from the first available hypergraph storage
-    def load_hypergraph_state : HypergraphState?
-      get_attached_storages.each do |storage|
-        if storage.is_a?(HypergraphStateStorageNode)
-          state = storage.load_hypergraph_state(self)
-          return state if state
-        end
-      end
-      nil
-    end
-
-    # Store to specific hypergraph storage
-    def store_hypergraph_state_to(storage : HypergraphStateStorageNode, tensor_shape : Array(Int32),
-                                  attention : Float64, meta_level : Int32 = 0,
-                                  cognitive_operation : String? = nil) : Bool
-      state = extract_hypergraph_state(tensor_shape, attention, meta_level, cognitive_operation)
-      storage.store_hypergraph_state(state)
-    end
-
-    # Load from specific hypergraph storage
-    def load_hypergraph_state_from(storage : HypergraphStateStorageNode) : HypergraphState?
-      storage.load_hypergraph_state(self)
     end
 
     # Export to string representation

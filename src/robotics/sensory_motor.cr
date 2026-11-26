@@ -13,7 +13,7 @@
 # - Motor Control: Wolpert & Ghahramani 2000
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../spatial/spatial"
 require "../temporal/temporal"
 require "../vision/vision"
@@ -29,7 +29,7 @@ module Robotics
     VESTIBULAR
     OLFACTION
     GUSTATION
-    RANGE      # Distance sensors (LIDAR, sonar, etc.)
+    RANGE # Distance sensors (LIDAR, sonar, etc.)
     FORCE
     TEMPERATURE
     PRESSURE
@@ -40,7 +40,7 @@ module Robotics
     getter name : String
     getter modality : SensorModality
     getter frame_id : String
-    getter update_rate : Float64  # Hz
+    getter update_rate : Float64 # Hz
     getter is_active : Bool
     getter last_update : Temporal::TimePoint?
 
@@ -134,13 +134,13 @@ module Robotics
   # Vision sensor (camera)
   class VisionSensor < Sensor
     property resolution : Tuple(Int32, Int32)
-    property field_of_view : Float64  # radians
+    property field_of_view : Float64 # radians
     @image_data : Bytes?
     @encoding : String = "rgb8"
 
     def initialize(name : String, frame_id : String = "camera_link",
                    @resolution : Tuple(Int32, Int32) = {640, 480},
-                   @field_of_view : Float64 = 1.047)  # ~60 degrees
+                   @field_of_view : Float64 = 1.047) # ~60 degrees
       super(name, SensorModality::VISION, frame_id)
       @image_data = nil
     end
@@ -370,11 +370,11 @@ module Robotics
 
   # Motor actuator types
   enum ActuatorType
-    REVOLUTE     # Rotary joint
-    PRISMATIC    # Linear joint
-    CONTINUOUS   # Continuous rotation
-    WHEEL        # Wheel drive
-    GRIPPER      # End effector
+    REVOLUTE   # Rotary joint
+    PRISMATIC  # Linear joint
+    CONTINUOUS # Continuous rotation
+    WHEEL      # Wheel drive
+    GRIPPER    # End effector
   end
 
   # Abstract motor/actuator interface
@@ -532,7 +532,7 @@ module Robotics
       linear_dist = (left_dist + right_dist) / 2.0
       angular_dist = (right_dist - left_dist) / @wheel_separation
 
-      {linear_dist, 0.0, angular_dist}  # dx, dy, dtheta
+      {linear_dist, 0.0, angular_dist} # dx, dy, dtheta
     end
 
     def update(dt : Float64)
@@ -607,7 +607,7 @@ module Robotics
     getter trigger_condition : Proc(SensorReading, Bool)
     getter response : Proc(Nil)
     getter priority : Int32
-    getter cooldown : Float64  # seconds
+    getter cooldown : Float64 # seconds
     @last_triggered : Temporal::TimePoint?
     @is_active : Bool
 
@@ -847,7 +847,7 @@ module Robotics
 
     def add_reflex(reflex : Reflex)
       @reflexes << reflex
-      @reflexes.sort_by! { |r| -r.priority }  # Higher priority first
+      @reflexes.sort_by! { |r| -r.priority } # Higher priority first
     end
 
     def read_sensor(name : String) : SensorReading?

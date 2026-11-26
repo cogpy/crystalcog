@@ -10,7 +10,7 @@
 
 require "json"
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module ReasoningExplanation
   VERSION = "0.1.0"

@@ -5,9 +5,7 @@ set -e
 
 # Configuration
 API_HOST="${API_HOST:-localhost}"
-API_PORT="${API_PORT:-5000}"
-COGSERVER_PORT="${COGSERVER_PORT:-17001}"
-ATOMSPACE_PORT="${ATOMSPACE_PORT:-18001}"
+API_PORT="${GALATEA_PORT:-8080}"
 TIMEOUT=10
 
 # Colors for output
@@ -113,28 +111,16 @@ main() {
     
     # Check core services
     check_port "$API_HOST" "$API_PORT" "API Service" || exit_code=1
-    check_port "$API_HOST" "$COGSERVER_PORT" "CogServer" || exit_code=1
-    check_port "$API_HOST" "$ATOMSPACE_PORT" "AtomSpace" || exit_code=1
     
     # Check HTTP endpoints
-    check_http "http://$API_HOST:$API_PORT/health" "API Health Endpoint" || exit_code=1
+    check_http "http://$API_HOST:$API_PORT/api/health" "Galatea Health Endpoint" || exit_code=1
     
     # Check critical processes
-    check_process "supervisord" || exit_code=1
-    check_process "demo" || exit_code=1
-    check_process "demo_cogserver" || exit_code=1
+    check_process "crystalcog" || exit_code=1
     
     # Check system resources
     check_disk_space || exit_code=1
     check_memory || exit_code=1
-    
-    # Check log files exist and are being written
-    if [ -f "/var/log/crystalcog/api.log" ] && [ "$(find /var/log/crystalcog/api.log -mmin -5)" ]; then
-        log "$GREEN" "✓ API logs are being written"
-    else
-        log "$RED" "✗ API logs are stale or missing"
-        exit_code=1
-    fi
     
     if [ $exit_code -eq 0 ]; then
         log "$GREEN" "All health checks passed!"

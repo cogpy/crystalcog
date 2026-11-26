@@ -9,7 +9,7 @@
 # - FrameNet: https://framenet.icsi.berkeley.edu/
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./dependency_parser"
 
 module NLP

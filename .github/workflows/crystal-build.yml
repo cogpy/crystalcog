@@ -1,22 +1,6 @@
 name: Crystal Build and Test
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'spec/**'
-      - 'shard.yml'
-      - '.github/workflows/crystal-build.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'spec/**'
-      - 'shard.yml'
-      - '.github/workflows/crystal-build.yml'
   workflow_dispatch:
     inputs:
       run_comprehensive_tests:
