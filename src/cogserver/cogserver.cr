@@ -14,6 +14,58 @@ require "../atomspace/atomspace_main"
 require "../opencog/opencog"
 require "../production/hardening"
 
+class HTTP::WebSocket
+  def run_bounded(max_message_bytes : Int64, &on_message : String ->) : Nil
+    loop do
+      info = begin
+        @ws.receive(@buffer)
+      rescue
+        @on_close.try &.call(CloseCode::AbnormalClosure, "")
+        @closed = true
+        break
+      end
+
+      case info.opcode
+      in .ping?
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          do_ping(@current_message.to_s)
+          @current_message.clear
+        end
+      in .pong?
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          @on_pong.try &.call(@current_message.to_s)
+          @current_message.clear
+        end
+      in .text?
+        if @current_message.size.to_i64 + info.size > max_message_bytes
+          close(CloseCode::MessageTooBig, "message exceeds #{max_message_bytes} bytes")
+          @current_message.clear
+          break
+        end
+        @current_message.write @buffer[0, info.size]
+        if info.final
+          on_message.call(@current_message.to_s)
+          @current_message.clear
+        end
+      in .binary?
+        close(CloseCode::UnsupportedData, "binary messages are not supported")
+        @current_message.clear
+        break
+      in .close?
+        do_close(CloseCode::NormalClosure, "")
+        @current_message.clear
+        break
+      in .continuation?
+        close(CloseCode::PolicyViolation, "unexpected continuation frame")
+        @current_message.clear
+        break
+      end
+    end
+  end
+end
+
 module CogServer
   VERSION = "0.1.0"
 
@@ -285,6 +337,7 @@ module CogServer
     end
 
     private def handle_telnet_request(context)
+      return unless admit_request(context)
       session = open_session(:telnet, @request_guard.authenticate(context.request.headers["Authorization"]?))
       session_id = session.id
 
@@ -315,6 +368,9 @@ module CogServer
     end
 
     private def process_telnet_command(command : String, session : Session) : String
+      bucket = session.authenticated? ? "telnet-commands" : "telnet-authentication"
+      return "Rate limit exceeded." unless @request_guard.allow?(bucket)
+
       stripped = command.strip
       if stripped.starts_with?("auth ")
         if @request_guard.authenticate(stripped.lchop("auth ").strip)
@@ -389,6 +445,15 @@ module CogServer
 
     private def handle_websocket_request(context)
       if context.request.headers["Upgrade"]?.try(&.downcase) == "websocket"
+        if @request_guard.body_too_large?(
+             context.request.headers["Content-Length"]?,
+             context.request.headers["Transfer-Encoding"]?
+           )
+          return websocket_reject(context, 413, "Request body too large")
+        end
+        unless @request_guard.allow?("websocket-handshakes")
+          return websocket_reject(context, 429, "Rate limit exceeded")
+        end
         unless @request_guard.authenticate(context.request.headers["Authorization"]?) ||
                consume_websocket_ticket(context.request.query_params["ticket"]?)
           websocket_reject(context, 401, "Authentication required")
@@ -488,8 +553,9 @@ module CogServer
 
       monitor.reply({"type" => "welcome", "session" => session.id, "version" => VERSION,
                      "events" => MonitorEventType.names}.to_json)
-      socket.on_message { |message| handle_websocket_message(message, monitor) }
-      socket.run
+      socket.run_bounded(@request_guard.max_body_bytes) do |message|
+        handle_websocket_message(message, monitor)
+      end
     rescue ex : IO::Error
       CogUtil::Logger.debug("WebSocket closed: #{ex.message}")
     ensure
@@ -507,6 +573,11 @@ module CogServer
 
     private def handle_websocket_message(message : String, monitor : WebSocketMonitor)
       monitor.touch
+      unless @request_guard.allow?("websocket-messages")
+        monitor.reply({"type" => "error", "message" => "rate limit exceeded"}.to_json)
+        return
+      end
+
       request = begin
         JSON.parse(message).as_h?
       rescue JSON::ParseException
@@ -609,6 +680,11 @@ module CogServer
         return false
       end
 
+      unless @request_guard.allow?("http-preauth")
+        rate_limit_response(context)
+        return false
+      end
+
       token = context.request.headers["Authorization"]?
       unless @request_guard.authenticate(token)
         context.response.status_code = 401
@@ -618,16 +694,19 @@ module CogServer
         return false
       end
 
-      client = Production::RequestGuard.token_from(token) ||
-               "anonymous"
-      unless @request_guard.allow?(client)
-        context.response.status_code = 429
-        context.response.headers["Retry-After"] = "1"
-        context.response.content_type = "application/json"
-        context.response.print({"error" => "Rate limit exceeded"}.to_json)
+      bucket = @request_guard.authentication_required? ? "http-authenticated" : "http-anonymous"
+      unless @request_guard.allow?(bucket)
+        rate_limit_response(context)
         return false
       end
       true
+    end
+
+    private def rate_limit_response(context) : Nil
+      context.response.status_code = 429
+      context.response.headers["Retry-After"] = "1"
+      context.response.content_type = "application/json"
+      context.response.print({"error" => "Rate limit exceeded"}.to_json)
     end
 
     private def handle_monitor_ticket_request(context)

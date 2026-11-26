@@ -82,6 +82,49 @@ describe "CogServer command-line options" do
         server.stop
       end
     end
+
+    it "limits authentication attempts before validating credentials" do
+      previous = ENV["COGSERVER_RATE_CAPACITY"]?
+      ENV["COGSERVER_RATE_CAPACITY"] = "1"
+      server = CogServer::Server.new("127.0.0.1", 19186, 19187, "correct-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19187/status"
+        headers = HTTP::Headers{"Authorization" => "Bearer wrong-token"}
+        HTTP::Client.get(url, headers).status_code.should eq(401)
+        HTTP::Client.get(url, headers).status_code.should eq(429)
+      ensure
+        server.stop
+        if previous
+          ENV["COGSERVER_RATE_CAPACITY"] = previous
+        else
+          ENV.delete("COGSERVER_RATE_CAPACITY")
+        end
+      end
+    end
+
+    it "does not use unauthenticated caller headers as limiter keys" do
+      previous = ENV["COGSERVER_RATE_CAPACITY"]?
+      ENV["COGSERVER_RATE_CAPACITY"] = "1"
+      server = CogServer::Server.new("127.0.0.1", 19188, 19189)
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19189/status"
+        HTTP::Client.get(url, HTTP::Headers{"Authorization" => "Bearer arbitrary-a"}).status_code.should eq(200)
+        HTTP::Client.get(url, HTTP::Headers{"Authorization" => "Bearer arbitrary-b"}).status_code.should eq(429)
+      ensure
+        server.stop
+        if previous
+          ENV["COGSERVER_RATE_CAPACITY"] = previous
+        else
+          ENV.delete("COGSERVER_RATE_CAPACITY")
+        end
+      end
+    end
   end
 
   it "rejects invalid, missing, and colliding ports before starting a server" do
