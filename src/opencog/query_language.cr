@@ -77,7 +77,7 @@
 # put it.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pattern_matching/pattern_matching"
 
 module OpenCog

@@ -3,8 +3,7 @@ name: Test Monitoring and Reporting
 on:
   workflow_run:
     workflows: 
-      - "Crystal Build and Test"
-      - "Comprehensive Crystal CI/CD"
+      - "CrystalCog Verify"
     types:
       - completed
   schedule:

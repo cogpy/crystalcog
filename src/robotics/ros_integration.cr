@@ -14,7 +14,7 @@
 # - ROS Actions: https://design.ros2.org/articles/actions.html
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../spatial/spatial"
 require "../temporal/temporal"
 

@@ -4,7 +4,7 @@
 # from specific examples and forming general rules.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./concept_learning"
 
 module Learning

@@ -1,5 +1,38 @@
 # CrystalCog Production Deployment Guide
 
+The supported production path is the repository's `Dockerfile.production` and
+`docker-compose.production.yml`. It runs the Crystal Pygmalion platform rather
+than the removed CMake/Python monorepo configuration.
+
+## Required configuration
+
+Generate independent 32-byte-or-longer signing secrets and point CrystalCog at an
+OpenAI-compatible inference server:
+
+```bash
+export SECRET_KEY_BASE="$(openssl rand -hex 32)"
+export JWT_SECRET="$(openssl rand -hex 32)"
+export APHRODITE_URL="http://inference.example:8000"
+docker compose -f docker-compose.production.yml up --build -d
+```
+
+The container fails closed when required production secrets are absent. Paphos
+data is stored in the `crystalcog-data` volume. Keep the Galatea port behind TLS
+and do not expose the Paphos port directly unless another trusted service needs
+it.
+
+CogServer is separately deployable. When binding outside loopback it requires
+`COGSERVER_AUTH_TOKEN`; clients use a bearer token for HTTP/WebSocket and the
+`auth <token>` command for Telnet. Request body and rate limits are configured
+with the `COGSERVER_*`, `PAPHOS_*`, and `GALATEA_*` environment variables
+documented by the server constructors.
+
+Before deployment, run:
+
+```bash
+./scripts/verify.sh all
+```
+
 This guide provides comprehensive instructions for deploying CrystalCog to production environments.
 
 ## Overview

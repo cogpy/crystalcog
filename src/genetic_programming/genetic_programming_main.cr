@@ -13,7 +13,7 @@
 # - MOSES-compatible interface
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./program_tree"
 require "./operators"
 require "./fitness"
@@ -32,8 +32,8 @@ module GeneticProgramming
 
   # Quick synthesis API - synthesize a boolean function from examples
   def self.synthesize_boolean(inputs : Array(Array(Bool)),
-                               outputs : Array(Bool),
-                               config : GPConfig = GPConfig.new) : SynthesisResult
+                              outputs : Array(Bool),
+                              config : GPConfig = GPConfig.new) : SynthesisResult
     if inputs.empty?
       return SynthesisResult.new(error_message: "No input examples provided")
     end
@@ -47,8 +47,8 @@ module GeneticProgramming
 
   # Quick synthesis API - synthesize a regression function from data
   def self.synthesize_regression(x_data : Array(Array(Float64)),
-                                  y_data : Array(Float64),
-                                  config : GPConfig = GPConfig.new) : SynthesisResult
+                                 y_data : Array(Float64),
+                                 config : GPConfig = GPConfig.new) : SynthesisResult
     if x_data.empty?
       return SynthesisResult.new(error_message: "No data points provided")
     end
@@ -60,7 +60,7 @@ module GeneticProgramming
 
   # Quick synthesis API - general purpose synthesis from specification
   def self.synthesize(spec : SynthesisSpec,
-                       config : GPConfig = GPConfig.new) : SynthesisResult
+                      config : GPConfig = GPConfig.new) : SynthesisResult
     synth = ProgramSynthesizer.new(config)
     synth.synthesize(spec)
   end
@@ -147,8 +147,8 @@ module GeneticProgramming
 
   # Store synthesis result in AtomSpace
   def self.store_result(result : SynthesisResult,
-                         atomspace : AtomSpace::AtomSpace,
-                         name : String = "synthesized_program") : AtomSpace::Atom?
+                        atomspace : AtomSpace::AtomSpace,
+                        name : String = "synthesized_program") : AtomSpace::Atom?
     return nil unless result.success && result.program
 
     program = result.program.not_nil!

@@ -95,6 +95,66 @@ module Production
     end
   end
 
+  # Reusable HTTP request policy for CrystalCog servers. Authentication is
+  # disabled only when no token is configured; network-facing entry points can
+  # require callers to supply one while local development stays ergonomic.
+  class RequestGuard
+    getter max_body_bytes : Int64
+
+    def initialize(@auth_token : String? = nil, @max_body_bytes : Int64 = 1_048_576_i64,
+                   @capacity : Float64 = 120.0, @refill : Float64 = 30.0)
+      raise ProductionException.new("max_body_bytes must be > 0") if @max_body_bytes <= 0
+      @limiter = KeyedRateLimiter.new(@capacity, @refill)
+    end
+
+    def authentication_required? : Bool
+      !@auth_token.nil?
+    end
+
+    def authenticate(header_or_token : String?) : Bool
+      return true unless expected = @auth_token
+      provided = self.class.token_from(header_or_token)
+      !provided.nil? && provided == expected
+    end
+
+    def allow?(key : String) : Bool
+      @limiter.allow?(key)
+    end
+
+    def body_too_large?(content_length : String?, transfer_encoding : String? = nil) : Bool
+      return true if transfer_encoding.try(&.downcase.split(',').any? { |v| v.strip == "chunked" })
+      return false unless content_length
+      length = content_length.to_i64?
+      !length.nil? && length > @max_body_bytes
+    end
+
+    def self.token_from(value : String?) : String?
+      return if value.nil?
+      if match = value.match(/\A\s*Bearer\s+(.+?)\s*\z/i)
+        match[1]
+      else
+        value.strip.presence
+      end
+    end
+  end
+
+  def self.production_environment? : Bool
+    %w(production prod).includes?((ENV["CRYSTALCOG_ENV"]? || ENV["APP_ENV"]? || "").downcase)
+  end
+
+  def self.secret_from_env(name : String, min_bytes : Int32 = 32) : String
+    configured = ENV[name]?.try(&.strip)
+    if configured && configured.bytesize >= min_bytes
+      configured
+    elsif configured && !configured.empty?
+      raise ProductionException.new("#{name} must contain at least #{min_bytes} bytes")
+    elsif production_environment?
+      raise ProductionException.new("#{name} is required in production")
+    else
+      Random::Secure.hex(min_bytes)
+    end
+  end
+
   # In-process metrics registry (Prometheus text exposition subset)
   class MetricsRegistry
     @counters : Hash(String, Float64)

@@ -1,26 +1,6 @@
 name: Comprehensive Crystal CI/CD
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-      - cryscog
-    paths:
-      - 'src/**'
-      - 'spec/**'
-      - 'shard.yml'
-      - '.github/workflows/crystal-comprehensive-ci.yml'
-  pull_request:
-    branches:
-      - main
-      - develop
-      - cryscog
-    paths:
-      - 'src/**'
-      - 'spec/**'
-      - 'shard.yml'
-      - '.github/workflows/crystal-comprehensive-ci.yml'
   schedule:
     # Run nightly tests at 2 AM UTC
     - cron: '0 2 * * *'

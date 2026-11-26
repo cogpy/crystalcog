@@ -98,7 +98,8 @@ help:
 .PHONY: setup
 setup:
 	@echo "$(BLUE)[INFO]$(NC) Setting up dependencies..."
-	@./scripts/build-monorepo.sh --setup-only
+	@shards install --frozen
+	@shards check
 
 # Setup development environment
 .PHONY: dev-env
@@ -109,35 +110,28 @@ dev-env:
 # Configure CMake
 .PHONY: configure
 configure:
-	@echo "$(BLUE)[INFO]$(NC) Configuring CMake..."
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake .. \
-		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DBUILD_SHARED_LIBS=ON \
-		-DCMAKE_CXX_STANDARD=17 \
-		-DCMAKE_CXX_STANDARD_REQUIRED=ON
+	@echo "$(BLUE)[INFO]$(NC) Crystal targets are configured by shard.yml"
+	@shards check
 
 # Build all components
 .PHONY: build
 build: configure
 	@echo "$(BLUE)[INFO]$(NC) Building all components..."
-	@cd $(BUILD_DIR) && make -j$(JOBS)
+	@shards build --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Build complete"
 
 # Build core components only
 .PHONY: core
 core: configure
 	@echo "$(BLUE)[INFO]$(NC) Building core components..."
-	@cd $(BUILD_DIR) && make cogutil atomspace attention ure pln link-grammar cogserver -j$(JOBS)
+	@shards build crystalcog cogserver cogshell atomspace_bin opencog_bin pln_bin ure_bin attention_bin
 	@echo "$(GREEN)[SUCCESS]$(NC) Core build complete"
 
 # Build extended components
 .PHONY: extended
 extended: core
 	@echo "$(BLUE)[INFO]$(NC) Building extended components..."
-	@cd $(BUILD_DIR) && make -j$(JOBS)
+	@shards build --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Extended build complete"
 
 # Run tests
@@ -147,9 +141,13 @@ ifeq ($(SKIP_TESTS),true)
 	@echo "$(YELLOW)[WARNING]$(NC) Skipping tests as requested"
 else
 	@echo "$(BLUE)[INFO]$(NC) Running tests..."
-	@cd $(BUILD_DIR) && ctest --output-on-failure -j$(JOBS)
+	@crystal spec --stats -v --error-trace --no-color
 	@echo "$(GREEN)[SUCCESS]$(NC) Tests complete"
 endif
+
+.PHONY: verify
+verify:
+	@./scripts/verify.sh all
 
 # Install components
 .PHONY: install

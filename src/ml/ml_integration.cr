@@ -9,7 +9,7 @@
 # - Differentiable Neural Computers: https://arxiv.org/abs/1610.06258
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module ML
   VERSION = "0.1.0"

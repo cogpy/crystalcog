@@ -5,7 +5,7 @@
 # stylistic adaptation.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module NLP
   module Advanced
@@ -44,21 +44,21 @@ module NLP
 
       def initialize
         @gazetteer = {
-          "john"       => EntityType::PERSON,
-          "mary"       => EntityType::PERSON,
-          "alice"      => EntityType::PERSON,
-          "bob"        => EntityType::PERSON,
-          "google"     => EntityType::ORGANIZATION,
-          "microsoft"  => EntityType::ORGANIZATION,
-          "opencog"    => EntityType::ORGANIZATION,
-          "london"     => EntityType::LOCATION,
-          "paris"      => EntityType::LOCATION,
-          "new york"   => EntityType::LOCATION,
-          "tokyo"      => EntityType::LOCATION,
-          "monday"     => EntityType::DATE,
-          "tuesday"    => EntityType::DATE,
-          "january"    => EntityType::DATE,
-          "february"   => EntityType::DATE,
+          "john"      => EntityType::PERSON,
+          "mary"      => EntityType::PERSON,
+          "alice"     => EntityType::PERSON,
+          "bob"       => EntityType::PERSON,
+          "google"    => EntityType::ORGANIZATION,
+          "microsoft" => EntityType::ORGANIZATION,
+          "opencog"   => EntityType::ORGANIZATION,
+          "london"    => EntityType::LOCATION,
+          "paris"     => EntityType::LOCATION,
+          "new york"  => EntityType::LOCATION,
+          "tokyo"     => EntityType::LOCATION,
+          "monday"    => EntityType::DATE,
+          "tuesday"   => EntityType::DATE,
+          "january"   => EntityType::DATE,
+          "february"  => EntityType::DATE,
         } of String => EntityType
 
         @patterns = [
@@ -457,15 +457,15 @@ module NLP
       } of String => String
 
       CASUAL_MAP = {
-        "cannot"      => "can't",
-        "will not"    => "won't",
-        "do not"      => "don't",
-        "is not"      => "isn't",
-        "children"    => "kids",
-        "therefore"   => "so",
-        "however"     => "but",
-        "utilize"     => "use",
-        "assist"      => "help",
+        "cannot"    => "can't",
+        "will not"  => "won't",
+        "do not"    => "don't",
+        "is not"    => "isn't",
+        "children"  => "kids",
+        "therefore" => "so",
+        "however"   => "but",
+        "utilize"   => "use",
+        "assist"    => "help",
       } of String => String
 
       TECHNICAL_MAP = {
@@ -478,11 +478,11 @@ module NLP
       } of String => String
 
       SIMPLE_MAP = {
-        "utilize"     => "use",
-        "facilitate"  => "help",
-        "demonstrate" => "show",
-        "initialize"  => "start",
-        "terminate"   => "end",
+        "utilize"       => "use",
+        "facilitate"    => "help",
+        "demonstrate"   => "show",
+        "initialize"    => "start",
+        "terminate"     => "end",
         "approximately" => "about",
         "subsequently"  => "then",
       } of String => String

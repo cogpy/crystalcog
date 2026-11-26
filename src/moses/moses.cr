@@ -5,7 +5,7 @@
 # techniques to evolve programs that fit given datasets or solve problems.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./types"
 require "./scoring"
 require "./representation"

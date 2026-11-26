@@ -4,7 +4,7 @@
 # architecture search, and cognitive plasticity — with guardrails.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module SelfModification
   VERSION = "0.1.0"

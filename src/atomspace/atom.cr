@@ -4,7 +4,7 @@
 # Atoms are the fundamental units of knowledge representation in OpenCog.
 
 require "./truthvalue"
-require "../cogutil/cogutil"
+require "../cogutil/logger"
 
 module AtomSpace
   # Type system for atoms

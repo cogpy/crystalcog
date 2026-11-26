@@ -2,7 +2,7 @@
 # This implements the main OpenCog reasoning components
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../pln/pln"
 require "../ure/ure"
 require "./query_language"

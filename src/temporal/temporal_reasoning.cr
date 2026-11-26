@@ -8,7 +8,7 @@
 # - Event Calculus: https://en.wikipedia.org/wiki/Event_calculus
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module TemporalReasoning
   VERSION = "0.1.0"

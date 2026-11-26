@@ -44,6 +44,9 @@ targets:
     
   atomspace_bin:
     main: src/atomspace/atomspace.cr
+
+  atomspace_core:
+    main: src/atomspace/atomspace_core.cr
     
   opencog_bin:
     main: src/opencog/opencog.cr

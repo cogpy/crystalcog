@@ -9,7 +9,7 @@
 # - Stanford Dependencies: https://nlp.stanford.edu/software/dependencies_manual.pdf
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./link_grammar"
 
 module NLP

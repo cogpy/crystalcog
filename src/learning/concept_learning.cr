@@ -8,7 +8,7 @@
 # - Version Space Learning: Mitchell, 1997
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Learning
   module ConceptLearning

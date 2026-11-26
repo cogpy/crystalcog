@@ -12,6 +12,7 @@
 
 require "./atom"
 require "./truthvalue"
+require "./atomspace"
 require "./scheme_storage_parser"
 require "./atom_wire"
 require "../cogutil/cogutil"
@@ -668,195 +669,205 @@ module AtomSpace
   # SQLite-based storage implementation with connection pooling
   # Only available when DISABLE_SQLITE3 is not set
   {% unless env("DISABLE_SQLITE3") == "1" %}
-  class SQLiteStorageNode < StorageNode
-    @db_path : String
-    @db : DB::Database?
-    @pool : ConnectionPool?
-    @connected : Bool = false
-    @use_pool : Bool
-    @pool_size : Int32
+    class SQLiteStorageNode < StorageNode
+      @db_path : String
+      @db : DB::Database?
+      @pool : ConnectionPool?
+      @connected : Bool = false
+      @use_pool : Bool
+      @pool_size : Int32
 
-    def initialize(name : String, @db_path : String, @use_pool : Bool = true, @pool_size : Int32 = 10)
-      super(name)
-      log_info("SQLiteStorageNode created for: #{@db_path} (pool: #{@use_pool})")
-    end
-
-    def open : Bool
-      return true if @connected
-
-      begin
-        # Ensure directory exists
-        dir = File.dirname(@db_path)
-        Dir.mkdir_p(dir) unless Dir.exists?(dir)
-
-        if @use_pool
-          # Use connection pool for better concurrency
-          @pool = ConnectionPool.new("sqlite3:#{@db_path}", @pool_size)
-          # Keep one connection for compatibility
-          @db = DB.open("sqlite3:#{@db_path}")
-        else
-          # Single connection mode
-          @db = DB.open("sqlite3:#{@db_path}")
-        end
-
-        create_tables
-
-        @connected = true
-        log_info("Opened SQLite storage: #{@db_path}")
-        true
-      rescue ex
-        log_error("Failed to open SQLite storage: #{ex.message}")
-        false
+      def initialize(name : String, @db_path : String, @use_pool : Bool = true, @pool_size : Int32 = 10)
+        super(name)
+        log_info("SQLiteStorageNode created for: #{@db_path} (pool: #{@use_pool})")
       end
-    end
 
-    def close : Bool
-      if @pool
-        @pool.try(&.close)
-        @pool = nil
-      end
-      if @db
-        @db.try(&.close)
-        @db = nil
-      end
-      @connected = false
-      log_info("Closed SQLite storage: #{@db_path}")
-      true
-    end
+      def open : Bool
+        return true if @connected
 
-    def connected? : Bool
-      @connected
-    end
+        begin
+          # Ensure directory exists
+          dir = File.dirname(@db_path)
+          Dir.mkdir_p(dir) unless Dir.exists?(dir)
 
-    def store_atom(atom : Atom) : Bool
-      return false unless @connected || !@db
-
-      begin
-        db = @db.not_nil!
-
-        case atom
-        when Node
-          db.exec(
-            "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
-            atom.handle.to_s, atom.type.to_s, atom.name,
-            atom.truth_value.strength, atom.truth_value.confidence
-          )
-        when Link
-          # Store the link
-          db.exec(
-            "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
-            atom.handle.to_s, atom.type.to_s, "",
-            atom.truth_value.strength, atom.truth_value.confidence
-          )
-
-          # Store outgoing relationships
-          db.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
-          atom.outgoing.each_with_index do |target, position|
-            db.exec(
-              "INSERT INTO outgoing (link_handle, target_handle, position) VALUES (?, ?, ?)",
-              atom.handle.to_s, target.handle.to_s, position
-            )
+          if @use_pool
+            # Use connection pool for better concurrency
+            @pool = ConnectionPool.new("sqlite3:#{@db_path}", @pool_size)
+            # Keep one connection for compatibility
+            @db = DB.open("sqlite3:#{@db_path}")
+          else
+            # Single connection mode
+            @db = DB.open("sqlite3:#{@db_path}")
           end
+
+          create_tables
+
+          @connected = true
+          log_info("Opened SQLite storage: #{@db_path}")
+          true
+        rescue ex
+          log_error("Failed to open SQLite storage: #{ex.message}")
+          false
         end
-
-        log_debug("Stored atom in SQLite: #{atom}")
-        true
-      rescue ex
-        log_error("Failed to store atom in SQLite: #{ex.message}")
-        false
       end
-    end
 
-    def fetch_atom(handle : Handle) : Atom?
-      return nil unless @connected || !@db
+      def close : Bool
+        if @pool
+          @pool.try(&.close)
+          @pool = nil
+        end
+        if @db
+          @db.try(&.close)
+          @db = nil
+        end
+        @connected = false
+        log_info("Closed SQLite storage: #{@db_path}")
+        true
+      end
 
-      begin
-        db = @db.not_nil!
+      def connected? : Bool
+        @connected
+      end
 
-        # Get atom data
-        db.query("SELECT type, name, truth_strength, truth_confidence FROM atoms WHERE handle = ?", handle.to_s) do |rs|
-          if rs.move_next
-            type = AtomType.parse(rs.read(String))
-            name = rs.read(String)
-            strength = rs.read(Float64)
-            confidence = rs.read(Float64)
-            tv = SimpleTruthValue.new(strength, confidence)
+      def store_atom(atom : Atom) : Bool
+        return false unless @connected || !@db
 
-            if type.node?
-              return Node.new(type, name, tv)
-            else
-              # Get outgoing atoms for links
-              outgoing = [] of Atom
-              db.query("SELECT target_handle FROM outgoing WHERE link_handle = ? ORDER BY position", handle.to_s) do |out_rs|
-                while out_rs.move_next
-                  target_handle = Handle.new(out_rs.read(String))
-                  target_atom = fetch_atom(target_handle)
-                  outgoing << target_atom if target_atom
-                end
-              end
-              return Link.new(type, outgoing, tv)
+        begin
+          db = @db.not_nil!
+
+          case atom
+          when Node
+            db.exec(
+              "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
+              atom.handle.to_s, atom.type.to_s, atom.name,
+              atom.truth_value.strength, atom.truth_value.confidence
+            )
+          when Link
+            # Store the link
+            db.exec(
+              "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
+              atom.handle.to_s, atom.type.to_s, "",
+              atom.truth_value.strength, atom.truth_value.confidence
+            )
+
+            # Store outgoing relationships
+            db.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
+            atom.outgoing.each_with_index do |target, position|
+              db.exec(
+                "INSERT INTO outgoing (link_handle, target_handle, position) VALUES (?, ?, ?)",
+                atom.handle.to_s, target.handle.to_s, position
+              )
             end
           end
+
+          log_debug("Stored atom in SQLite: #{atom}")
+          true
+        rescue ex
+          log_error("Failed to store atom in SQLite: #{ex.message}")
+          false
         end
-
-        nil
-      rescue ex
-        log_error("Failed to fetch atom from SQLite: #{ex.message}")
-        nil
       end
-    end
 
-    def remove_atom(atom : Atom) : Bool
-      return false unless @connected || !@db
+      def fetch_atom(handle : Handle) : Atom?
+        return nil unless @connected || !@db
 
-      begin
-        db = @db.not_nil!
+        begin
+          db = @db.not_nil!
 
-        # Remove outgoing relationships if it's a link
-        db.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
+          # Get atom data
+          db.query("SELECT type, name, truth_strength, truth_confidence FROM atoms WHERE handle = ?", handle.to_s) do |rs|
+            if rs.move_next
+              type = AtomType.parse(rs.read(String))
+              name = rs.read(String)
+              strength = rs.read(Float64)
+              confidence = rs.read(Float64)
+              tv = SimpleTruthValue.new(strength, confidence)
 
-        # Remove the atom
-        db.exec("DELETE FROM atoms WHERE handle = ?", atom.handle.to_s)
+              if type.node?
+                return Node.new(type, name, tv)
+              else
+                # Get outgoing atoms for links
+                outgoing = [] of Atom
+                db.query("SELECT target_handle FROM outgoing WHERE link_handle = ? ORDER BY position", handle.to_s) do |out_rs|
+                  while out_rs.move_next
+                    target_handle = Handle.new(out_rs.read(String))
+                    target_atom = fetch_atom(target_handle)
+                    outgoing << target_atom if target_atom
+                  end
+                end
+                return Link.new(type, outgoing, tv)
+              end
+            end
+          end
 
-        log_debug("Removed atom from SQLite: #{atom}")
-        true
-      rescue ex
-        log_error("Failed to remove atom from SQLite: #{ex.message}")
-        false
-      end
-    end
-
-    def store_atomspace(atomspace : AtomSpace) : Bool
-      return false unless @connected
-
-      begin
-        db = @db.not_nil!
-
-        # Clear existing data
-        db.exec("DELETE FROM outgoing")
-        db.exec("DELETE FROM atoms")
-
-        # Store all atoms
-        atomspace.get_all_atoms.each do |atom|
-          store_atom(atom)
+          nil
+        rescue ex
+          log_error("Failed to fetch atom from SQLite: #{ex.message}")
+          nil
         end
-
-        log_info("Stored AtomSpace (#{atomspace.size} atoms) to SQLite: #{@db_path}")
-        true
-      rescue ex
-        log_error("Failed to store AtomSpace to SQLite: #{ex.message}")
-        false
       end
-    end
 
-    # Batch store with transaction support for better performance
-    def store_atoms_batch(atoms : Array(Atom)) : Bool
-      return false unless @connected
+      def remove_atom(atom : Atom) : Bool
+        return false unless @connected || !@db
 
-      begin
-        if @use_pool && @pool
-          # Use connection from pool
-          @pool.not_nil!.with_connection do |db|
+        begin
+          db = @db.not_nil!
+
+          # Remove outgoing relationships if it's a link
+          db.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
+
+          # Remove the atom
+          db.exec("DELETE FROM atoms WHERE handle = ?", atom.handle.to_s)
+
+          log_debug("Removed atom from SQLite: #{atom}")
+          true
+        rescue ex
+          log_error("Failed to remove atom from SQLite: #{ex.message}")
+          false
+        end
+      end
+
+      def store_atomspace(atomspace : AtomSpace) : Bool
+        return false unless @connected
+
+        begin
+          db = @db.not_nil!
+
+          # Clear existing data
+          db.exec("DELETE FROM outgoing")
+          db.exec("DELETE FROM atoms")
+
+          # Store all atoms
+          atomspace.get_all_atoms.each do |atom|
+            store_atom(atom)
+          end
+
+          log_info("Stored AtomSpace (#{atomspace.size} atoms) to SQLite: #{@db_path}")
+          true
+        rescue ex
+          log_error("Failed to store AtomSpace to SQLite: #{ex.message}")
+          false
+        end
+      end
+
+      # Batch store with transaction support for better performance
+      def store_atoms_batch(atoms : Array(Atom)) : Bool
+        return false unless @connected
+
+        begin
+          if @use_pool && @pool
+            # Use connection from pool
+            @pool.not_nil!.with_connection do |db|
+              db.transaction do |tx|
+                conn = tx.connection
+                atoms.each do |atom|
+                  store_atom_in_connection(atom, conn)
+                end
+              end
+            end
+          else
+            # Use single connection with transaction
+            db = @db.not_nil!
             db.transaction do |tx|
               conn = tx.connection
               atoms.each do |atom|
@@ -864,118 +875,108 @@ module AtomSpace
               end
             end
           end
-        else
-          # Use single connection with transaction
-          db = @db.not_nil!
-          db.transaction do |tx|
-            conn = tx.connection
-            atoms.each do |atom|
-              store_atom_in_connection(atom, conn)
-            end
-          end
+
+          log_info("Batch stored #{atoms.size} atoms to SQLite: #{@db_path}")
+          true
+        rescue ex
+          log_error("Failed to batch store atoms to SQLite: #{ex.message}")
+          false
         end
-
-        log_info("Batch stored #{atoms.size} atoms to SQLite: #{@db_path}")
-        true
-      rescue ex
-        log_error("Failed to batch store atoms to SQLite: #{ex.message}")
-        false
       end
-    end
 
-    # Helper method to store atom using a specific connection
-    private def store_atom_in_connection(atom : Atom, conn : DB::Connection) : Bool
-      case atom
-      when Node
-        conn.exec(
-          "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
-          atom.handle.to_s, atom.type.to_s, atom.name,
-          atom.truth_value.strength, atom.truth_value.confidence
-        )
-      when Link
-        # Store the link
-        conn.exec(
-          "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
-          atom.handle.to_s, atom.type.to_s, "",
-          atom.truth_value.strength, atom.truth_value.confidence
-        )
-
-        # Store outgoing relationships
-        conn.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
-        atom.outgoing.each_with_index do |target, position|
+      # Helper method to store atom using a specific connection
+      private def store_atom_in_connection(atom : Atom, conn : DB::Connection) : Bool
+        case atom
+        when Node
           conn.exec(
-            "INSERT INTO outgoing (link_handle, target_handle, position) VALUES (?, ?, ?)",
-            atom.handle.to_s, target.handle.to_s, position
+            "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
+            atom.handle.to_s, atom.type.to_s, atom.name,
+            atom.truth_value.strength, atom.truth_value.confidence
           )
-        end
-      end
-      true
-    rescue ex
-      log_error("Failed to store atom in connection: #{ex.message}")
-      false
-    end
+        when Link
+          # Store the link
+          conn.exec(
+            "INSERT OR REPLACE INTO atoms (handle, type, name, truth_strength, truth_confidence) VALUES (?, ?, ?, ?, ?)",
+            atom.handle.to_s, atom.type.to_s, "",
+            atom.truth_value.strength, atom.truth_value.confidence
+          )
 
-    def load_atomspace(atomspace : AtomSpace) : Bool
-      return false unless @connected || !@db
-
-      begin
-        db = @db.not_nil!
-        count = 0
-
-        # Load all atoms (nodes first, then links)
-        db.query("SELECT handle FROM atoms ORDER BY CASE WHEN name = '' THEN 1 ELSE 0 END") do |rs|
-          while rs.move_next
-            handle = Handle.new(rs.read(String))
-            atom = fetch_atom(handle)
-            if atom
-              atomspace.add_atom(atom)
-              count += 1
-            end
+          # Store outgoing relationships
+          conn.exec("DELETE FROM outgoing WHERE link_handle = ?", atom.handle.to_s)
+          atom.outgoing.each_with_index do |target, position|
+            conn.exec(
+              "INSERT INTO outgoing (link_handle, target_handle, position) VALUES (?, ?, ?)",
+              atom.handle.to_s, target.handle.to_s, position
+            )
           end
         end
-
-        log_info("Loaded #{count} atoms from SQLite: #{@db_path}")
         true
       rescue ex
-        log_error("Failed to load AtomSpace from SQLite: #{ex.message}")
+        log_error("Failed to store atom in connection: #{ex.message}")
         false
       end
-    end
 
-    def get_stats : Hash(String, String | Int32 | Int64)
-      stats = Hash(String, String | Int32 | Int64).new
-      stats["type"] = "SQLiteStorage"
-      stats["path"] = @db_path
-      stats["connected"] = @connected ? "true" : "false"
+      def load_atomspace(atomspace : AtomSpace) : Bool
+        return false unless @connected || !@db
 
-      if @connected && @db
         begin
           db = @db.not_nil!
-          db.query("SELECT COUNT(*) FROM atoms") do |rs|
-            stats["atom_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+          count = 0
+
+          # Load all atoms (nodes first, then links)
+          db.query("SELECT handle FROM atoms ORDER BY CASE WHEN name = '' THEN 1 ELSE 0 END") do |rs|
+            while rs.move_next
+              handle = Handle.new(rs.read(String))
+              atom = fetch_atom(handle)
+              if atom
+                atomspace.add_atom(atom)
+                count += 1
+              end
+            end
           end
-          db.query("SELECT COUNT(*) FROM outgoing") do |rs|
-            stats["link_count"] = rs.move_next ? rs.read(Int64) : 0_i64
-          end
+
+          log_info("Loaded #{count} atoms from SQLite: #{@db_path}")
+          true
         rescue ex
-          log_error("Failed to get SQLite stats: #{ex.message}")
+          log_error("Failed to load AtomSpace from SQLite: #{ex.message}")
+          false
         end
       end
 
-      if File.exists?(@db_path)
-        stats["file_size"] = File.size(@db_path)
+      def get_stats : Hash(String, String | Int32 | Int64)
+        stats = Hash(String, String | Int32 | Int64).new
+        stats["type"] = "SQLiteStorage"
+        stats["path"] = @db_path
+        stats["connected"] = @connected ? "true" : "false"
+
+        if @connected && @db
+          begin
+            db = @db.not_nil!
+            db.query("SELECT COUNT(*) FROM atoms") do |rs|
+              stats["atom_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+            end
+            db.query("SELECT COUNT(*) FROM outgoing") do |rs|
+              stats["link_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+            end
+          rescue ex
+            log_error("Failed to get SQLite stats: #{ex.message}")
+          end
+        end
+
+        if File.exists?(@db_path)
+          stats["file_size"] = File.size(@db_path)
+        end
+
+        stats
       end
 
-      stats
-    end
+      private def create_tables
+        return unless @db
 
-    private def create_tables
-      return unless @db
+        db = @db.not_nil!
 
-      db = @db.not_nil!
-
-      # Create atoms table
-      db.exec <<-SQL
+        # Create atoms table
+        db.exec <<-SQL
         CREATE TABLE IF NOT EXISTS atoms (
           handle TEXT PRIMARY KEY,
           type TEXT NOT NULL,
@@ -986,8 +987,8 @@ module AtomSpace
         )
       SQL
 
-      # Create outgoing relationships table
-      db.exec <<-SQL
+        # Create outgoing relationships table
+        db.exec <<-SQL
         CREATE TABLE IF NOT EXISTS outgoing (
           link_handle TEXT NOT NULL,
           target_handle TEXT NOT NULL,
@@ -998,61 +999,61 @@ module AtomSpace
         )
       SQL
 
-      # Create indexes for performance
-      db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_type ON atoms(type)"
-      db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_name ON atoms(name)"
-      db.exec "CREATE INDEX IF NOT EXISTS idx_outgoing_target ON outgoing(target_handle)"
+        # Create indexes for performance
+        db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_type ON atoms(type)"
+        db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_name ON atoms(name)"
+        db.exec "CREATE INDEX IF NOT EXISTS idx_outgoing_target ON outgoing(target_handle)"
 
-      log_debug("Created SQLite tables and indexes")
+        log_debug("Created SQLite tables and indexes")
+      end
     end
-  end
   {% else %}
-  # SQLite3 is disabled - provide stub implementation
-  class SQLiteStorageNode < StorageNode
-    @db_path : String
-    @connected : Bool = false
+    # SQLite3 is disabled - provide stub implementation
+    class SQLiteStorageNode < StorageNode
+      @db_path : String
+      @connected : Bool = false
 
-    def initialize(name : String, @db_path : String, use_pool : Bool = true, pool_size : Int32 = 10)
-      super(name)
-      CogUtil::Logger.warn("SQLiteStorageNode: SQLite3 support is disabled. Set DISABLE_SQLITE3=0 and rebuild.")
-    end
+      def initialize(name : String, @db_path : String, use_pool : Bool = true, pool_size : Int32 = 10)
+        super(name)
+        CogUtil::Logger.warn("SQLiteStorageNode: SQLite3 support is disabled. Set DISABLE_SQLITE3=0 and rebuild.")
+      end
 
-    def open : Bool
-      raise "SQLite3 support is disabled. Install libsqlite3-dev and rebuild without DISABLE_SQLITE3=1"
-    end
+      def open : Bool
+        raise "SQLite3 support is disabled. Install libsqlite3-dev and rebuild without DISABLE_SQLITE3=1"
+      end
 
-    def close : Bool
-      true
-    end
+      def close : Bool
+        true
+      end
 
-    def connected? : Bool
-      false
-    end
+      def connected? : Bool
+        false
+      end
 
-    def store_atom(atom : Atom) : Bool
-      raise "SQLite3 support is disabled"
-    end
+      def store_atom(atom : Atom) : Bool
+        raise "SQLite3 support is disabled"
+      end
 
-    def fetch_atom(handle : Handle) : Atom?
-      raise "SQLite3 support is disabled"
-    end
+      def fetch_atom(handle : Handle) : Atom?
+        raise "SQLite3 support is disabled"
+      end
 
-    def remove_atom(atom : Atom) : Bool
-      raise "SQLite3 support is disabled"
-    end
+      def remove_atom(atom : Atom) : Bool
+        raise "SQLite3 support is disabled"
+      end
 
-    def store_atomspace(atomspace : AtomSpace) : Bool
-      raise "SQLite3 support is disabled"
-    end
+      def store_atomspace(atomspace : AtomSpace) : Bool
+        raise "SQLite3 support is disabled"
+      end
 
-    def load_atomspace(atomspace : AtomSpace) : Bool
-      raise "SQLite3 support is disabled"
-    end
+      def load_atomspace(atomspace : AtomSpace) : Bool
+        raise "SQLite3 support is disabled"
+      end
 
-    def get_stats : Hash(String, String | Int32 | Int64)
-      Hash(String, String | Int32 | Int64){"type" => "SQLiteStorage", "status" => "disabled"}
+      def get_stats : Hash(String, String | Int32 | Int64)
+        Hash(String, String | Int32 | Int64){"type" => "SQLiteStorage", "status" => "disabled"}
+      end
     end
-  end
   {% end %}
 
   # Network storage implementation (for CogServer communication)
@@ -1245,81 +1246,240 @@ module AtomSpace
   # PostgreSQL-based storage implementation with connection pooling
   # Only available when DISABLE_POSTGRES is not set
   {% unless env("DISABLE_POSTGRES") == "1" %}
-  class PostgresStorageNode < StorageNode
-    @connection_string : String
-    @db : DB::Database?
-    @pool : ConnectionPool?
-    @connected : Bool = false
-    @use_pool : Bool
-    @pool_size : Int32
+    class PostgresStorageNode < StorageNode
+      @connection_string : String
+      @db : DB::Database?
+      @pool : ConnectionPool?
+      @connected : Bool = false
+      @use_pool : Bool
+      @pool_size : Int32
 
-    def initialize(name : String, @connection_string : String, @use_pool : Bool = true, @pool_size : Int32 = 10)
-      super(name)
-      log_info("PostgresStorageNode created for: #{@connection_string} (pool: #{@use_pool})")
-    end
-
-    def open : Bool
-      return true if @connected
-
-      begin
-        if @use_pool
-          # Use connection pool for better concurrency
-          @pool = ConnectionPool.new("postgres://#{@connection_string}", @pool_size)
-          # Keep one connection for compatibility
-          @db = DB.open("postgres://#{@connection_string}")
-        else
-          # Single connection mode
-          @db = DB.open("postgres://#{@connection_string}")
-        end
-
-        create_tables
-        @connected = true
-        log_info("Opened PostgreSQL storage: #{@connection_string}")
-        true
-      rescue ex
-        log_error("Failed to open PostgreSQL connection: #{ex.message}")
-        false
+      def initialize(name : String, @connection_string : String, @use_pool : Bool = true, @pool_size : Int32 = 10)
+        super(name)
+        log_info("PostgresStorageNode created for: #{@connection_string} (pool: #{@use_pool})")
       end
-    end
 
-    def close : Bool
-      return true unless @connected
+      def open : Bool
+        return true if @connected
 
-      begin
-        if @pool
-          @pool.try(&.close)
-          @pool = nil
+        begin
+          if @use_pool
+            # Use connection pool for better concurrency
+            @pool = ConnectionPool.new("postgres://#{@connection_string}", @pool_size)
+            # Keep one connection for compatibility
+            @db = DB.open("postgres://#{@connection_string}")
+          else
+            # Single connection mode
+            @db = DB.open("postgres://#{@connection_string}")
+          end
+
+          create_tables
+          @connected = true
+          log_info("Opened PostgreSQL storage: #{@connection_string}")
+          true
+        rescue ex
+          log_error("Failed to open PostgreSQL connection: #{ex.message}")
+          false
         end
-        @db.try(&.close)
-        @db = nil
-        @connected = false
-        log_info("Closed PostgreSQL storage")
-        true
-      rescue ex
-        log_error("Failed to close PostgreSQL connection: #{ex.message}")
-        false
       end
-    end
 
-    def connected? : Bool
-      @connected
-    end
+      def close : Bool
+        return true unless @connected
 
-    def store_atom(atom : Atom) : Bool
-      return false unless @connected || !@db
+        begin
+          if @pool
+            @pool.try(&.close)
+            @pool = nil
+          end
+          @db.try(&.close)
+          @db = nil
+          @connected = false
+          log_info("Closed PostgreSQL storage")
+          true
+        rescue ex
+          log_error("Failed to close PostgreSQL connection: #{ex.message}")
+          false
+        end
+      end
 
-      begin
-        db = @db.not_nil!
+      def connected? : Bool
+        @connected
+      end
 
-        # Store the atom
-        tv = atom.truth_value
-        db.exec(
-          "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
+      def store_atom(atom : Atom) : Bool
+        return false unless @connected || !@db
+
+        begin
+          db = @db.not_nil!
+
+          # Store the atom
+          tv = atom.truth_value
+          db.exec(
+            "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (handle) DO UPDATE SET
            type = EXCLUDED.type, name = EXCLUDED.name,
            truth_strength = EXCLUDED.truth_strength,
            truth_confidence = EXCLUDED.truth_confidence",
+            atom.handle.to_s, atom.type.to_s,
+            atom.is_a?(Node) ? atom.name : "",
+            tv.strength, tv.confidence
+          )
+
+          # Store outgoing relationships for links
+          if atom.is_a?(Link)
+            # Remove existing outgoing relationships
+            db.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
+
+            # Add new outgoing relationships
+            atom.outgoing.each_with_index do |target, index|
+              db.exec(
+                "INSERT INTO outgoing (link_handle, target_handle, position) VALUES ($1, $2, $3)",
+                atom.handle.to_s, target.handle.to_s, index
+              )
+            end
+          end
+
+          log_debug("Stored atom in PostgreSQL: #{atom}")
+          true
+        rescue ex
+          log_error("Failed to store atom in PostgreSQL: #{ex.message}")
+          false
+        end
+      end
+
+      def fetch_atom(handle : Handle) : Atom?
+        return nil unless @connected || !@db
+
+        begin
+          db = @db.not_nil!
+
+          # Fetch atom basic info
+          db.query(
+            "SELECT type, name, truth_strength, truth_confidence FROM atoms WHERE handle = $1",
+            handle.to_s
+          ) do |rs|
+            if rs.move_next
+              type = AtomType.parse(rs.read(String))
+              name = rs.read(String)
+              strength = rs.read(Float64)
+              confidence = rs.read(Float64)
+              tv = SimpleTruthValue.new(strength, confidence)
+
+              if type.node?
+                return Node.new(type, name, tv)
+              else
+                # Fetch outgoing atoms for links
+                outgoing = [] of Atom
+                db.query(
+                  "SELECT target_handle FROM outgoing WHERE link_handle = $1 ORDER BY position",
+                  handle.to_s
+                ) do |out_rs|
+                  while out_rs.move_next
+                    target_handle = Handle.new(out_rs.read(String))
+                    target_atom = fetch_atom(target_handle)
+                    outgoing << target_atom if target_atom
+                  end
+                end
+                return Link.new(type, outgoing, tv)
+              end
+            end
+          end
+
+          nil
+        rescue ex
+          log_error("Failed to fetch atom from PostgreSQL: #{ex.message}")
+          nil
+        end
+      end
+
+      def remove_atom(atom : Atom) : Bool
+        return false unless @connected || !@db
+
+        begin
+          db = @db.not_nil!
+
+          # Remove outgoing relationships if it's a link
+          db.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
+
+          # Remove the atom
+          db.exec("DELETE FROM atoms WHERE handle = $1", atom.handle.to_s)
+
+          log_debug("Removed atom from PostgreSQL: #{atom}")
+          true
+        rescue ex
+          log_error("Failed to remove atom from PostgreSQL: #{ex.message}")
+          false
+        end
+      end
+
+      def store_atomspace(atomspace : AtomSpace) : Bool
+        return false unless @connected
+
+        begin
+          db = @db.not_nil!
+
+          # Clear existing data
+          db.exec("DELETE FROM outgoing")
+          db.exec("DELETE FROM atoms")
+
+          # Store all atoms
+          atomspace.get_all_atoms.each do |atom|
+            store_atom(atom)
+          end
+
+          log_info("Stored AtomSpace (#{atomspace.size} atoms) to PostgreSQL: #{@connection_string}")
+          true
+        rescue ex
+          log_error("Failed to store AtomSpace to PostgreSQL: #{ex.message}")
+          false
+        end
+      end
+
+      # Batch store with transaction support for better performance
+      def store_atoms_batch(atoms : Array(Atom)) : Bool
+        return false unless @connected
+
+        begin
+          if @use_pool && @pool
+            # Use connection from pool
+            @pool.not_nil!.with_connection do |db|
+              db.transaction do |tx|
+                conn = tx.connection
+                atoms.each do |atom|
+                  store_atom_in_connection(atom, conn)
+                end
+              end
+            end
+          else
+            # Use single connection with transaction
+            db = @db.not_nil!
+            db.transaction do |tx|
+              conn = tx.connection
+              atoms.each do |atom|
+                store_atom_in_connection(atom, conn)
+              end
+            end
+          end
+
+          log_info("Batch stored #{atoms.size} atoms to PostgreSQL: #{@connection_string}")
+          true
+        rescue ex
+          log_error("Failed to batch store atoms to PostgreSQL: #{ex.message}")
+          false
+        end
+      end
+
+      # Helper method to store atom using a specific connection
+      private def store_atom_in_connection(atom : Atom, conn : DB::Connection) : Bool
+        tv = atom.truth_value
+        conn.exec(
+          "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (handle) DO UPDATE SET
+         type = EXCLUDED.type, name = EXCLUDED.name,
+         truth_strength = EXCLUDED.truth_strength,
+         truth_confidence = EXCLUDED.truth_confidence",
           atom.handle.to_s, atom.type.to_s,
           atom.is_a?(Node) ? atom.name : "",
           tv.strength, tv.confidence
@@ -1328,236 +1488,77 @@ module AtomSpace
         # Store outgoing relationships for links
         if atom.is_a?(Link)
           # Remove existing outgoing relationships
-          db.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
+          conn.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
 
           # Add new outgoing relationships
           atom.outgoing.each_with_index do |target, index|
-            db.exec(
+            conn.exec(
               "INSERT INTO outgoing (link_handle, target_handle, position) VALUES ($1, $2, $3)",
               atom.handle.to_s, target.handle.to_s, index
             )
           end
         end
-
-        log_debug("Stored atom in PostgreSQL: #{atom}")
         true
       rescue ex
-        log_error("Failed to store atom in PostgreSQL: #{ex.message}")
+        log_error("Failed to store atom in connection: #{ex.message}")
         false
       end
-    end
 
-    def fetch_atom(handle : Handle) : Atom?
-      return nil unless @connected || !@db
+      def load_atomspace(atomspace : AtomSpace) : Bool
+        return false unless @connected || !@db
 
-      begin
-        db = @db.not_nil!
-
-        # Fetch atom basic info
-        db.query(
-          "SELECT type, name, truth_strength, truth_confidence FROM atoms WHERE handle = $1",
-          handle.to_s
-        ) do |rs|
-          if rs.move_next
-            type = AtomType.parse(rs.read(String))
-            name = rs.read(String)
-            strength = rs.read(Float64)
-            confidence = rs.read(Float64)
-            tv = SimpleTruthValue.new(strength, confidence)
-
-            if type.node?
-              return Node.new(type, name, tv)
-            else
-              # Fetch outgoing atoms for links
-              outgoing = [] of Atom
-              db.query(
-                "SELECT target_handle FROM outgoing WHERE link_handle = $1 ORDER BY position",
-                handle.to_s
-              ) do |out_rs|
-                while out_rs.move_next
-                  target_handle = Handle.new(out_rs.read(String))
-                  target_atom = fetch_atom(target_handle)
-                  outgoing << target_atom if target_atom
-                end
-              end
-              return Link.new(type, outgoing, tv)
-            end
-          end
-        end
-
-        nil
-      rescue ex
-        log_error("Failed to fetch atom from PostgreSQL: #{ex.message}")
-        nil
-      end
-    end
-
-    def remove_atom(atom : Atom) : Bool
-      return false unless @connected || !@db
-
-      begin
-        db = @db.not_nil!
-
-        # Remove outgoing relationships if it's a link
-        db.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
-
-        # Remove the atom
-        db.exec("DELETE FROM atoms WHERE handle = $1", atom.handle.to_s)
-
-        log_debug("Removed atom from PostgreSQL: #{atom}")
-        true
-      rescue ex
-        log_error("Failed to remove atom from PostgreSQL: #{ex.message}")
-        false
-      end
-    end
-
-    def store_atomspace(atomspace : AtomSpace) : Bool
-      return false unless @connected
-
-      begin
-        db = @db.not_nil!
-
-        # Clear existing data
-        db.exec("DELETE FROM outgoing")
-        db.exec("DELETE FROM atoms")
-
-        # Store all atoms
-        atomspace.get_all_atoms.each do |atom|
-          store_atom(atom)
-        end
-
-        log_info("Stored AtomSpace (#{atomspace.size} atoms) to PostgreSQL: #{@connection_string}")
-        true
-      rescue ex
-        log_error("Failed to store AtomSpace to PostgreSQL: #{ex.message}")
-        false
-      end
-    end
-
-    # Batch store with transaction support for better performance
-    def store_atoms_batch(atoms : Array(Atom)) : Bool
-      return false unless @connected
-
-      begin
-        if @use_pool && @pool
-          # Use connection from pool
-          @pool.not_nil!.with_connection do |db|
-            db.transaction do |tx|
-              conn = tx.connection
-              atoms.each do |atom|
-                store_atom_in_connection(atom, conn)
-              end
-            end
-          end
-        else
-          # Use single connection with transaction
-          db = @db.not_nil!
-          db.transaction do |tx|
-            conn = tx.connection
-            atoms.each do |atom|
-              store_atom_in_connection(atom, conn)
-            end
-          end
-        end
-
-        log_info("Batch stored #{atoms.size} atoms to PostgreSQL: #{@connection_string}")
-        true
-      rescue ex
-        log_error("Failed to batch store atoms to PostgreSQL: #{ex.message}")
-        false
-      end
-    end
-
-    # Helper method to store atom using a specific connection
-    private def store_atom_in_connection(atom : Atom, conn : DB::Connection) : Bool
-      tv = atom.truth_value
-      conn.exec(
-        "INSERT INTO atoms (handle, type, name, truth_strength, truth_confidence)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (handle) DO UPDATE SET
-         type = EXCLUDED.type, name = EXCLUDED.name,
-         truth_strength = EXCLUDED.truth_strength,
-         truth_confidence = EXCLUDED.truth_confidence",
-        atom.handle.to_s, atom.type.to_s,
-        atom.is_a?(Node) ? atom.name : "",
-        tv.strength, tv.confidence
-      )
-
-      # Store outgoing relationships for links
-      if atom.is_a?(Link)
-        # Remove existing outgoing relationships
-        conn.exec("DELETE FROM outgoing WHERE link_handle = $1", atom.handle.to_s)
-
-        # Add new outgoing relationships
-        atom.outgoing.each_with_index do |target, index|
-          conn.exec(
-            "INSERT INTO outgoing (link_handle, target_handle, position) VALUES ($1, $2, $3)",
-            atom.handle.to_s, target.handle.to_s, index
-          )
-        end
-      end
-      true
-    rescue ex
-      log_error("Failed to store atom in connection: #{ex.message}")
-      false
-    end
-
-    def load_atomspace(atomspace : AtomSpace) : Bool
-      return false unless @connected || !@db
-
-      begin
-        db = @db.not_nil!
-        count = 0
-
-        # Load all atoms (nodes first, then links)
-        db.query("SELECT handle FROM atoms ORDER BY CASE WHEN name = '' THEN 1 ELSE 0 END") do |rs|
-          while rs.move_next
-            handle = Handle.new(rs.read(String))
-            atom = fetch_atom(handle)
-            if atom
-              atomspace.add_atom(atom)
-              count += 1
-            end
-          end
-        end
-
-        log_info("Loaded #{count} atoms from PostgreSQL: #{@connection_string}")
-        true
-      rescue ex
-        log_error("Failed to load AtomSpace from PostgreSQL: #{ex.message}")
-        false
-      end
-    end
-
-    def get_stats : Hash(String, String | Int32 | Int64)
-      stats = Hash(String, String | Int32 | Int64).new
-      stats["type"] = "PostgreSQLStorage"
-      stats["connection_string"] = @connection_string
-      stats["connected"] = @connected ? "true" : "false"
-
-      if @connected && @db
         begin
           db = @db.not_nil!
-          db.query("SELECT COUNT(*) FROM atoms") do |rs|
-            stats["atom_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+          count = 0
+
+          # Load all atoms (nodes first, then links)
+          db.query("SELECT handle FROM atoms ORDER BY CASE WHEN name = '' THEN 1 ELSE 0 END") do |rs|
+            while rs.move_next
+              handle = Handle.new(rs.read(String))
+              atom = fetch_atom(handle)
+              if atom
+                atomspace.add_atom(atom)
+                count += 1
+              end
+            end
           end
-          db.query("SELECT COUNT(*) FROM outgoing") do |rs|
-            stats["outgoing_count"] = rs.move_next ? rs.read(Int64) : 0_i64
-          end
+
+          log_info("Loaded #{count} atoms from PostgreSQL: #{@connection_string}")
+          true
         rescue ex
-          log_error("Failed to get PostgreSQL stats: #{ex.message}")
+          log_error("Failed to load AtomSpace from PostgreSQL: #{ex.message}")
+          false
         end
       end
 
-      stats
-    end
+      def get_stats : Hash(String, String | Int32 | Int64)
+        stats = Hash(String, String | Int32 | Int64).new
+        stats["type"] = "PostgreSQLStorage"
+        stats["connection_string"] = @connection_string
+        stats["connected"] = @connected ? "true" : "false"
 
-    private def create_tables
-      db = @db.not_nil!
+        if @connected && @db
+          begin
+            db = @db.not_nil!
+            db.query("SELECT COUNT(*) FROM atoms") do |rs|
+              stats["atom_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+            end
+            db.query("SELECT COUNT(*) FROM outgoing") do |rs|
+              stats["outgoing_count"] = rs.move_next ? rs.read(Int64) : 0_i64
+            end
+          rescue ex
+            log_error("Failed to get PostgreSQL stats: #{ex.message}")
+          end
+        end
 
-      # Create atoms table
-      db.exec <<-SQL
+        stats
+      end
+
+      private def create_tables
+        db = @db.not_nil!
+
+        # Create atoms table
+        db.exec <<-SQL
         CREATE TABLE IF NOT EXISTS atoms (
           handle TEXT PRIMARY KEY,
           type TEXT NOT NULL,
@@ -1568,8 +1569,8 @@ module AtomSpace
         )
       SQL
 
-      # Create outgoing relationships table
-      db.exec <<-SQL
+        # Create outgoing relationships table
+        db.exec <<-SQL
         CREATE TABLE IF NOT EXISTS outgoing (
           link_handle TEXT NOT NULL,
           target_handle TEXT NOT NULL,
@@ -1580,61 +1581,61 @@ module AtomSpace
         )
       SQL
 
-      # Create indexes for performance
-      db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_type ON atoms(type)"
-      db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_name ON atoms(name)"
-      db.exec "CREATE INDEX IF NOT EXISTS idx_outgoing_target ON outgoing(target_handle)"
+        # Create indexes for performance
+        db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_type ON atoms(type)"
+        db.exec "CREATE INDEX IF NOT EXISTS idx_atoms_name ON atoms(name)"
+        db.exec "CREATE INDEX IF NOT EXISTS idx_outgoing_target ON outgoing(target_handle)"
 
-      log_debug("Created PostgreSQL tables and indexes")
+        log_debug("Created PostgreSQL tables and indexes")
+      end
     end
-  end
   {% else %}
-  # PostgreSQL is disabled - provide stub implementation
-  class PostgresStorageNode < StorageNode
-    @connection_string : String
-    @connected : Bool = false
+    # PostgreSQL is disabled - provide stub implementation
+    class PostgresStorageNode < StorageNode
+      @connection_string : String
+      @connected : Bool = false
 
-    def initialize(name : String, @connection_string : String, use_pool : Bool = true, pool_size : Int32 = 10)
-      super(name)
-      CogUtil::Logger.warn("PostgresStorageNode: PostgreSQL support is disabled. Set DISABLE_POSTGRES=0 and rebuild.")
-    end
+      def initialize(name : String, @connection_string : String, use_pool : Bool = true, pool_size : Int32 = 10)
+        super(name)
+        CogUtil::Logger.warn("PostgresStorageNode: PostgreSQL support is disabled. Set DISABLE_POSTGRES=0 and rebuild.")
+      end
 
-    def open : Bool
-      raise "PostgreSQL support is disabled. Install libpq-dev and rebuild without DISABLE_POSTGRES=1"
-    end
+      def open : Bool
+        raise "PostgreSQL support is disabled. Install libpq-dev and rebuild without DISABLE_POSTGRES=1"
+      end
 
-    def close : Bool
-      true
-    end
+      def close : Bool
+        true
+      end
 
-    def connected? : Bool
-      false
-    end
+      def connected? : Bool
+        false
+      end
 
-    def store_atom(atom : Atom) : Bool
-      raise "PostgreSQL support is disabled"
-    end
+      def store_atom(atom : Atom) : Bool
+        raise "PostgreSQL support is disabled"
+      end
 
-    def fetch_atom(handle : Handle) : Atom?
-      raise "PostgreSQL support is disabled"
-    end
+      def fetch_atom(handle : Handle) : Atom?
+        raise "PostgreSQL support is disabled"
+      end
 
-    def remove_atom(atom : Atom) : Bool
-      raise "PostgreSQL support is disabled"
-    end
+      def remove_atom(atom : Atom) : Bool
+        raise "PostgreSQL support is disabled"
+      end
 
-    def store_atomspace(atomspace : AtomSpace) : Bool
-      raise "PostgreSQL support is disabled"
-    end
+      def store_atomspace(atomspace : AtomSpace) : Bool
+        raise "PostgreSQL support is disabled"
+      end
 
-    def load_atomspace(atomspace : AtomSpace) : Bool
-      raise "PostgreSQL support is disabled"
-    end
+      def load_atomspace(atomspace : AtomSpace) : Bool
+        raise "PostgreSQL support is disabled"
+      end
 
-    def get_stats : Hash(String, String | Int32 | Int64)
-      Hash(String, String | Int32 | Int64){"type" => "PostgreSQLStorage", "status" => "disabled"}
+      def get_stats : Hash(String, String | Int32 | Int64)
+        Hash(String, String | Int32 | Int64){"type" => "PostgreSQLStorage", "status" => "disabled"}
+      end
     end
-  end
   {% end %}
 
   # RocksDB-based storage implementation
@@ -2121,10 +2122,10 @@ module AtomSpace
       data["attention"] = JSON::Any.new(state.attention)
       data["meta_level"] = JSON::Any.new(state.meta_level.to_i64)
       data["cognitive_operation"] = if op = state.cognitive_operation
-                                     JSON::Any.new(op)
-                                   else
-                                     JSON::Any.new(nil)
-                                   end
+                                      JSON::Any.new(op)
+                                    else
+                                      JSON::Any.new(nil)
+                                    end
       data["timestamp"] = JSON::Any.new(state.timestamp.to_unix)
       data["atomspace_size"] = JSON::Any.new(state.atomspace.size.to_i64)
       data

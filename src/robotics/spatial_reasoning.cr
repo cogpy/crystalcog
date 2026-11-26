@@ -5,7 +5,7 @@
 # spatial relationships in 2D and 3D environments.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Robotics
   module SpatialReasoning

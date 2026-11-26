@@ -12,7 +12,7 @@
 # - Complex Event Processing: Luckham, 2002
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Temporal
   VERSION = "0.1.0"
@@ -219,19 +219,19 @@ module Temporal
 
   # Allen's Interval Algebra relations
   enum IntervalRelation
-    BEFORE           # X ends before Y starts
-    AFTER            # X starts after Y ends
-    MEETS            # X ends exactly when Y starts
-    MET_BY           # X starts exactly when Y ends
-    OVERLAPS         # X starts before Y and ends during Y
-    OVERLAPPED_BY    # X starts during Y and ends after Y
-    STARTS           # X starts with Y but ends before Y
-    STARTED_BY       # X starts with Y but ends after Y
-    DURING           # X is contained within Y
-    CONTAINS         # X contains Y
-    FINISHES         # X ends with Y but starts after Y
-    FINISHED_BY      # X ends with Y but starts before Y
-    EQUALS           # X and Y are identical
+    BEFORE        # X ends before Y starts
+    AFTER         # X starts after Y ends
+    MEETS         # X ends exactly when Y starts
+    MET_BY        # X starts exactly when Y ends
+    OVERLAPS      # X starts before Y and ends during Y
+    OVERLAPPED_BY # X starts during Y and ends after Y
+    STARTS        # X starts with Y but ends before Y
+    STARTED_BY    # X starts with Y but ends after Y
+    DURING        # X is contained within Y
+    CONTAINS      # X contains Y
+    FINISHES      # X ends with Y but starts after Y
+    FINISHED_BY   # X ends with Y but starts before Y
+    EQUALS        # X and Y are identical
   end
 
   # Compute Allen relation between two intervals
@@ -525,7 +525,7 @@ module Temporal
           gap = to_time.not_nil! - from_time.not_nil!
           gap >= min_gap && gap <= max_gap
         else
-          true  # Unknown times don't violate constraints
+          true # Unknown times don't violate constraints
         end
       end
     end

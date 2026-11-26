@@ -7,13 +7,47 @@ describe "CogServer command-line options" do
   it "uses defaults when no options are provided" do
     options = CogServer.parse_options([] of String)
 
-    options.should eq({host: CogServer::DEFAULT_HOST, port: CogServer::DEFAULT_PORT, ws_port: CogServer::DEFAULT_WS_PORT})
+    options.should eq({
+      host:       CogServer::DEFAULT_HOST,
+      port:       CogServer::DEFAULT_PORT,
+      ws_port:    CogServer::DEFAULT_WS_PORT,
+      auth_token: ENV["COGSERVER_AUTH_TOKEN"]?,
+    })
   end
 
   it "accepts validated custom host and ports" do
     options = CogServer.parse_options(["--host", "127.0.0.1", "--port", "19080", "--ws-port", "19081"])
 
-    options.should eq({host: "127.0.0.1", port: 19080, ws_port: 19081})
+    options.should eq({
+      host:       "127.0.0.1",
+      port:       19080,
+      ws_port:    19081,
+      auth_token: ENV["COGSERVER_AUTH_TOKEN"]?,
+    })
+  end
+
+  describe "CogServer request hardening" do
+    it "requires a token for non-loopback bindings" do
+      expect_raises(ArgumentError, /COGSERVER_AUTH_TOKEN/) do
+        CogServer::Server.new("0.0.0.0", 19180, 19181).start
+      end
+    end
+
+    it "protects HTTP endpoints when a token is configured" do
+      server = CogServer::Server.new("127.0.0.1", 19182, 19183, "server-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19183/status"
+        HTTP::Client.get(url).status_code.should eq(401)
+
+        headers = HTTP::Headers{"Authorization" => "Bearer server-token"}
+        HTTP::Client.get(url, headers).status_code.should eq(200)
+      ensure
+        server.stop
+      end
+    end
   end
 
   it "rejects invalid, missing, and colliding ports before starting a server" do

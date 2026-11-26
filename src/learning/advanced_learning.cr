@@ -2,7 +2,7 @@
 # Supervised, reinforcement, online, transfer, and curriculum learning
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "./concept_learning"
 
 module Learning

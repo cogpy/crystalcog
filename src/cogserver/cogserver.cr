@@ -12,6 +12,7 @@ require "base64"
 require "../cogutil/cogutil"
 require "../atomspace/atomspace_main"
 require "../opencog/opencog"
+require "../production/hardening"
 
 module CogServer
   VERSION = "0.1.0"
@@ -51,22 +52,38 @@ module CogServer
     @metrics : MetricsCollector
     @observer : AtomSpace::AtomSpaceSignal?
     @telnet_http : HTTP::Server::RequestProcessor?
+    @request_guard : Production::RequestGuard
 
-    def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT)
+    def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT,
+                   auth_token : String? = ENV["COGSERVER_AUTH_TOKEN"]?)
       @atomspace = AtomSpace::AtomSpace.new
       @sessions = Hash(String, Session).new
       @shell = Server.shell_factory.try(&.call(@atomspace))
       @broadcaster = EventBroadcaster.new
       @metrics = MetricsCollector.new
+      token = auth_token.try(&.strip).presence
+      @request_guard = Production::RequestGuard.new(
+        token,
+        (ENV["COGSERVER_MAX_BODY_BYTES"]?.try(&.to_i64?) || 1_048_576_i64),
+        (ENV["COGSERVER_RATE_CAPACITY"]?.try(&.to_f64?) || 120.0),
+        (ENV["COGSERVER_RATE_REFILL"]?.try(&.to_f64?) || 30.0)
+      )
 
       CogUtil::Logger.info("CogServer #{VERSION} initializing")
       CogUtil::Logger.info("Telnet server will listen on #{@host}:#{@port}")
       CogUtil::Logger.info("WebSocket server will listen on #{@host}:#{@ws_port}")
     end
 
+    private def loopback_host? : Bool
+      {"localhost", "127.0.0.1", "::1"}.includes?(@host)
+    end
+
     # Start the server
     def start
       return if @running
+      if (!loopback_host? || Production.production_environment?) && !@request_guard.authentication_required?
+        raise ArgumentError.new("COGSERVER_AUTH_TOKEN is required when binding CogServer to #{@host}")
+      end
 
       @running = true
       CogUtil::Logger.info("Starting CogServer...")
@@ -187,11 +204,15 @@ module CogServer
     end
 
     private def run_telnet_session(socket : TCPSocket)
-      session = open_session(:telnet)
+      session = open_session(:telnet, !@request_guard.authentication_required?)
       socket << "Welcome to CogServer #{VERSION}\r\n"
       socket << "Session ID: #{session.id}\r\n"
       socket << "AtomSpace contains #{@atomspace.size} atoms\r\n"
-      socket << "Type 'help' for available commands\r\n"
+      if @request_guard.authentication_required?
+        socket << "Authentication required. Use 'auth <token>'.\r\n"
+      else
+        socket << "Type 'help' for available commands\r\n"
+      end
       until session.closed? || !@running
         socket << "cog> "
         socket.flush
@@ -227,8 +248,8 @@ module CogServer
       String.new(clean.to_slice[0, clean.pos]).scrub.strip
     end
 
-    private def open_session(type : Symbol) : Session
-      session = Session.new(generate_session_id, @atomspace, type)
+    private def open_session(type : Symbol, authenticated : Bool = !@request_guard.authentication_required?) : Session
+      session = Session.new(generate_session_id, @atomspace, type, authenticated)
       @sessions_mutex.synchronize { @sessions[session.id] = session }
       session
     end
@@ -261,7 +282,7 @@ module CogServer
     end
 
     private def handle_telnet_request(context)
-      session = open_session(:telnet)
+      session = open_session(:telnet, @request_guard.authenticate(context.request.query_params["auth_token"]?))
       session_id = session.id
 
       context.response.content_type = "text/plain"
@@ -291,6 +312,22 @@ module CogServer
     end
 
     private def process_telnet_command(command : String, session : Session) : String
+      stripped = command.strip
+      if stripped.starts_with?("auth ")
+        if @request_guard.authenticate(stripped.lchop("auth ").strip)
+          session.authenticate
+          "Authentication successful."
+        else
+          "Authentication failed."
+        end
+      elsif !session.authenticated?
+        "Authentication required. Use 'auth <token>'."
+      else
+        process_authenticated_telnet_command(stripped, session)
+      end
+    end
+
+    private def process_authenticated_telnet_command(command : String, session : Session) : String
       case command.strip.downcase
       when "help"
         <<-HELP
@@ -348,6 +385,7 @@ module CogServer
     end
 
     private def handle_websocket_request(context)
+      return unless admit_request(context)
       if context.request.headers["Upgrade"]? == "websocket"
         handle_websocket_upgrade(context)
       else
@@ -531,6 +569,38 @@ module CogServer
       context.response.status_code = 500
       context.response.content_type = "application/json"
       context.response.print({"error" => "Internal server error"}.to_json)
+    end
+
+    private def admit_request(context) : Bool
+      if @request_guard.body_too_large?(
+           context.request.headers["Content-Length"]?,
+           context.request.headers["Transfer-Encoding"]?
+         )
+        context.response.status_code = 413
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Request body too large"}.to_json)
+        return false
+      end
+
+      token = context.request.headers["Authorization"]?
+      unless @request_guard.authenticate(token)
+        context.response.status_code = 401
+        context.response.headers["WWW-Authenticate"] = "Bearer"
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Authentication required"}.to_json)
+        return false
+      end
+
+      client = Production::RequestGuard.token_from(token) ||
+               "anonymous"
+      unless @request_guard.allow?(client)
+        context.response.status_code = 429
+        context.response.headers["Retry-After"] = "1"
+        context.response.content_type = "application/json"
+        context.response.print({"error" => "Rate limit exceeded"}.to_json)
+        return false
+      end
+      true
     end
 
     private def handle_status_request(context)
@@ -1009,9 +1079,18 @@ module CogServer
 
     @closed : Bool = false
 
-    def initialize(@id : String, @atomspace : AtomSpace::AtomSpace, @session_type : Symbol)
+    def initialize(@id : String, @atomspace : AtomSpace::AtomSpace, @session_type : Symbol,
+                   @authenticated : Bool = true)
       @created_at = Time.utc
       CogUtil::Logger.info("Session #{@id} created (#{@session_type})")
+    end
+
+    def authenticated? : Bool
+      @authenticated
+    end
+
+    def authenticate
+      @authenticated = true
     end
 
     def close

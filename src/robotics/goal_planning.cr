@@ -5,7 +5,7 @@
 # using a simple STRIPS-like planning framework.
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Robotics
   module GoalPlanning

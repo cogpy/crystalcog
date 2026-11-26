@@ -11,7 +11,7 @@
 # - Region Connection Calculus (RCC): Randell, Cui, Cohn 1992
 
 require "../cogutil/cogutil"
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Spatial
   VERSION = "0.1.0"
@@ -140,13 +140,13 @@ module Spatial
 
   # Spatial relationship types (based on RCC-8)
   enum SpatialRelation
-    DISCONNECTED           # DC: No contact
-    EXTERNALLY_CONNECTED   # EC: Touch at boundary
-    PARTIALLY_OVERLAPPING  # PO: Overlap but neither contains other
-    EQUAL                  # EQ: Identical regions
-    TANGENTIAL_PROPER_PART # TPP: Inside, touching boundary
-    NON_TANGENTIAL_PROPER_PART # NTPP: Completely inside
-    TANGENTIAL_PROPER_PART_INVERSE # TPPi: Contains, touching boundary
+    DISCONNECTED                       # DC: No contact
+    EXTERNALLY_CONNECTED               # EC: Touch at boundary
+    PARTIALLY_OVERLAPPING              # PO: Overlap but neither contains other
+    EQUAL                              # EQ: Identical regions
+    TANGENTIAL_PROPER_PART             # TPP: Inside, touching boundary
+    NON_TANGENTIAL_PROPER_PART         # NTPP: Completely inside
+    TANGENTIAL_PROPER_PART_INVERSE     # TPPi: Contains, touching boundary
     NON_TANGENTIAL_PROPER_PART_INVERSE # NTPPi: Completely contains
 
     # Additional relations for positioning
@@ -166,7 +166,7 @@ module Spatial
     property position : Vector3
     property bounds : BoundingBox
     property velocity : Vector3
-    property orientation : Vector3  # Euler angles (pitch, yaw, roll)
+    property orientation : Vector3 # Euler angles (pitch, yaw, roll)
     property properties : Hash(String, String | Float64 | Bool)
 
     def initialize(@id : String, @position : Vector3,
@@ -367,7 +367,7 @@ module Spatial
       # Add spatial relationships
       @objects.each do |id1, obj1|
         @objects.each do |id2, obj2|
-          next if id1 >= id2  # Avoid duplicates
+          next if id1 >= id2 # Avoid duplicates
 
           relation = get_relation(obj1, obj2)
           atoms.concat(create_relation_atoms(atomspace, obj1, obj2, relation))

@@ -3,7 +3,7 @@
 # Provides the Agent class for representing intelligent agents in the simulation,
 # including sensor and actuator management, perception, and action capabilities.
 
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 
 module Simulation
   # Agent state for behavior management

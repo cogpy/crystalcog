@@ -12,6 +12,7 @@
 require "http/server"
 require "json"
 require "./jwt"
+require "../../production/hardening"
 require "./paphos_client"
 require "../pygmalion_agent"
 require "../../cogutil/logger"
@@ -65,11 +66,19 @@ module GalateaFrontend
     @scoped_atomspaces = {} of String => AtomSpace::AtomSpace
     @scoped_tools = {} of String => CrystalCog::CogTools
     @scope_mutex = Mutex.new
+    @request_guard : Production::RequestGuard
+    @secret : String
 
     def initialize(@paphos_url : String, @agent_factory : AgentFactory,
                    @host : String = "127.0.0.1", @requested_port : Int32 = 8080,
-                   @secret : String = ENV["JWT_SECRET"]? || Random::Secure.hex(32),
+                   secret : String? = nil,
                    @static_dir : String? = nil)
+      @secret = secret || Production.secret_from_env("JWT_SECRET")
+      @request_guard = Production::RequestGuard.new(
+        max_body_bytes: ENV["GALATEA_MAX_BODY_BYTES"]?.try(&.to_i64?) || 4_194_304_i64,
+        capacity: ENV["GALATEA_RATE_CAPACITY"]?.try(&.to_f64?) || 180.0,
+        refill: ENV["GALATEA_RATE_REFILL"]?.try(&.to_f64?) || 45.0
+      )
     end
 
     def url : String
@@ -92,6 +101,22 @@ module GalateaFrontend
     end
 
     def handle(ctx : HTTP::Server::Context)
+      if @request_guard.body_too_large?(
+           ctx.request.headers["Content-Length"]?,
+           ctx.request.headers["Transfer-Encoding"]?
+         )
+        ctx.response.status_code = 413
+        ctx.response.content_type = "application/json"
+        ctx.response.print({"code" => "invalid_argument", "message" => "request body too large"}.to_json)
+        return
+      end
+      unless @request_guard.allow?("global")
+        ctx.response.status_code = 429
+        ctx.response.headers["Retry-After"] = "1"
+        ctx.response.content_type = "application/json"
+        ctx.response.print({"code" => "resource_exhausted", "message" => "too many requests"}.to_json)
+        return
+      end
       path = ctx.request.path
       if path.starts_with?(CONNECT_PREFIX)
         connect_call(ctx, path)

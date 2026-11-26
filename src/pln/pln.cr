@@ -1,7 +1,7 @@
 # Crystal implementation of PLN (Probabilistic Logic Networks)
 # Converted from pln/opencog/pln/
 
-require "../atomspace/atomspace_main"
+require "../atomspace/atomspace_core"
 require "../cogutil/cogutil"
 
 module PLN
