@@ -298,7 +298,8 @@ module PaphosBackend
          )
         raise ApiError.new(413, "Request too large", nil, "body exceeds #{@request_guard.max_body_bytes} bytes")
       end
-      unless @request_guard.allow?("global")
+      bucket = ctx.request.headers["Authorization"]? ? "authenticated" : "public"
+      unless @request_guard.allow?(bucket)
         raise ApiError.new(429, "Too many requests", nil, "retry in a moment")
       end
       path = ctx.request.path

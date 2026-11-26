@@ -31,10 +31,24 @@ WORKDIR /app
 COPY --from=builder /build/bin/ /usr/local/bin/
 
 RUN mkdir -p /app/data && chown -R crystalcog:crystalcog /app
+COPY <<'EOF' /app/web/index.html
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CrystalCog</title></head>
+<body><main><h1>CrystalCog platform</h1><p>The Pygmalion API is running. Health: <a href="/api/health">/api/health</a></p></main></body>
+</html>
+EOF
+RUN chown -R crystalcog:crystalcog /app && \
+    printf '%s\\n' '#!/usr/bin/env bash' \
+      'exec 3<>/dev/tcp/127.0.0.1/8080' \
+      'printf \"GET /api/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" >&3' \
+      'grep -q \"200 OK\" <&3' > /usr/local/bin/healthcheck.sh && \
+    chmod 0755 /usr/local/bin/healthcheck.sh
 USER crystalcog
 
 ENV PLATFORM_HOST=0.0.0.0 \
     PAPHOS_DATA_FILE=/app/data/paphos.json \
+    GALATEA_STATIC_DIR=/app/web \
     CRYSTALCOG_ENV=production
 
 EXPOSE 3000 8080 17001 18080

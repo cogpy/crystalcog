@@ -61,7 +61,7 @@ module CrystalCog
     end
 
     puts "CrystalCog #{VERSION} - OpenCog in Crystal"
-    puts "Args received: #{args}"
+    puts "Args received: #{redact_sensitive_args(args)}"
 
     case args.first?
     when "server"
@@ -110,6 +110,21 @@ module CrystalCog
       puts "  engine serve            - Serve the native engine over the OpenAI-compatible API"
       puts "  (run any of the last six with --help for options)"
     end
+  end
+
+  private def self.redact_sensitive_args(args : Array(String)) : Array(String)
+    redacted = [] of String
+    i = 0
+    while i < args.size
+      if args[i] == "--auth-token"
+        redacted << args[i] << "[REDACTED]"
+        i += 2
+      else
+        redacted << args[i]
+        i += 1
+      end
+    end
+    redacted
   end
 
   # Test integration framework

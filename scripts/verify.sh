@@ -9,12 +9,26 @@ install_dependencies() {
 }
 
 check_format() {
-  local base="${FORMAT_BASE:-HEAD}"
-  local files
-  mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$base" -- '*.cr')
-  if [[ ${#files[@]} -eq 0 ]] && git rev-parse "${base}^" >/dev/null 2>&1; then
-    mapfile -t files < <(git diff --name-only --diff-filter=ACMR "${base}^" "$base" -- '*.cr')
+  local base="${FORMAT_BASE:-}"
+  local list
+  local files=()
+  list="$(mktemp)"
+  trap 'rm -f "$list"' RETURN
+
+  if [[ "$base" =~ ^0+$ ]]; then
+    git ls-files -z -- '*.cr' >"$list"
+  elif [[ -n "$base" ]]; then
+    git rev-parse --verify "${base}^{commit}" >/dev/null
+    git diff --name-only -z --diff-filter=ACMR "$base" HEAD -- '*.cr' >"$list"
+  else
+    git diff --name-only -z --diff-filter=ACMR HEAD -- '*.cr' >"$list"
+    if [[ ! -s "$list" ]] && git rev-parse --verify "HEAD^" >/dev/null 2>&1; then
+      git diff --name-only -z --diff-filter=ACMR "HEAD^" HEAD -- '*.cr' >"$list"
+    fi
   fi
+
+  git ls-files --others --exclude-standard -z -- '*.cr' >>"$list"
+  mapfile -d '' -t files <"$list"
   if [[ ${#files[@]} -gt 0 ]]; then
     crystal tool format --check "${files[@]}"
   fi

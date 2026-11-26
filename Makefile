@@ -71,8 +71,6 @@ help:
 	@echo "  production-logs  - View production logs"
 	@echo "  production-up    - Start production services (Docker Compose)"
 	@echo "  production-down  - Stop production services (Docker Compose)"
-	@echo "  production-k8s-deploy - Deploy to Kubernetes production"
-	@echo "  production-k8s-remove - Remove Kubernetes production deployment"
 	@echo ""
 	@echo "  help             - Show this help message"
 	@echo ""
@@ -156,7 +154,8 @@ ifeq ($(SKIP_INSTALL),true)
 	@echo "$(YELLOW)[WARNING]$(NC) Skipping installation as requested"
 else
 	@echo "$(BLUE)[INFO]$(NC) Installing components..."
-	@cd $(BUILD_DIR) && make install
+	@install -d $(DESTDIR)$(INSTALL_PREFIX)/bin
+	@install -m 0755 bin/* $(DESTDIR)$(INSTALL_PREFIX)/bin/
 	@echo "$(GREEN)[SUCCESS]$(NC) Installation complete"
 	@echo "$(BLUE)[INFO]$(NC) You may need to run: sudo ldconfig"
 endif
@@ -165,14 +164,14 @@ endif
 .PHONY: doc
 doc: build
 	@echo "$(BLUE)[INFO]$(NC) Generating documentation..."
-	@cd $(BUILD_DIR) && make doc
+	@crystal docs
 	@echo "$(GREEN)[SUCCESS]$(NC) Documentation generated"
 
 # Create package
 .PHONY: package
 package: build
 	@echo "$(BLUE)[INFO]$(NC) Creating package..."
-	@cd $(BUILD_DIR) && checkinstall --pkgname=opencog-central --pkgversion=1.0.0 --backup=no --fstrans=no --default
+	@tar -czf crystalcog-0.1.0-bin.tar.gz -C bin .
 	@echo "$(GREEN)[SUCCESS]$(NC) Package created"
 
 # Clean build directory
@@ -247,19 +246,20 @@ rust-env:
 .PHONY: test-%
 test-%: build
 	@echo "$(BLUE)[INFO]$(NC) Running tests for $*..."
-	@cd $(BUILD_DIR) && ctest --output-on-failure -R $*
+	@crystal spec --error-trace "spec/$*/"
 
 # Build specific component
 .PHONY: build-%
 build-%: configure
 	@echo "$(BLUE)[INFO]$(NC) Building $*..."
-	@cd $(BUILD_DIR) && make $* -j$(JOBS)
+	@shards build "$*"
 
 # Install specific component
 .PHONY: install-%
 install-%: build-%
 	@echo "$(BLUE)[INFO]$(NC) Installing $*..."
-	@cd $(BUILD_DIR) && make install
+	@install -d $(DESTDIR)$(INSTALL_PREFIX)/bin
+	@install -m 0755 "bin/$*" $(DESTDIR)$(INSTALL_PREFIX)/bin/
 
 # Show build status
 .PHONY: status
@@ -272,10 +272,10 @@ status:
 	@echo "  Skip Tests: $(SKIP_TESTS)"
 	@echo "  Skip Install: $(SKIP_INSTALL)"
 	@echo "  Clean Build: $(CLEAN_BUILD)"
-	@if [ -d "$(BUILD_DIR)" ]; then \
-		echo "  Build Directory: $(GREEN)Exists$(NC)"; \
+	@if [ -d "bin" ]; then \
+		echo "  Build Output: $(GREEN)Exists$(NC)"; \
 	else \
-		echo "  Build Directory: $(RED)Missing$(NC)"; \
+		echo "  Build Output: $(RED)Missing$(NC)"; \
 	fi
 
 # Show component list
@@ -439,7 +439,7 @@ production-status:
 # Backup production data
 production-backup:
 	@echo "$(BLUE)[INFO]$(NC) Creating production backup..."
-	@./scripts/production/backup.sh
+	@./scripts/production/deploy.sh --action backup
 
 # Rollback production deployment
 production-rollback:
@@ -464,19 +464,9 @@ production-health:
 # Production deployment with Docker Compose
 production-up:
 	@echo "$(BLUE)[INFO]$(NC) Starting production services with Docker Compose..."
-	@docker-compose -f docker-compose.production.yml up -d
+	@docker compose -f docker-compose.production.yml up -d
 
 # Stop production services
 production-down:
 	@echo "$(BLUE)[INFO]$(NC) Stopping production services..."
-	@docker-compose -f docker-compose.production.yml down
-
-# Production deployment to Kubernetes
-production-k8s-deploy:
-	@echo "$(BLUE)[INFO]$(NC) Deploying to Kubernetes production..."
-	@kubectl apply -f deployments/k8s/production/
-
-# Remove Kubernetes production deployment
-production-k8s-remove:
-	@echo "$(BLUE)[INFO]$(NC) Removing Kubernetes production deployment..."
-	@kubectl delete -f deployments/k8s/production/
+	@docker compose -f docker-compose.production.yml down

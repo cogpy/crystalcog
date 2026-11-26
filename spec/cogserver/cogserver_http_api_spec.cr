@@ -48,6 +48,40 @@ describe "CogServer command-line options" do
         server.stop
       end
     end
+
+    it "uses one-time tickets for browser WebSocket authentication" do
+      server = CogServer::Server.new("127.0.0.1", 19184, 19185, "monitor-token")
+      server.start
+
+      begin
+        sleep 50.milliseconds
+        url = "http://127.0.0.1:19185"
+        headers = HTTP::Headers{"Authorization" => "Bearer monitor-token"}
+        issued = HTTP::Client.post("#{url}/monitor-ticket", headers)
+        issued.status_code.should eq(201)
+        ticket = JSON.parse(issued.body)["ticket"].as_s
+
+        socket = TCPSocket.new("127.0.0.1", 19185)
+        socket.read_timeout = 2.seconds
+        socket << "GET /?ticket=#{ticket} HTTP/1.1\r\n"
+        socket << "Host: 127.0.0.1:19185\r\n"
+        socket << "Upgrade: websocket\r\n"
+        socket << "Connection: Upgrade\r\n"
+        socket << "Sec-WebSocket-Version: 13\r\n"
+        socket << "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        lines = [] of String
+        while line = socket.gets
+          lines << line
+          break if line.strip.empty?
+        end
+        response = lines.join
+        socket.close
+        response.should contain("101 Switching Protocols")
+        response.should contain("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+      ensure
+        server.stop
+      end
+    end
   end
 
   it "rejects invalid, missing, and colliding ports before starting a server" do

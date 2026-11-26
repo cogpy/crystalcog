@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: crystal-lang/install-crystal@v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
@@ -61,6 +61,8 @@ jobs:
       - name: Install exact locked dependencies
         run: shards install --verbose --frozen && shards check
       - name: Verify formatting, builds, tests, and smoke tests
+        env:
+          FORMAT_BASE: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
         run: |
           set -o pipefail
           JUNIT_OUTPUT=test-results.xml bash scripts/verify.sh all 2>&1 | tee test-output.log

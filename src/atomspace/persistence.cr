@@ -34,8 +34,9 @@ module AtomSpace
       storage
     end
 
-    def create_cog_storage(name : String, host : String, port : Int32, attach : Bool = true) : CogStorageNode
-      storage = CogStorageNode.new(name, host, port)
+    def create_cog_storage(name : String, host : String, port : Int32, attach : Bool = true,
+                           auth_token : String? = nil) : CogStorageNode
+      storage = CogStorageNode.new(name, host, port, auth_token)
       attach_storage(storage) if attach
       storage
     end

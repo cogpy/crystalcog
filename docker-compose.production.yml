@@ -1,5 +1,5 @@
 services:
-  crystalcog:
+  crystalcog-app:
     build:
       context: .
       dockerfile: Dockerfile.production
@@ -15,10 +15,11 @@ services:
       APHRODITE_BACKEND: external
       APHRODITE_URL: ${APHRODITE_URL:?set APHRODITE_URL to an OpenAI-compatible endpoint}
       PLATFORM_MAX_TOKENS: ${PLATFORM_MAX_TOKENS:-160}
+      GALATEA_STATIC_DIR: /app/web
     ports:
-      - "${GALATEA_PORT:-8080}:8080"
+      - "127.0.0.1:${GALATEA_PORT:-8080}:8080"
     volumes:
-      - crystalcog-data:/app/data
+      - app-data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "bash -c ': >/dev/tcp/127.0.0.1/8080'"]
       interval: 30s
@@ -27,4 +28,5 @@ services:
       start_period: 15s
 
 volumes:
-  crystalcog-data:
+  app-data:
+    name: crystalcog_app-data

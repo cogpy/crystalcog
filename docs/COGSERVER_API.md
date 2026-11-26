@@ -154,8 +154,17 @@ Returns server version information.
 
 Connect to `ws://localhost:18080/`. The server completes the RFC 6455 handshake and then exchanges JSON text frames. It selects the `json` subprotocol only when the client offers it.
 
+When `COGSERVER_AUTH_TOKEN` is configured, browsers first request a short-lived,
+single-use ticket with an authenticated POST to `/monitor-ticket`, then put that
+ticket in the WebSocket URL. Native clients may continue to send the bearer token
+during the upgrade. Do not put the long-lived bearer token in a URL.
+
 ```javascript
-const ws = new WebSocket('ws://localhost:18080/');
+const ticket = await fetch('http://localhost:18080/monitor-ticket', {
+  method: 'POST',
+  headers: {Authorization: `Bearer ${cogServerToken}`}
+}).then((response) => response.json());
+const ws = new WebSocket(`ws://localhost:18080/?ticket=${encodeURIComponent(ticket.ticket)}`);
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ws.onopen = () => {
   ws.send(JSON.stringify({action: 'subscribe', events: ['AtomAdded', 'TruthValueChanged']}));
@@ -286,7 +295,11 @@ print(f"Created atom: {result['atom']['string']}")
 
 ### JavaScript WebSocket
 ```javascript
-const ws = new WebSocket('ws://localhost:18080/');
+const {ticket} = await fetch('http://localhost:18080/monitor-ticket', {
+  method: 'POST',
+  headers: {Authorization: `Bearer ${cogServerToken}`}
+}).then((response) => response.json());
+const ws = new WebSocket(`ws://localhost:18080/?ticket=${encodeURIComponent(ticket)}`);
 
 ws.onopen = () => ws.send(JSON.stringify({action: 'subscribe', events: ['*']}));
 ws.onmessage = (event) => console.log('Received:', JSON.parse(event.data));

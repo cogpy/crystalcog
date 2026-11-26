@@ -21,6 +21,7 @@ module CogServer
   DEFAULT_PORT    = 17001
   DEFAULT_WS_PORT = 18080
   DEFAULT_HOST    = "localhost"
+  WS_TICKET_TTL   = 5.minutes
 
   # CogServer main class
   class Server
@@ -53,6 +54,8 @@ module CogServer
     @observer : AtomSpace::AtomSpaceSignal?
     @telnet_http : HTTP::Server::RequestProcessor?
     @request_guard : Production::RequestGuard
+    @ws_tickets = Hash(String, Time).new
+    @ws_ticket_mutex = Mutex.new
 
     def initialize(@host : String = DEFAULT_HOST, @port : Int32 = DEFAULT_PORT, @ws_port : Int32 = DEFAULT_WS_PORT,
                    auth_token : String? = ENV["COGSERVER_AUTH_TOKEN"]?)
@@ -282,7 +285,7 @@ module CogServer
     end
 
     private def handle_telnet_request(context)
-      session = open_session(:telnet, @request_guard.authenticate(context.request.query_params["auth_token"]?))
+      session = open_session(:telnet, @request_guard.authenticate(context.request.headers["Authorization"]?))
       session_id = session.id
 
       context.response.content_type = "text/plain"
@@ -385,11 +388,33 @@ module CogServer
     end
 
     private def handle_websocket_request(context)
-      return unless admit_request(context)
-      if context.request.headers["Upgrade"]? == "websocket"
+      if context.request.headers["Upgrade"]?.try(&.downcase) == "websocket"
+        unless @request_guard.authenticate(context.request.headers["Authorization"]?) ||
+               consume_websocket_ticket(context.request.query_params["ticket"]?)
+          websocket_reject(context, 401, "Authentication required")
+          return
+        end
         handle_websocket_upgrade(context)
       else
+        return unless admit_request(context)
         handle_http_api(context)
+      end
+    end
+
+    private def issue_websocket_ticket : String
+      ticket = Random::Secure.urlsafe_base64(32)
+      @ws_ticket_mutex.synchronize do
+        @ws_tickets.reject! { |_, expires| expires <= Time.utc }
+        @ws_tickets[ticket] = Time.utc + WS_TICKET_TTL
+      end
+      ticket
+    end
+
+    private def consume_websocket_ticket(ticket : String?) : Bool
+      return false unless ticket
+      @ws_ticket_mutex.synchronize do
+        expires = @ws_tickets.delete(ticket)
+        !expires.nil? && expires > Time.utc
       end
     end
 
@@ -549,6 +574,8 @@ module CogServer
         handle_ping_request(context)
       when "/version"
         handle_version_request(context)
+      when "/monitor-ticket"
+        handle_monitor_ticket_request(context)
       when "/storage"
         handle_storage_request(context)
       when "/storage/save"
@@ -601,6 +628,22 @@ module CogServer
         return false
       end
       true
+    end
+
+    private def handle_monitor_ticket_request(context)
+      context.response.content_type = "application/json"
+      unless context.request.method == "POST"
+        context.response.status_code = 405
+        context.response.print({"error" => "Method not allowed"}.to_json)
+        return
+      end
+
+      ticket = issue_websocket_ticket
+      context.response.status_code = 201
+      context.response.print({
+        "ticket"     => ticket,
+        "expires_in" => WS_TICKET_TTL.total_seconds.to_i,
+      }.to_json)
     end
 
     private def handle_status_request(context)
@@ -973,25 +1016,23 @@ module CogServer
           storage = case storage_type.downcase
                     when "file"
                       file_path = data["path"].as_s
-                      file_storage = AtomSpace::FileStorageNode.new(storage_name, file_path)
-                      file_storage.open if file_storage
-                      file_storage
+                      AtomSpace::FileStorageNode.new(storage_name, file_path)
                     when "sqlite"
                       db_path = data["path"].as_s
-                      sqlite_storage = AtomSpace::SQLiteStorageNode.new(storage_name, db_path)
-                      sqlite_storage.open if sqlite_storage
-                      sqlite_storage
+                      AtomSpace::SQLiteStorageNode.new(storage_name, db_path)
                     when "cog", "network"
                       host = data["host"].as_s
                       port = data["port"].as_i
-                      cog_storage = AtomSpace::CogStorageNode.new(storage_name, host, port)
-                      cog_storage.open if cog_storage
-                      cog_storage
+                      token = data["auth_token"]?.try(&.as_s?)
+                      AtomSpace::CogStorageNode.new(storage_name, host, port, token)
                     else
                       nil
                     end
 
-          if storage
+          if storage && !storage.open
+            response = {"error" => "Storage failed to connect", "storage" => storage.name}
+            context.response.status_code = 502
+          elsif storage
             @atomspace.attach_storage(storage)
             @broadcaster.broadcast_storage(MonitorEventType::StorageAttached, storage.name, storage_type)
             response = {

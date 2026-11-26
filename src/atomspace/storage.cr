@@ -1062,11 +1062,20 @@ module AtomSpace
     @port : Int32
     @connected : Bool = false
     @base_url : String
+    @auth_token : String?
 
-    def initialize(name : String, @host : String, @port : Int32)
+    def initialize(name : String, @host : String, @port : Int32, auth_token : String? = nil)
       super(name)
       @base_url = "http://#{@host}:#{@port}"
+      @auth_token = auth_token.try(&.strip).presence
       log_info("CogStorageNode created for: #{@base_url}")
+    end
+
+    private def request_headers(content_type : Bool = false) : HTTP::Headers
+      headers = HTTP::Headers.new
+      headers["Authorization"] = "Bearer #{@auth_token}" if @auth_token
+      headers["Content-Type"] = "application/json" if content_type
+      headers
     end
 
     def open : Bool
@@ -1074,7 +1083,7 @@ module AtomSpace
 
       begin
         # Test connection with ping
-        response = HTTP::Client.get("#{@base_url}/ping")
+        response = HTTP::Client.get("#{@base_url}/ping", headers: request_headers)
 
         if response.status_code == 200
           @connected = true
@@ -1115,7 +1124,7 @@ module AtomSpace
             json.field "atom" { AtomWire.write(json, atom) }
           end
         end
-        headers = HTTP::Headers{"Content-Type" => "application/json"}
+        headers = request_headers(content_type: true)
         response = HTTP::Client.post("#{@base_url}/atoms", headers: headers, body: body)
 
         if response.status_code == 201
@@ -1141,7 +1150,7 @@ module AtomSpace
 
       begin
         remote = @remote_handles[handle]? || handle
-        response = HTTP::Client.get("#{@base_url}/atoms/#{remote}")
+        response = HTTP::Client.get("#{@base_url}/atoms/#{remote}", headers: request_headers)
         return nil unless response.status_code == 200
 
         atom = AtomWire.read(JSON.parse(response.body)["wire"])
@@ -1158,10 +1167,10 @@ module AtomSpace
 
       begin
         response = if remote = @remote_handles[atom.handle]?
-                     HTTP::Client.delete("#{@base_url}/atoms/#{remote}")
+                     HTTP::Client.delete("#{@base_url}/atoms/#{remote}", headers: request_headers)
                    else
                      # Never stored from here: let the server find it by content.
-                     headers = HTTP::Headers{"Content-Type" => "application/json"}
+                     headers = request_headers(content_type: true)
                      HTTP::Client.exec("DELETE", "#{@base_url}/atoms", headers: headers,
                        body: {"atom" => JSON.parse(AtomWire.to_json(atom))}.to_json)
                    end
@@ -1182,7 +1191,7 @@ module AtomSpace
       return false unless @connected
 
       begin
-        response = HTTP::Client.get("#{@base_url}/atoms")
+        response = HTTP::Client.get("#{@base_url}/atoms", headers: request_headers)
         return false unless response.status_code == 200
 
         # The listing names outgoing atoms by the server's handles; rebuild
@@ -1229,7 +1238,7 @@ module AtomSpace
 
       if @connected
         begin
-          response = HTTP::Client.get("#{@base_url}/status")
+          response = HTTP::Client.get("#{@base_url}/status", headers: request_headers)
           if response.status_code == 200
             server_stats = JSON.parse(response.body)
             stats["remote_atomspace_size"] = server_stats["atomspace_size"]?.try(&.as_i64) || 0_i64

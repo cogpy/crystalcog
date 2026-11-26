@@ -352,11 +352,7 @@ RETENTION_DAYS=30
 
 mkdir -p "$BACKUP_DIR"
 
-# Backup database
-docker-compose -f /opt/crystalcog/docker-compose.production.yml exec -T postgres \
-    pg_dump -U crystalcog_user crystalcog_prod > "$BACKUP_DIR/database.sql"
-
-# Backup application data
+# Backup the Paphos data file and event journal
 docker run --rm -v crystalcog_app-data:/data -v "$BACKUP_DIR":/backup alpine \
     tar czf /backup/app-data.tar.gz -C /data .
 

@@ -3,14 +3,16 @@ require "http/client"
 require "json"
 require "../../src/cogserver/cogserver"
 
-private def with_cog_server(telnet_port : Int32, ws_port : Int32, &)
-  server = CogServer::Server.new("127.0.0.1", telnet_port, ws_port)
+private def with_cog_server(telnet_port : Int32, ws_port : Int32, auth_token : String? = nil, &)
+  server = CogServer::Server.new("127.0.0.1", telnet_port, ws_port, auth_token)
+  headers = HTTP::Headers.new
+  headers["Authorization"] = "Bearer #{auth_token}" if auth_token
   server.start
   # Server#start binds its listeners in fibers; wait until HTTP answers.
   deadline = Time.monotonic + 10.seconds
   loop do
     ready = begin
-      HTTP::Client.get("http://127.0.0.1:#{ws_port}/ping").status_code == 200
+      HTTP::Client.get("http://127.0.0.1:#{ws_port}/ping", headers: headers).status_code == 200
     rescue Socket::Error | IO::Error
       false
     end
@@ -88,6 +90,21 @@ describe AtomSpace::AtomWire do
 end
 
 describe AtomSpace::CogStorageNode do
+  it "authenticates every request to a protected CogServer" do
+    with_cog_server(19190, 19191, "storage-token") do |server|
+      unauthenticated = AtomSpace::CogStorageNode.new("anonymous", "127.0.0.1", 19191)
+      unauthenticated.open.should be_false
+
+      storage = AtomSpace::CogStorageNode.new("protected", "127.0.0.1", 19191, "storage-token")
+      storage.open.should be_true
+      cat = AtomSpace::Node.new(AtomSpace::AtomType::CONCEPT_NODE, "protected-cat")
+      storage.store_atom(cat).should be_true
+      storage.fetch_atom(cat.handle).not_nil!.name.should eq("protected-cat")
+      storage.get_stats["remote_atomspace_size"].should eq(1_i64)
+      server.atomspace.size.should eq(1)
+    end
+  end
+
   it "stores, fetches, loads and removes atoms on a remote CogServer" do
     with_cog_server(19192, 19193) do |server|
       local = AtomSpace::AtomSpace.new

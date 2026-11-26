@@ -110,7 +110,9 @@ module GalateaFrontend
         ctx.response.print({"code" => "invalid_argument", "message" => "request body too large"}.to_json)
         return
       end
-      unless @request_guard.allow?("global")
+      authenticated = !ctx.request.headers["Authorization"]?.nil? ||
+                      !ctx.request.cookies[SESSION_COOKIE]?.nil?
+      unless @request_guard.allow?(authenticated ? "authenticated" : "public")
         ctx.response.status_code = 429
         ctx.response.headers["Retry-After"] = "1"
         ctx.response.content_type = "application/json"
