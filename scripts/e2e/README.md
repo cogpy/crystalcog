@@ -9,6 +9,17 @@ a temporary directory, including on failure or timeout. Existing `always()`
 uploads retain the benchmark's `.txt` and the other steps' `.log` artifacts.
 Missing benchmark source and compiler errors are required failures, not skips.
 
+All five suites refresh apt package indexes after checkout and before Crystal's
+installer can acquire OS dependencies. The refresh retains both streams in
+`apt-index-refresh.log`, uses two acquisition retries and
+`APT::Update::Error-Mode=any` so partially failed index downloads are not accepted
+as a successful refresh. A privileged 180-second timeout owns apt, with a
+five-second kill grace; the logged runner provides a 200-second outer bound.
+Index failure/timeout is nonzero and existing `always()` uploads retain its log.
+There is no blanket upgrade or successful-error fallback. This mitigates the
+historical pre-refresh bootstrap exposure; it does not prove stale indexes were
+the deeper cause of every libevent HTTP 404 or guarantee mirror availability.
+
 The SQLite scenario uses `SQLiteStorageNode`, checks `open`, every `store_atom`,
 `close`/reopen, and `fetch_atom` for both concepts and the inheritance link. It
 compares persisted content rather than newly generated in-memory handles, then
@@ -49,6 +60,7 @@ bash scripts/e2e/cogserver_load_test.sh ./cogserver_bin
 NIGHTLY_TEST_LOG_DIR=/tmp/nightly-regression-logs \
   timeout 420 bash scripts/e2e/test_nightly_result_integrity.sh
 python3 scripts/e2e/test_nightly_required_steps.py
+python3 scripts/e2e/test_nightly_bootstrap.py
 bash scripts/e2e/test_e2e_harness.sh
 ```
 
@@ -74,6 +86,13 @@ failed/malformed/inactive/empty summaries, empty/multiple JSON bodies,
 readiness failure, missing/nonexecutable
 binaries, invalid limits and server cleanup. The separate no-bare-wait regression
 requires a successful 20-request run to complete within its bound.
+
+The bootstrap regression checks all five step orders, exact bounded apt options,
+strict failure handling and always-uploaded logs. A local sudo shim executes no
+privileged action; it simulates exits 0, 100, 42 and 124 and a package/mirror 404
+diagnostic to test console/artifact/status propagation. These are wiring tests,
+not real apt acquisition or proof of historical recovery. They do not refresh
+the local computer's package indexes or install dependencies.
 
 Passing local checks does not certify all five hosted Nightly suites or explain
 the 24 historical benchmark failures whose diagnostics were unavailable. Inspect

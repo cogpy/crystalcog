@@ -43,6 +43,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Refresh apt package indexes
+      run: |
+        bash scripts/e2e/run_logged.sh apt-index-refresh.log 200 \
+          sudo timeout --kill-after=5s 180s apt-get -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
       with:
@@ -50,7 +55,6 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev
 
     - name: Install dependencies
@@ -138,6 +142,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Refresh apt package indexes
+      run: |
+        bash scripts/e2e/run_logged.sh apt-index-refresh.log 200 \
+          sudo timeout --kill-after=5s 180s apt-get -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
       with:
@@ -145,7 +154,6 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev curl jq
 
     - name: Install dependencies
@@ -183,6 +191,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Refresh apt package indexes
+      run: |
+        bash scripts/e2e/run_logged.sh apt-index-refresh.log 200 \
+          sudo timeout --kill-after=5s 180s apt-get -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
       with:
@@ -190,7 +203,6 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev
 
     - name: Install dependencies
@@ -228,6 +240,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Refresh apt package indexes
+      run: |
+        bash scripts/e2e/run_logged.sh apt-index-refresh.log 200 \
+          sudo timeout --kill-after=5s 180s apt-get -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
       with:
@@ -235,7 +252,6 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev
 
     - name: Install dependencies
@@ -327,6 +343,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Refresh apt package indexes
+      run: |
+        bash scripts/e2e/run_logged.sh apt-index-refresh.log 200 \
+          sudo timeout --kill-after=5s 180s apt-get -o Acquire::Retries=2 -o APT::Update::Error-Mode=any update
+
     - name: Install Crystal
       uses: crystal-lang/install-crystal@v1
       with:
@@ -334,7 +355,6 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
         sudo apt-get install -y libsqlite3-dev librocksdb-dev libevent-dev
 
     - name: Install dependencies
