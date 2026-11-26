@@ -26,9 +26,9 @@ ROLLBACK_ON_FAILURE="true"
 
 compose() {
     if docker compose version >/dev/null 2>&1; then
-        docker compose "$@"
+        docker compose --env-file "$ENV_FILE" "$@"
     else
-        docker-compose "$@"
+        docker-compose --env-file "$ENV_FILE" "$@"
     fi
 }
 
@@ -180,15 +180,15 @@ deploy() {
     
     # Pull latest images
     print_status "Pulling latest images..."
-    compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" pull
+    compose -f "$DOCKER_COMPOSE_FILE" pull
     
     # Build application
     print_status "Building application..."
-    compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" build --no-cache crystalcog-app
+    compose -f "$DOCKER_COMPOSE_FILE" build --no-cache crystalcog-app
     
     # Deploy services
     print_status "Deploying services..."
-    compose -f "$DOCKER_COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+    compose -f "$DOCKER_COMPOSE_FILE" up -d
     
     # Wait for services to be ready
     print_status "Waiting for services to be ready..."

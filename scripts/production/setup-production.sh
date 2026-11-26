@@ -413,29 +413,18 @@ generate_env_file() {
 # CrystalCog Production Environment Configuration
 # Copy this file to .env.production and update with your values
 
-# Database Configuration
-POSTGRES_PASSWORD=CHANGE_ME_STRONG_PASSWORD
-
-# Monitoring Configuration  
-GRAFANA_ADMIN_PASSWORD=CHANGE_ME_STRONG_PASSWORD
-
-# Email Configuration
-SMTP_HOST=smtp.example.com
-SMTP_USER=noreply@example.com
-SMTP_PASSWORD=CHANGE_ME_SMTP_PASSWORD
-
-# SSL Configuration
-SSL_CERT_PATH=$INSTALL_DIR/config/production/ssl/crystalcog.crt
-SSL_KEY_PATH=$INSTALL_DIR/config/production/ssl/crystalcog.key
+# Required application configuration
+SECRET_KEY_BASE=$(openssl rand -hex 32)
+JWT_SECRET=$(openssl rand -hex 32)
+APHRODITE_URL=http://inference.example:8000
 
 # Backup Configuration
 BACKUP_ENABLED=true
 BACKUP_SCHEDULE="0 2 * * *"
 BACKUP_RETENTION_DAYS=30
 
-# Domain Configuration
-DOMAIN=crystalcog.example.com
-STAGING_DOMAIN=staging.crystalcog.example.com
+# Optional bind port (the Compose service binds to loopback)
+GALATEA_PORT=8080
 EOF
     
     chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env.production.template"

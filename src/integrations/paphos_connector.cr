@@ -11,7 +11,7 @@
 require "json"
 require "http/client"
 require "../cogutil/logger"
-require "../atomspace/atomspace_core"
+require "../atomspace/atomspace_main"
 require "./platform/paphos_client"
 
 module PaphosBackend

@@ -298,8 +298,7 @@ module PaphosBackend
          )
         raise ApiError.new(413, "Request too large", nil, "body exceeds #{@request_guard.max_body_bytes} bytes")
       end
-      bucket = ctx.request.headers["Authorization"]? ? "authenticated" : "public"
-      unless @request_guard.allow?(bucket)
+      unless @request_guard.allow?("preauth:#{client_address(ctx)}")
         raise ApiError.new(429, "Too many requests", nil, "retry in a moment")
       end
       path = ctx.request.path
@@ -414,9 +413,24 @@ module PaphosBackend
       raise ApiError.new(401, "Not authenticated.", nil, "missing auth token") if token.nil? || token.empty?
       claims = PygmalionPlatform::JWT.decode(token, @secret)
       user_id = claims["user_id"]?.try(&.as_i64?)
-      @users[user_id]? || raise ApiError.new(401, "Not authenticated.", nil, "unknown user")
+      user = @users[user_id]? || raise ApiError.new(401, "Not authenticated.", nil, "unknown user")
+      unless @request_guard.allow?("user:#{user.id}")
+        raise ApiError.new(429, "Too many requests", nil, "retry in a moment")
+      end
+      user
     rescue ex : PygmalionPlatform::JWT::Error
       raise ApiError.new(401, "Not authenticated.", nil, ex.message)
+    end
+
+    private def client_address(ctx : HTTP::Server::Context) : String
+      case address = ctx.request.remote_address
+      when Socket::IPAddress
+        address.address
+      when nil
+        "unknown"
+      else
+        address.to_s
+      end
     end
 
     # ---------------------------------------------------------- characters

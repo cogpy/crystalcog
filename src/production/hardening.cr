@@ -52,12 +52,19 @@ module Production
     @capacity : Float64
     @refill : Float64
 
-    def initialize(@capacity : Float64 = 100.0, @refill : Float64 = 10.0)
+    def initialize(@capacity : Float64 = 100.0, @refill : Float64 = 10.0,
+                   @max_keys : Int32 = 4096)
       @limiters = {} of String => RateLimiter
     end
 
     def allow?(key : String, cost : Float64 = 1.0) : Bool
-      lim = @limiters[key] ||= RateLimiter.new(@capacity, @refill)
+      lim = @limiters[key]?
+      unless lim
+        if @limiters.size >= @max_keys
+          @limiters.delete(@limiters.first_key)
+        end
+        lim = @limiters[key] = RateLimiter.new(@capacity, @refill)
+      end
       lim.allow?(cost)
     end
   end

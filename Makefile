@@ -3,6 +3,7 @@
 
 # Configuration
 BUILD_TYPE ?= Release
+RELEASE_FLAGS ?= $(if $(filter Release RelWithDebInfo,$(BUILD_TYPE)),--release,)
 JOBS ?= $(shell nproc)
 INSTALL_PREFIX ?= /usr/local
 BUILD_DIR ?= build
@@ -115,21 +116,21 @@ configure:
 .PHONY: build
 build: configure
 	@echo "$(BLUE)[INFO]$(NC) Building all components..."
-	@shards build --verbose --error-trace
+	@shards build $(RELEASE_FLAGS) --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Build complete"
 
 # Build core components only
 .PHONY: core
 core: configure
 	@echo "$(BLUE)[INFO]$(NC) Building core components..."
-	@shards build crystalcog cogserver cogshell atomspace_bin opencog_bin pln_bin ure_bin attention_bin
+	@shards build $(RELEASE_FLAGS) crystalcog cogserver cogshell atomspace_bin opencog_bin pln_bin ure_bin attention_bin
 	@echo "$(GREEN)[SUCCESS]$(NC) Core build complete"
 
 # Build extended components
 .PHONY: extended
 extended: core
 	@echo "$(BLUE)[INFO]$(NC) Building extended components..."
-	@shards build --verbose --error-trace
+	@shards build $(RELEASE_FLAGS) --verbose --error-trace
 	@echo "$(GREEN)[SUCCESS]$(NC) Extended build complete"
 
 # Run tests
@@ -252,7 +253,7 @@ test-%: build
 .PHONY: build-%
 build-%: configure
 	@echo "$(BLUE)[INFO]$(NC) Building $*..."
-	@shards build "$*"
+	@shards build $(RELEASE_FLAGS) "$*"
 
 # Install specific component
 .PHONY: install-%

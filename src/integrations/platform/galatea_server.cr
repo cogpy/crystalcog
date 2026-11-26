@@ -27,14 +27,15 @@ module GalateaFrontend
 
     # Connect error codes and the HTTP status each maps to.
     CONNECT_STATUS = {
-      "invalid_argument"  => 400,
-      "unauthenticated"   => 401,
-      "permission_denied" => 403,
-      "not_found"         => 404,
-      "already_exists"    => 409,
-      "internal"          => 500,
-      "unimplemented"     => 501,
-      "unavailable"       => 503,
+      "invalid_argument"   => 400,
+      "unauthenticated"    => 401,
+      "permission_denied"  => 403,
+      "not_found"          => 404,
+      "already_exists"     => 409,
+      "resource_exhausted" => 429,
+      "internal"           => 500,
+      "unimplemented"      => 501,
+      "unavailable"        => 503,
     }
 
     class ConnectError < Exception
@@ -110,9 +111,7 @@ module GalateaFrontend
         ctx.response.print({"code" => "invalid_argument", "message" => "request body too large"}.to_json)
         return
       end
-      authenticated = !ctx.request.headers["Authorization"]?.nil? ||
-                      !ctx.request.cookies[SESSION_COOKIE]?.nil?
-      unless @request_guard.allow?(authenticated ? "authenticated" : "public")
+      unless @request_guard.allow?("preauth:#{client_address(ctx)}")
         ctx.response.status_code = 429
         ctx.response.headers["Retry-After"] = "1"
         ctx.response.content_type = "application/json"
@@ -179,6 +178,7 @@ module GalateaFrontend
       when 401           then "unauthenticated"
       when 403           then "permission_denied"
       when 404           then "not_found"
+      when 429           then "resource_exhausted"
       when 502, 503, 504 then "unavailable"
       else                    "internal"
       end
@@ -253,7 +253,23 @@ module GalateaFrontend
     private def session!(ctx) : Session
       bearer = ctx.request.headers["Authorization"]?.try(&.sub(/\A\s*Bearer\s+/i, "").strip)
       token = bearer.presence || ctx.request.cookies[SESSION_COOKIE]?.try(&.value)
-      session_from(token) || raise ConnectError.new("unauthenticated", "missing or invalid access token")
+      session = session_from(token) ||
+                raise ConnectError.new("unauthenticated", "missing or invalid access token")
+      unless @request_guard.allow?("session:#{session.session_id}")
+        raise ConnectError.new("resource_exhausted", "too many requests")
+      end
+      session
+    end
+
+    private def client_address(ctx : HTTP::Server::Context) : String
+      case address = ctx.request.remote_address
+      when Socket::IPAddress
+        address.address
+      when nil
+        "unknown"
+      else
+        address.to_s
+      end
     end
 
     private def paphos(session : Session? = nil) : PaphosBackend::Client
@@ -482,7 +498,7 @@ module GalateaFrontend
         ctx.response.print({"error" => "Not found"}.to_json)
       end
     rescue ex : PaphosBackend::Client::Error
-      ctx.response.status_code = ex.status == 401 ? 401 : 400
+      ctx.response.status_code = {401, 429}.includes?(ex.status) ? ex.status : 400
       ctx.response.print({"message" => "Request failed", "error" => ex.message}.to_json)
     rescue ex : ConnectError
       ctx.response.status_code = ex.status
