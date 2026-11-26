@@ -242,6 +242,10 @@ describe AtomSpace::SchemeStorageParser do
       parse_error(%((ConceptNode "a" (ListLink)))).should eq("expected truth or attention value for CONCEPTNODE at character 17")
       parse_error(%((ConceptNode "a" \\q))).should eq("expected ')', got '\\' at character 18")
     end
+    it "reports error positions in characters, not bytes, after non-ASCII text" do
+      # "é中" is 2 characters but 5 UTF-8 bytes; a byte offset would report 22.
+      parse_error(%((ConceptNode "é中" \\q))).should eq("expected ')', got '\\' at character 19")
+    end
 
     it "rejects a missing close parenthesis and trailing non-atom input" do
       parse_error("(ConceptNode \"a\"").should start_with("unexpected end of input")
