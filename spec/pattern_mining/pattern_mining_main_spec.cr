@@ -1,5 +1,6 @@
 require "spec"
 require "../../src/pattern_mining/pattern_mining_main"
+require "../../src/atomspace/atomspace_module"
 
 describe "Pattern Mining Main" do
   describe "initialization" do

@@ -1,5 +1,6 @@
 require "spec"
 require "../../src/moses/moses_main"
+require "../../src/atomspace/atomspace_module"
 
 describe "MOSES Main" do
   describe "initialization" do
