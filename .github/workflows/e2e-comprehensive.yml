@@ -28,7 +28,7 @@ on:
         type: boolean
 
 env:
-  CRYSTAL_VERSION: '1.14.0'
+  CRYSTAL_VERSION: '1.20.1'
   COGSERVER_PORT: 18080
   COGSERVER_TIMEOUT: 60
 

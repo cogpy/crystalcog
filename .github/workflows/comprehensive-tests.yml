@@ -9,7 +9,7 @@ on:
       crystal_version:
         description: 'Crystal version to test'
         required: false
-        default: '1.14.0'
+        default: '1.20.1'
         type: string
       run_all_components:
         description: 'Test all components individually'
@@ -18,7 +18,7 @@ on:
         type: boolean
 
 env:
-  CRYSTAL_VERSION: ${{ github.event.inputs.crystal_version || '1.14.0' }}
+  CRYSTAL_VERSION: ${{ github.event.inputs.crystal_version || '1.20.1' }}
 
 # Least-privilege token by default; jobs that write declare their own permissions.
 permissions:
@@ -38,11 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        crystal: ['1.12.0', '1.13.0', '1.14.0']
-        exclude:
-          # Skip older versions on macOS for faster CI
-          - os: macos-latest
-            crystal: '1.12.0'
+        crystal: ['1.20.1']
     timeout-minutes: 30
 
     steps:
