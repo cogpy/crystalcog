@@ -1,5 +1,6 @@
 require "spec"
 require "../../src/pattern_matching/pattern_matching_main"
+require "../../src/atomspace/atomspace_module"
 
 describe "Pattern Matching Main" do
   describe "initialization" do
