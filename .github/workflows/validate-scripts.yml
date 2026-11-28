@@ -6,15 +6,15 @@ on:
       - 'scripts/**'
       - 'docs/**'
       - 'tools/**'
-      - '.github/workflows/nightly-e2e.yml'
-      - '.github/workflows/validate-scripts.yml'
+      # Any workflow edit can change a Crystal pin, so re-run the pin guard.
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'scripts/**'
       - 'docs/**'
       - 'tools/**'
-      - '.github/workflows/nightly-e2e.yml'
-      - '.github/workflows/validate-scripts.yml'
+      # Any workflow edit can change a Crystal pin, so re-run the pin guard.
+      - '.github/workflows/**'
   workflow_dispatch:
 
 env:
@@ -84,5 +84,6 @@ jobs:
           bash -n scripts/e2e/run_logged.sh scripts/e2e/cogserver_load_test.sh scripts/e2e/test_e2e_harness.sh
           python3 scripts/e2e/test_nightly_workflow_contract.py
           python3 scripts/e2e/test_nightly_required_steps.py
+          python3 scripts/e2e/test_crystal_version_pins.py --self-test
           python3 scripts/e2e/test_crystal_version_pins.py
           bash scripts/e2e/test_e2e_harness.sh
